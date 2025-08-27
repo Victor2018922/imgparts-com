@@ -1,0 +1,15 @@
+
+{
+  "version": 2,
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "github": {
+    "silent": true
+  },
+  "env": {
+    "NIUNIUPARTS_BASE_URL": "https://niuniuparts.com:6001",
+    "NIUNIUPARTS_BEARER_TOKEN": "",
+    "NIUNIUPARTS_PAGE_SIZE": "20"
+  }
+}
