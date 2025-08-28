@@ -1,165 +1,135 @@
 // app/stock/[num]/page.tsx
-"use client";
+import React from "react";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+type Item = {
+  num: string;
+  product?: string;
+  oe?: string;
+  brand?: string;
+  model?: string;
+  year?: string;
+  category?: string;
+  note?: string;
+  raw?: Record<string, any>;
+};
 
-interface Product {
-  brand?: string;     // 车辆品牌
-  car?: string;       // 车型
-  carCode?: string;   // 车系代号
-  name?: string;      // 产品名称
-  num?: string;       // 编号
-  oe?: string;        // OE号
-  pics?: string[];    // 图片数组
+async function fetchItem(num: string): Promise<Item | null> {
+  const base =
+    process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
+    "https://imgparts-com.vercel.app";
+
+  const res = await fetch(`${base}/api/stock/item?num=${encodeURIComponent(num)}`, {
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+  return (await res.json()) as Item;
 }
 
-export default function StockDetailPage({ params }: { params: { num: string } }) {
-  const { num } = params;
-  const [loading, setLoading] = useState(true);
-  const [item, setItem] = useState<Product | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export default async function StockDetailPage({
+  params,
+}: {
+  params: { num: string };
+}) {
+  const item = await fetchItem(params.num);
 
-  useEffect(() => {
-    let ignore = false;
-    async function fetchDetail() {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, {
-          cache: "no-store",
-        });
-        if (!res.ok) {
-          const t = await res.json().catch(() => ({}));
-          throw new Error(t?.error || `HTTP ${res.status}`);
-        }
-        const json = await res.json();
-        if (!ignore) setItem(json?.item || null);
-      } catch (e: any) {
-        console.error("加载详情失败", e);
-        if (!ignore) setError(e?.message || "加载失败");
-      } finally {
-        if (!ignore) setLoading(false);
-      }
-    }
-    fetchDetail();
-    return () => {
-      ignore = true;
-    };
-  }, [num]);
+  if (!item) {
+    return (
+      <div className="mx-auto max-w-3xl p-6">
+        <h1 className="text-2xl font-semibold">SKU 未找到</h1>
+        <p className="mt-2 text-sm text-gray-500">
+          没有找到编号为 <span className="font-mono">{params.num}</span> 的产品。
+        </p>
+        <a href="/stock" className="mt-4 inline-block underline">
+          ← 返回库存列表
+        </a>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 20 }}>
-      <Link href="/stock" style={{ textDecoration: "none", color: "#1677ff" }}>
-        ← 返回列表
-      </Link>
+    <div className="mx-auto max-w-4xl p-6">
+      <header className="mb-6">
+        <h1 className="text-3xl font-bold tracking-tight">
+          {item.product || "未命名产品"}
+        </h1>
+        <p className="mt-1 text-gray-500">SKU：{item.num}</p>
+      </header>
 
-      <h1 style={{ margin: "12px 0 8px" }}>详情页</h1>
-      <div style={{ color: "#666", marginBottom: 12 }}>你访问的编号是：{num}</div>
-
-      {loading ? (
-        <p>正在加载数据...</p>
-      ) : error ? (
-        <p style={{ color: "crimson" }}>加载失败：{error}</p>
-      ) : !item ? (
-        <p>没有找到该编号的产品</p>
-      ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "360px 1fr",
-            columnGap: 24,
-            alignItems: "flex-start",
-          }}
-        >
-          {/* 左侧图片区 */}
-          <div>
-            {item.pics?.length ? (
-              <div>
-                <img
-                  src={item.pics[0]}
-                  alt={item.name || ""}
-                  style={{
-                    width: 360,
-                    height: 260,
-                    objectFit: "contain",
-                    background: "#fafafa",
-                    border: "1px solid #eee",
-                    borderRadius: 8,
-                  }}
-                />
-                {/* 额外小图预览 */}
-                {item.pics.length > 1 && (
-                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                    {item.pics.slice(1, 6).map((p, i) => (
-                      <img
-                        key={i}
-                        src={p}
-                        alt={`pic-${i}`}
-                        style={{
-                          width: 64,
-                          height: 64,
-                          objectFit: "contain",
-                          background: "#fafafa",
-                          border: "1px solid #eee",
-                          borderRadius: 6,
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div
-                style={{
-                  width: 360,
-                  height: 260,
-                  background: "#fafafa",
-                  border: "1px solid #eee",
-                  borderRadius: 8,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#999",
-                }}
-              >
-                暂无图片
-              </div>
-            )}
-          </div>
-
-          {/* 右侧信息 */}
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 12 }}>
-              {item.name || "(未命名产品)"}
-            </div>
-
-            <div style={{ lineHeight: 1.8, color: "#333" }}>
-              <div>
-                <strong>车辆品牌：</strong>
-                {item.brand || "-"}
-              </div>
-              <div>
-                <strong>车型/代码：</strong>
-                {item.car || "-"}（{item.carCode || "-"}）
-              </div>
-              <div>
-                <strong>OE 号：</strong>
-                {item.oe || "-"}
-              </div>
-              <div>
-                <strong>编号：</strong>
-                {item.num || "-"}
-              </div>
-            </div>
-
-            {/* 这里可以继续扩展：价格、库存、产地、适配车型、参数、图纸等 */}
-            <div style={{ marginTop: 16, color: "#888", fontSize: 13 }}>
-              数据源：niuniuparts.com（测试预览用途）
-            </div>
-          </div>
+      <div className="grid gap-6 md:grid-cols-3">
+        {/* 左侧：图片占位/品牌色块 */}
+        <div className="rounded-2xl bg-gray-100 aspect-[4/3] flex items-center justify-center text-gray-400">
+          {/* 将来可替换为 next/image 加真实图片 */}
+          <span className="text-sm">No Image</span>
         </div>
-      )}
+
+        {/* 右侧：关键信息 */}
+        <div className="md:col-span-2 space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <Info label="OE" value={item.oe} />
+            <Info label="品牌" value={item.brand} />
+            <Info label="类目" value={item.category} />
+            <Info label="车型" value={item.model} />
+            <Info label="年份" value={item.year} />
+          </div>
+
+          {item.note && (
+            <div className="mt-4 rounded-xl border p-4">
+              <div className="text-sm text-gray-500">备注</div>
+              <div className="mt-1">{item.note}</div>
+            </div>
+          )}
+
+          {/* CTA：后续接入 RFQ 表单（C 目标） */}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <a
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+              href={`/stock`}
+            >
+              返回列表
+            </a>
+            <a
+              className="rounded-xl bg-black px-4 py-2 text-sm text-white"
+              href={`https://wa.me/?text=Inquiry%20for%20SKU%20${encodeURIComponent(
+                item.num
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              WhatsApp 询价
+            </a>
+            <a
+              className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white"
+              href={`https://t.me/share/url?url=${encodeURIComponent(
+                "https://imgparts-com.vercel.app/stock/" + item.num
+              )}&text=${encodeURIComponent("Inquiry for SKU " + item.num)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Telegram 询价
+            </a>
+          </div>
+
+          {/* 调试：原始行（必要时可展开查看字段映射是否正确） */}
+          <details className="mt-6">
+            <summary className="cursor-pointer text-sm text-gray-500">
+              原始数据（调试用）
+            </summary>
+            <pre className="mt-2 overflow-auto rounded-lg bg-gray-50 p-4 text-xs">
+              {JSON.stringify(item.raw ?? {}, null, 2)}
+            </pre>
+          </details>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Info({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="rounded-xl border p-3">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="mt-1 font-medium">{value || "-"}</div>
     </div>
   );
 }
