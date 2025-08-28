@@ -69,7 +69,7 @@ export default function StockDetail({ params }: { params: { num: string } }) {
             <h2 style={{ marginTop: 0 }}>{name || "未命名产品"}</h2>
             <div style={{ lineHeight: 1.9, fontSize: 15 }}>
               <div>车辆品牌：{brand || "-"}</div>
-              <div>车型/代码：{car || "-"}（{carCode || "-"}）</div>
+              <div>车型/代码：{car || "-"}（{carCode || "-" }）</div>
               <div>OE号：{oe || "-"}</div>
               <div>编号：{num || "-"}</div>
               <div>配件品牌：{partBrand || "-"}</div>
