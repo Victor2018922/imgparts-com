@@ -26,7 +26,7 @@ export default function StockPage() {
   const [keyword, setKeyword] = useState("");
   const [searchType, setSearchType] = useState<SearchType>("all");
   const [brandFilter, setBrandFilter] = useState("");      // 车辆品牌
-  const [partBrandFilter, setPartBrandFilter] = useState(""); // 配件品牌（预留）
+  const [partBrandFilter, setPartBrandFilter] = useState(""); // 配件品牌（后续若有数据字段可对接）
 
   // 拉取数据（分页）
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function StockPage() {
     return () => { ignore = true; };
   }, [page]);
 
-  // 本页内过滤
+  // 本页内过滤（在已拉取的 products 上做）
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return (products || []).filter((p) => {
@@ -77,22 +77,14 @@ export default function StockPage() {
         !brandFilter.trim() ||
         p.brand?.toLowerCase().includes(brandFilter.trim().toLowerCase());
 
-      // 配件品牌筛选（预留）
+      // 配件品牌筛选（目前接口里暂未见独立字段，先预留）
       const hitPartBrand =
         !partBrandFilter.trim() ||
-        false; // 待接口字段对接后改为：p.partBrand?.toLowerCase().includes(partBrandFilter.trim().toLowerCase())
+        false; // TODO: 若接口有 p.partBrand 字段，这里改为 includes 判断
 
       return hit && hitBrand && (partBrandFilter ? hitPartBrand : true);
     });
   }, [products, keyword, searchType, brandFilter, partBrandFilter]);
-
-  /** 新增：打开详情页，同时把该条数据存入 sessionStorage */
-  function openDetail(item: any) {
-    try {
-      sessionStorage.setItem("last_item", JSON.stringify(item));
-    } catch {}
-    window.location.href = `/stock/${item.num || ""}`;
-  }
 
   return (
     <div style={{ padding: 20 }}>
@@ -137,7 +129,7 @@ export default function StockPage() {
           style={{ padding: "10px 12px", border: "1px solid #ccc", borderRadius: 8 }}
         />
 
-        {/* 配件品牌（预留） */}
+        {/* 配件品牌（预留，待接口字段对接） */}
         <input
           placeholder="配件品牌（预留）"
           value={partBrandFilter}
@@ -155,7 +147,7 @@ export default function StockPage() {
             上一页
           </button>
           <button
-            onClick={() => setPage((p) => p + 1)}
+            onClick={() => setPage((p) => p + 1))}
             disabled={loading}
             style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #ccc", background: "#fff" }}
           >
@@ -172,7 +164,18 @@ export default function StockPage() {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
           {filtered.map((item, idx) => (
-            <div key={`${item.num}-${idx}`} style={{ border: "1px solid #e5e5e5", padding: 12, borderRadius: 8 }}>
+            <a
+              key={`${item.num}-${idx}`}
+              href={`/stock/${item.num}`}
+              style={{
+                display: "block",
+                border: "1px solid #e5e5e5",
+                padding: 12,
+                borderRadius: 8,
+                textDecoration: "none",
+                color: "inherit",
+              }}
+            >
               <div style={{ fontWeight: 600, marginBottom: 8 }}>{item.name}</div>
               <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6 }}>
                 <div>车辆品牌：{item.brand || "-"}</div>
@@ -187,15 +190,7 @@ export default function StockPage() {
                   style={{ width: "100%", height: 160, objectFit: "contain", marginTop: 8, background: "#fafafa" }}
                 />
               )}
-
-              {/* 新增：查看详情按钮 */}
-              <button
-                onClick={() => openDetail(item)}
-                style={{ marginTop: 10, padding: "8px 12px", border: "1px solid #ccc", borderRadius: 8, background: "#fff" }}
-              >
-                查看详情
-              </button>
-            </div>
+            </a>
           ))}
         </div>
       )}
