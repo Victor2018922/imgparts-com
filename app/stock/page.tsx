@@ -77,10 +77,10 @@ export default function StockPage() {
         !brandFilter.trim() ||
         p.brand?.toLowerCase().includes(brandFilter.trim().toLowerCase());
 
-      // 配件品牌筛选（目前接口里暂未见独立字段，先预留：如果后端返回了类似 p.partBrand 就改这里）
+      // 配件品牌筛选（目前接口里暂未见独立字段，先预留）
       const hitPartBrand =
         !partBrandFilter.trim() ||
-        false; // 先设为 false；待接口有字段后改为 p.partBrand?.toLowerCase().includes(partBrandFilter.trim().toLowerCase())
+        false; 
 
       return hit && hitBrand && (partBrandFilter ? hitPartBrand : true);
     });
@@ -163,24 +163,41 @@ export default function StockPage() {
         <p>没有匹配的结果</p>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
-          {filtered.map((item, idx) => (
-            <div key={`${item.num}-${idx}`} style={{ border: "1px solid #e5e5e5", padding: 12, borderRadius: 8 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>{item.name}</div>
-              <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6 }}>
-                <div>车辆品牌：{item.brand || "-"}</div>
-                <div>车型/代码：{item.car || "-"}（{item.carCode || "-"}）</div>
-                <div>OE号：{item.oe || "-"}</div>
-                <div>编号：{item.num || "-"}</div>
-              </div>
-              {item.pics?.[0] && (
-                <img
-                  src={item.pics[0]}
-                  alt={item.name}
-                  style={{ width: "100%", height: 160, objectFit: "contain", marginTop: 8, background: "#fafafa" }}
-                />
-              )}
-            </div>
-          ))}
+          {filtered.map((item, idx) => {
+            const href = `/stock/${encodeURIComponent(item.num || String(idx))}`;
+            return (
+              <a
+                key={`${item.num}-${idx}`}
+                href={href}
+                onClick={() => {
+                  try {
+                    sessionStorage.setItem(
+                      `stock:item:${item.num || String(idx)}`,
+                      JSON.stringify(item)
+                    );
+                  } catch {}
+                }}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
+                <div style={{ border: "1px solid #e5e5e5", padding: 12, borderRadius: 8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8 }}>{item.name}</div>
+                  <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6 }}>
+                    <div>车辆品牌：{item.brand || "-"}</div>
+                    <div>车型/代码：{item.car || "-"}（{item.carCode || "-"}）</div>
+                    <div>OE号：{item.oe || "-"}</div>
+                    <div>编号：{item.num || "-"}</div>
+                  </div>
+                  {item.pics?.[0] && (
+                    <img
+                      src={item.pics[0]}
+                      alt={item.name}
+                      style={{ width: "100%", height: 160, objectFit: "contain", marginTop: 8, background: "#fafafa" }}
+                    />
+                  )}
+                </div>
+              </a>
+            );
+          })}
         </div>
       )}
 
