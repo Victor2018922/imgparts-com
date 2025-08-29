@@ -1,6 +1,6 @@
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 export const revalidate = 0;
-// app/stock/[num]/page.tsx
+
 import React from "react";
 
 type Item = {
@@ -20,9 +20,12 @@ async function fetchItem(num: string): Promise<Item | null> {
     process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
     "https://imgparts-com.vercel.app";
 
-  const res = await fetch(`${base}/api/stock/item?num=${encodeURIComponent(num)}`, {
-    cache: "no-store",
-  });
+  const res = await fetch(
+    `${base}/api/stock/item?num=${encodeURIComponent(num)}`,
+    {
+      cache: "no-store",
+    }
+  );
 
   if (!res.ok) return null;
   return (await res.json()) as Item;
@@ -59,9 +62,8 @@ export default async function StockDetailPage({
       </header>
 
       <div className="grid gap-6 md:grid-cols-3">
-        {/* 左侧：图片占位/品牌色块 */}
+        {/* 左侧：图片占位 */}
         <div className="rounded-2xl bg-gray-100 aspect-[4/3] flex items-center justify-center text-gray-400">
-          {/* 将来可替换为 next/image 加真实图片 */}
           <span className="text-sm">No Image</span>
         </div>
 
@@ -82,7 +84,7 @@ export default async function StockDetailPage({
             </div>
           )}
 
-          {/* CTA：后续接入 RFQ 表单（C 目标） */}
+          {/* CTA */}
           <div className="mt-6 flex flex-wrap gap-3">
             <a
               className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
@@ -112,7 +114,7 @@ export default async function StockDetailPage({
             </a>
           </div>
 
-          {/* 调试：原始行（必要时可展开查看字段映射是否正确） */}
+          {/* 调试：原始数据 */}
           <details className="mt-6">
             <summary className="cursor-pointer text-sm text-gray-500">
               原始数据（调试用）
