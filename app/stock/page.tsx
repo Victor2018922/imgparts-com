@@ -6,6 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 interface Product {
   num: string;
   product: string;
+  oe?: string;
+  brand?: string;
+  model?: string;
+  year?: string;
 }
 
 export default function StockPage() {
@@ -37,7 +41,16 @@ export default function StockPage() {
     return items.filter((it) => {
       const a = (it.num || "").toLowerCase();
       const b = (it.product || "").toLowerCase();
-      return a.includes(kw) || b.includes(kw);
+      const c = (it.oe || "").toLowerCase();
+      const d = (it.brand || "").toLowerCase();
+      const e = (it.model || "").toLowerCase();
+      return (
+        a.includes(kw) ||
+        b.includes(kw) ||
+        c.includes(kw) ||
+        d.includes(kw) ||
+        e.includes(kw)
+      );
     });
   }, [q, items]);
 
@@ -45,7 +58,7 @@ export default function StockPage() {
   if (error) return <p style={{ padding: 20, color: "red" }}>错误: {error}</p>;
 
   return (
-    <div style={{ padding: 20, maxWidth: 900, margin: "0 auto" }}>
+    <div style={{ padding: 20, maxWidth: 1100, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>
         库存产品列表
       </h1>
@@ -55,7 +68,7 @@ export default function StockPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="搜索：输入 SKU 或 产品名"
+          placeholder="搜索：SKU / 产品名 / OE / 品牌 / 车型"
           style={{
             width: "100%",
             padding: "10px 12px",
@@ -69,40 +82,71 @@ export default function StockPage() {
         </div>
       </div>
 
-      {filtered.length === 0 ? (
-        <p>没有匹配的数据。</p>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {filtered.map((item) => (
-            <li key={item.num} style={{ marginBottom: 10 }}>
-              <a
-                href={`/stock/${encodeURIComponent(item.num)}`}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 16,
-                  padding: "12px 14px",
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 8,
-                  textDecoration: "none",
-                  cursor: "pointer",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = "#f8fafc";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "transparent";
-                }}
+      {/* 简易表格 */}
+      <div style={{ overflowX: "auto" }}>
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "separate",
+            borderSpacing: 0,
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+          }}
+        >
+          <thead style={{ background: "#f8fafc" }}>
+            <tr>
+              <th style={th}>SKU</th>
+              <th style={th}>产品</th>
+              <th style={th}>OE</th>
+              <th style={th}>品牌</th>
+              <th style={th}>车型</th>
+              <th style={th}>年份</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((it) => (
+              <tr
+                key={it.num}
+                style={{ cursor: "pointer" }}
+                onClick={() =>
+                  (window.location.href = `/stock/${encodeURIComponent(it.num)}`)
+                }
+                onMouseEnter={(e) =>
+                  ((e.currentTarget.style.backgroundColor = "#f8fafc"))
+                }
+                onMouseLeave={(e) =>
+                  ((e.currentTarget.style.backgroundColor = "transparent"))
+                }
               >
-                <div style={{ fontWeight: 600, minWidth: 120 }}>{item.num}</div>
-                <div style={{ color: "#4b5563", flex: 1 }}>
-                  {item.product || "未命名产品"}
-                </div>
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
+                <td style={tdBold}>{it.num}</td>
+                <td style={td}>{it.product || "-"}</td>
+                <td style={td}>{it.oe || "-"}</td>
+                <td style={td}>{it.brand || "-"}</td>
+                <td style={td}>{it.model || "-"}</td>
+                <td style={td}>{it.year || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
+
+const th: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px 12px",
+  borderBottom: "1px solid #e5e7eb",
+  whiteSpace: "nowrap",
+};
+
+const td: React.CSSProperties = {
+  padding: "10px 12px",
+  borderBottom: "1px solid #f1f5f9",
+  whiteSpace: "nowrap",
+};
+
+const tdBold: React.CSSProperties = {
+  ...td,
+  fontWeight: 600,
+};
