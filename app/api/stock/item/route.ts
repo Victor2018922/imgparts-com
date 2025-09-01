@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
-// 运行时 & 渲染策略（必须在文件顶端）
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -12,13 +11,15 @@ function sheetToJson(workbook: XLSX.WorkBook) {
   return XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
 }
 
-/** 从一行中鲁棒取字段（兼容多语言/大小写） */
+/** 在一行中鲁棒取字段：忽略大小写 & 前后空格 */
 function pick(row: Record<string, any>, keys: string[]): string {
+  const norm = (s: string) => String(s).trim().toLowerCase();
+  const colMap = new Map<string, string>();
+  for (const col of Object.keys(row)) colMap.set(norm(col), col);
+
   for (const k of keys) {
-    const hit =
-      Object.keys(row).find((col) => col.toLowerCase() === k.toLowerCase()) ??
-      keys.find((alt) => alt.toLowerCase() === k.toLowerCase());
-    if (hit && row[hit] != null) return String(row[hit]).trim();
+    const hitOrig = colMap.get(norm(k));
+    if (hitOrig && row[hitOrig] != null) return String(row[hitOrig]).trim();
   }
   return "";
 }
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // 通过现有的 /api/stock 代理下载 Excel 源
+    // 通过 /api/stock 下载 Excel 源
     const base =
       process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
       "https://imgparts-com.vercel.app";
@@ -60,9 +61,19 @@ export async function GET(req: NextRequest) {
     const workbook = XLSX.read(new Uint8Array(arrayBuf), { type: "array" });
     const rows = sheetToJson(workbook);
 
+    // 如果请求 num=ALL，则直接返回整个表
+    if (num === "ALL") {
+      // 只返回规范化后的部分字段，避免太杂乱
+      const list = rows.map((row) => ({
+        num: pick(row, ["num", "Num", "编号", "sku", "SKU"]),
+        product: pick(row, ["product", "Product", "产品", "品名"]),
+      }));
+      return NextResponse.json(list, { status: 200 });
+    }
+
     // 根据编号定位（兼容 num/编号/SKU 等）
     const target = rows.find((row) => {
-      const rowNum = pick(row, ["num", "Num", "NUM", "编号", "sku", "SKU"]) || "";
+      const rowNum = pick(row, ["num", "Num", "编号", "sku", "SKU"]) || "";
       return rowNum === num;
     });
 
@@ -75,7 +86,7 @@ export async function GET(req: NextRequest) {
 
     // 规范化输出
     const body = {
-      num: pick(target, ["num", "Num", "NUM", "编号", "sku", "SKU"]) || num,
+      num: pick(target, ["num", "Num", "编号", "sku", "SKU"]) || num,
       product: pick(target, ["product", "Product", "产品", "品名"]) || "",
       oe: pick(target, ["oe", "OE", "OEN", "OE号", "OE编号"]),
       brand: pick(target, ["brand", "Brand", "品牌"]),
@@ -83,7 +94,7 @@ export async function GET(req: NextRequest) {
       year: pick(target, ["year", "Year", "年份"]),
       category: pick(target, ["category", "Category", "类目", "分类"]),
       note: pick(target, ["note", "Note", "备注", "说明"]),
-      raw: target, // 调试用：原始行
+      raw: target,
     };
 
     return NextResponse.json(body, {
