@@ -61,17 +61,20 @@ export async function GET(req: NextRequest) {
     const workbook = XLSX.read(new Uint8Array(arrayBuf), { type: "array" });
     const rows = sheetToJson(workbook);
 
-    // 如果请求 num=ALL，则直接返回整个表
+    // num=ALL：返回列表所需字段
     if (num === "ALL") {
-      // 只返回规范化后的部分字段，避免太杂乱
       const list = rows.map((row) => ({
         num: pick(row, ["num", "Num", "编号", "sku", "SKU"]),
         product: pick(row, ["product", "Product", "产品", "品名"]),
+        oe: pick(row, ["oe", "OE", "OEN", "OE号", "OE编号"]),
+        brand: pick(row, ["brand", "Brand", "品牌"]),
+        model: pick(row, ["model", "Model", "车型"]),
+        year: pick(row, ["year", "Year", "年份"]),
       }));
       return NextResponse.json(list, { status: 200 });
     }
 
-    // 根据编号定位（兼容 num/编号/SKU 等）
+    // 单条：按编号查找
     const target = rows.find((row) => {
       const rowNum = pick(row, ["num", "Num", "编号", "sku", "SKU"]) || "";
       return rowNum === num;
