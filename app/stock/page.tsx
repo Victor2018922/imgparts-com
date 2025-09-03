@@ -1,6 +1,6 @@
-// temp change - just to trigger git
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 type StockItem = {
@@ -21,7 +21,6 @@ export default function StockPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [initLoading, setInitLoading] = useState<boolean>(true);
 
-  // 首次加载：取全量，用于生成下拉选项
   useEffect(() => {
     (async () => {
       try {
@@ -36,7 +35,6 @@ export default function StockPage() {
     })();
   }, []);
 
-  // 条件变化：调用后端筛选
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -55,7 +53,6 @@ export default function StockPage() {
     })();
   }, [brand, model, year]);
 
-  // 选项动态 & 级联
   const brandOptions = useMemo(() => {
     const set = new Set(allItems.map((i) => i.brand).filter(Boolean));
     return Array.from(set).sort();
@@ -95,7 +92,6 @@ export default function StockPage() {
     <div className="p-4 max-w-6xl mx-auto">
       <h1 className="text-xl font-semibold mb-4">Stock</h1>
 
-      {/* 筛选控件 */}
       <div className="flex flex-col md:flex-row gap-3 md:gap-4 mb-4">
         <select
           value={brand}
@@ -154,13 +150,17 @@ export default function StockPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {items.map((item) => (
-          <div key={item.num} className="border p-4 rounded">
+          <Link
+            key={item.num}
+            href={`/stock/${item.num}`}
+            className="border p-4 rounded block hover:shadow-md transition-shadow"
+          >
             <h3 className="font-bold text-base mb-1">{item.product}</h3>
             <p className="text-sm">OE: {item.oe}</p>
             <p className="text-sm">Brand: {item.brand}</p>
             <p className="text-sm">Model: {item.model}</p>
             <p className="text-sm">Year: {item.year}</p>
-          </div>
+          </Link>
         ))}
       </div>
 
