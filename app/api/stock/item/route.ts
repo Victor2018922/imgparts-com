@@ -1,28 +1,50 @@
+
+
 import { NextResponse } from "next/server";
 
-// 示例静态数据（后续可改为数据库/CSV）
-const stockData = [
-  { num: "JS0260", product: "Oil Filter", oe: "90915-YZZE1", brand: "Toyota",      model: "Corolla", year: "2018" },
-  { num: "VW1234", product: "Air Filter", oe: "06C133843",   brand: "Volkswagen",  model: "Passat",  year: "2020" },
-  { num: "BMW5678", product: "Brake Pad", oe: "34116761252", brand: "BMW",         model: "X5",      year: "2022" },
-  // ✅ 后续你可以在这里继续追加更多真实库存数据
+type StockItem = {
+  num: string;
+  product: string;
+  oe: string;
+  brand: string;
+  model: string;
+  year: string;
+};
+
+// 演示数据（后续可改为数据库/JSON文件）
+const DATA: StockItem[] = [
+  { num: "JS0260", product: "Oil Filter",  oe: "90915-YZZE1", brand: "Toyota",     model: "Corolla",  year: "2018" },
+  { num: "VW1234", product: "Air Filter",  oe: "06C133843",   brand: "Volkswagen", model: "Passat",   year: "2020" },
+  { num: "BMW5678",product: "Brake Pad",   oe: "34116761252", brand: "BMW",        model: "X5",       year: "2022" },
 ];
+
+function ciEqual(a?: string, b?: string) {
+  if (!a || !b) return false;
+  return a.toLowerCase() === b.toLowerCase();
+}
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
+  const brand = searchParams.get("brand") || "";
+  const model = searchParams.get("model") || "";
+  const year  = searchParams.get("year")  || "";
+  const num   = searchParams.get("num")   || "";
 
-  // 允许空字符串，空则不过滤
-  const brand = (searchParams.get("brand") ?? "").trim();
-  const model = (searchParams.get("model") ?? "").trim();
-  const year  = (searchParams.get("year")  ?? "").trim();
+  let result = DATA;
 
-  // 基础结果
-  let result = stockData;
-
-  // 严格等值匹配（区分大小写，如果想忽略大小写，可在此处统一转小写比较）
-  if (brand) result = result.filter((item) => item.brand === brand);
-  if (model) result = result.filter((item) => item.model === model);
-  if (year)  result = result.filter((item) => item.year  === year);
+  // 支持 num 精确查询（区分优先级：若传 num，优先按 num 过滤，其他条件可作为叠加）
+  if (num) {
+    result = result.filter(i => ciEqual(i.num, num));
+  }
+  if (brand) {
+    result = result.filter(i => ciEqual(i.brand, brand));
+  }
+  if (model) {
+    result = result.filter(i => ciEqual(i.model, model));
+  }
+  if (year) {
+    result = result.filter(i => ciEqual(i.year, year));
+  }
 
   return NextResponse.json(result);
 }

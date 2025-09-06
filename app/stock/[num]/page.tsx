@@ -20,7 +20,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
   useEffect(() => {
     (async () => {
       try {
-        // 方式 A：优先尝试后端按 num 查询（若后端暂不支持，会返回空）
+        // 先用后端精准查询 ?num=
         const resA = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, { cache: "no-store" });
         if (resA.ok) {
           const dataA = await resA.json();
@@ -29,10 +29,10 @@ export default function StockDetailPage({ params }: { params: { num: string } })
             return;
           }
         }
-        // 方式 B：兜底策略——取全量再前端筛选
+        // 兜底：全量获取再前端过滤
         const resB = await fetch("/api/stock/item", { cache: "no-store" });
         const dataB: StockItem[] = await resB.json();
-        setItem(dataB.find((x) => x.num === num) || null);
+        setItem(dataB.find(x => x.num === num) || null);
       } finally {
         setLoading(false);
       }
@@ -40,12 +40,12 @@ export default function StockDetailPage({ params }: { params: { num: string } })
   }, [num]);
 
   if (loading) {
-    return <div className="p-4 max-w-4xl mx-auto">Loading...</div>;
+    return <div className="p-4 max-w-6xl mx-auto">Loading...</div>;
   }
 
   if (!item) {
     return (
-      <div className="p-4 max-w-4xl mx-auto">
+      <div className="p-4 max-w-6xl mx-auto">
         <p className="text-red-600 mb-4">Item not found.</p>
         <Link href="/stock" className="text-blue-600 underline">← Back to Stock</Link>
       </div>
@@ -53,27 +53,61 @@ export default function StockDetailPage({ params }: { params: { num: string } })
   }
 
   return (
-    <div className="p-4 max-w-4xl mx-auto">
-      <Link href="/stock" className="text-blue-600 underline">← Back to Stock</Link>
+    <div className="p-4 max-w-6xl mx-auto">
+      <div className="mb-3">
+        <Link href="/stock" className="text-blue-600 underline">← Back to Stock</Link>
+      </div>
 
-      <h1 className="text-2xl font-semibold mt-3 mb-4">{item.product}</h1>
+      <div className="flex items-start justify-between gap-6">
+        {/* 左侧：图片 + 规格 */}
+        <div className="flex-1 space-y-4">
+          {/* 图片占位（16:9 比例） */}
+          <div className="w-full border rounded overflow-hidden">
+            <div className="relative" style={{ paddingTop: "56.25%" }}>
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-100 text-gray-500">
+                {/* 未来可替换为 <Image src=... fill /> */}
+                Image Placeholder
+              </div>
+            </div>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="border rounded p-4">
-          <h2 className="font-bold mb-2">Basic Info</h2>
-          <p><strong>SKU / Num:</strong> {item.num}</p>
-          <p><strong>OE:</strong> {item.oe}</p>
-          <p><strong>Brand:</strong> {item.brand}</p>
-          <p><strong>Model:</strong> {item.model}</p>
-          <p><strong>Year:</strong> {item.year}</p>
+          {/* 规格参数 */}
+          <div className="border rounded p-4">
+            <h2 className="font-bold mb-3 text-lg">Specifications</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-sm">
+              <div><span className="text-gray-500">SKU / Num:</span> <span className="font-medium">{item.num}</span></div>
+              <div><span className="text-gray-500">OE:</span> <span className="font-medium">{item.oe}</span></div>
+              <div><span className="text-gray-500">Brand:</span> <span className="font-medium">{item.brand}</span></div>
+              <div><span className="text-gray-500">Model:</span> <span className="font-medium">{item.model}</span></div>
+              <div><span className="text-gray-500">Year:</span> <span className="font-medium">{item.year}</span></div>
+            </div>
+          </div>
+
+          {/* 适配信息 */}
+          <div className="border rounded p-4">
+            <h2 className="font-bold mb-3 text-lg">Compatibility</h2>
+            <ul className="list-disc pl-5 text-sm space-y-1">
+              <li>Brand: {item.brand}</li>
+              <li>Model: {item.model}</li>
+              <li>Year: {item.year}</li>
+              {/* 后续可扩展：发动机代码、车身类型、排量等 */}
+            </ul>
+          </div>
         </div>
 
-        <div className="border rounded p-4">
-          <h2 className="font-bold mb-2">Notes</h2>
-          <p className="text-sm text-gray-600">
-            本页为演示数据。后续可扩展：产品图片、适配车型/发动机清单、参数规格、库存与价格、加入购物车等。
-          </p>
-        </div>
+        {/* 右侧：购买区占位 */}
+        <aside className="w-full md:w-80 shrink-0">
+          <div className="border rounded p-4 sticky top-4">
+            <h2 className="font-bold text-lg mb-3">Buy Box</h2>
+            <div className="text-sm text-gray-600 mb-2">（占位）未来显示价格、库存、配送、卖家评分等</div>
+            <div className="flex items-center gap-2 mb-3">
+              <button className="border rounded px-3 py-2">-</button>
+              <input className="w-16 border rounded px-2 py-2 text-center" defaultValue={1} />
+              <button className="border rounded px-3 py-2">+</button>
+            </div>
+            <button className="w-full bg-black text-white rounded py-2">Add to Cart</button>
+          </div>
+        </aside>
       </div>
     </div>
   );
