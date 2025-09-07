@@ -4,43 +4,40 @@ type StockItem = {
   num: string;
   product: string;
   oe: string;
-  brand: string; // 这里映射为“车厂/车系”，来自 raw.car（如 TOYOTA/HONDA）
-  model: string; // 映射为 raw.carCode（如 年款/平台代码）
-  year: string;  // 外部暂无明确年份，这里留空字符串
-  image?: string; // 图片 URL（取 pics[0]）
+  brand: string; // 使用外部 car 字段（如 TOYOTA/HONDA）
+  model: string; // 使用外部 carCode
+  year: string;  // 外部暂无明确年份字段，先留空
+  image?: string; // pics[0]
 };
 
-// ——本地兜底数据（外部挂了时不白屏）——
+// ——本地兜底（外网不可达时不白屏）——
 const FALLBACK: StockItem[] = [
   { num: "JS0260", product: "Oil Filter",  oe: "90915-YZZE1", brand: "Toyota",     model: "Corolla",  year: "", image: "" },
   { num: "VW1234", product: "Air Filter",  oe: "06C133843",   brand: "Volkswagen", model: "Passat",   year: "", image: "" },
   { num: "BMW5678",product: "Brake Pad",   oe: "34116761252", brand: "BMW",        model: "X5",       year: "", image: "" },
 ];
 
-// 忽略大小写的等值比较
+// 忽略大小写相等
 function ciEqual(a?: string, b?: string) {
   if (!a || !b) return false;
   return a.toLowerCase() === b.toLowerCase();
 }
 
-// 映射外部一条记录到统一结构
+// 映射一条外部记录
 function mapItem(raw: any): StockItem {
   const pics: string[] = Array.isArray(raw?.pics) ? raw.pics : [];
   return {
     num: String(raw?.num ?? raw?.id ?? raw?.sku ?? ""),
     product: String(raw?.name ?? raw?.product ?? raw?.title ?? ""),
     oe: String(raw?.oe ?? raw?.oeCode ?? raw?.oe_code ?? ""),
-    // 品牌：用“车厂 car”对齐你的筛选（如 TOYOTA/HONDA），不是供应商品牌（raw.brand）
-    brand: String(raw?.car ?? ""),
-    // 车型：用 carCode（如 “FB2/3/6” 或 “雷凌,1408-1706,...”）
-    model: String(raw?.carCode ?? raw?.model ?? ""),
-    // 外部没有明确年款字段，这里先留空，后续若提供 year 再补
-    year: "",
+    brand: String(raw?.car ?? ""),       // 用车厂做“品牌”筛选
+    model: String(raw?.carCode ?? ""),   // 用车型/年款段
+    year: "",                            // 暂无
     image: pics.length > 0 ? String(pics[0]) : "",
   };
 }
 
-// 兼容外部返回结构：可能是数组，也可能是 {content:[]}，也可能是 {data:{data:[]}}
+// 兼容返回结构：[], {content:[]}, {data:{data:[]}}
 function pickList(json: any): any[] {
   if (Array.isArray(json)) return json;
   if (Array.isArray(json?.content)) return json.content;
@@ -50,19 +47,19 @@ function pickList(json: any): any[] {
 }
 
 async function fetchExternal(apiBase: string, qsIn: URLSearchParams, apiKey?: string) {
-  // 只透传分页参数；brand/model/year/num 在本地再过滤，防止外部不支持
+  // 只透传分页，其他筛选本地做二次过滤
   const size = Number(qsIn.get("size") || "") || 200;
   const page = qsIn.get("page");
   const MAX_PAGES = 5;
 
+  const headers = apiKey ? { Authorization: apiKey } : undefined;
   const buildUrl = (p: number) => {
     const q = new URLSearchParams();
     q.set("size", String(size));
     q.set("page", String(p));
     return `${apiBase}?${q.toString()}`;
+    // 你的 API： https://niuniuparts.com:6001/scm-product/v1/stock2?size=...&page=...
   };
-
-  const headers = apiKey ? { Authorization: apiKey } : undefined;
 
   const results: any[] = [];
   if (page !== null) {
@@ -71,7 +68,6 @@ async function fetchExternal(apiBase: string, qsIn: URLSearchParams, apiKey?: st
     const json = await res.json();
     results.push(...pickList(json));
   } else {
-    // 未指定 page：连抓多页，便于前端下拉/搜索
     for (let p = 0; p < MAX_PAGES; p++) {
       const res = await fetch(buildUrl(p), { headers, cache: "no-store" });
       if (!res.ok) break;
@@ -86,31 +82,31 @@ async function fetchExternal(apiBase: string, qsIn: URLSearchParams, apiKey?: st
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const apiBase = process.env.SOURCE_API_URL || ""; // https://niuniuparts.com:6001/scm-product/v1/stock2
+
+  // ✅ 关键：即使 .env 没配好，也默认用你的 API 地址
+  const DEFAULT_API = "https://niuniuparts.com:6001/scm-product/v1/stock2";
+  const apiBase = process.env.SOURCE_API_URL || DEFAULT_API;
   const apiKey  = process.env.SOURCE_API_KEY || "";
 
   const brand = searchParams.get("brand") || "";
   const model = searchParams.get("model") || "";
-  const year  = searchParams.get("year")  || ""; // 暂无外部年款字段，先本地过滤空值不会生效
+  const year  = searchParams.get("year")  || "";
   const num   = searchParams.get("num")   || "";
 
-  if (apiBase) {
-    try {
-      const rawList = await fetchExternal(apiBase, searchParams, apiKey);
-      const mapped = rawList.map(mapItem).filter(x => x.num && x.product);
+  try {
+    const rawList = await fetchExternal(apiBase, searchParams, apiKey);
+    const mapped = rawList.map(mapItem).filter(x => x.num && x.product);
 
-      // 本地补充过滤（外部不一定支持）
-      let result = mapped;
-      if (brand) result = result.filter(i => ciEqual(i.brand, brand));
-      if (model) result = result.filter(i => ciEqual(i.model, model));
-      if (year)  result = result.filter(i => ciEqual(i.year, year));
-      if (num)   result = result.filter(i => ciEqual(i.num, num));
+    // 本地补充过滤
+    let result = mapped;
+    if (brand) result = result.filter(i => ciEqual(i.brand, brand));
+    if (model) result = result.filter(i => ciEqual(i.model, model));
+    if (year)  result = result.filter(i => ciEqual(i.year, year));
+    if (num)   result = result.filter(i => ciEqual(i.num, num));
 
-      return NextResponse.json(result);
-    } catch (e) {
-      console.error("External fetch failed:", e);
-      // fallthrough to fallback
-    }
+    return NextResponse.json(result);
+  } catch (e) {
+    console.error("External fetch failed:", e);
   }
 
   // 兜底
