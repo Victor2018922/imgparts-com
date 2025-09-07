@@ -37,10 +37,11 @@ function mapItem(raw: any): StockItem {
   };
 }
 
-// 兼容返回结构：[], {content:[]}, {data:{data:[]}}
+// ✅ 兼容多种返回结构（这次重点新增：根级 {"data":[...]}）
 function pickList(json: any): any[] {
   if (Array.isArray(json)) return json;
   if (Array.isArray(json?.content)) return json.content;
+  if (Array.isArray(json?.data)) return json.data;                // 新增：直接支持 {"data":[...]}
   if (Array.isArray(json?.data?.content)) return json.data.content;
   if (Array.isArray(json?.data?.data)) return json.data.data;
   return [];
@@ -83,7 +84,7 @@ async function fetchExternal(apiBase: string, qsIn: URLSearchParams, apiKey?: st
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
-  // ✅ 关键：即使 .env 没配好，也默认用你的 API 地址
+  // ✅ 即使 .env 没配置，也默认使用你的外部 API
   const DEFAULT_API = "https://niuniuparts.com:6001/scm-product/v1/stock2";
   const apiBase = process.env.SOURCE_API_URL || DEFAULT_API;
   const apiKey  = process.env.SOURCE_API_KEY || "";
