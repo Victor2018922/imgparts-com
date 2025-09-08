@@ -43,7 +43,6 @@ function findImageUrlDeep(obj: any): string | null {
       return null;
     }
 
-    // 优先扫一些可能的字段
     const preferKeys = [
       'image','img','picture','photo','thumbnail','cover',
       'imageUrl','imgUrl','picUrl','photoUrl','thumbnailUrl','coverUrl',
@@ -56,7 +55,6 @@ function findImageUrlDeep(obj: any): string | null {
       }
     }
 
-    // 其余字段兜底扫描
     for (const k of Object.keys(x)) {
       if (preferKeys.includes(k)) continue;
       const got = walk(x[k]);
@@ -124,35 +122,18 @@ export default function ItemPage({ params }: { params: { num: string } }) {
     const price = pickPrice(item) ?? 'N/A';
     const stock = pickStock(item) ?? 'N/A';
 
-    // 先尝试常见字段；若取不到，再用深度扫描兜底
-    const direct =
+    // 尝试直接与深度扫描取图
+    let image: string | null =
       pickFirst(
-        item.image,
-        item.img,
-        item.picture,
-        item.photo,
-        item.thumbnail,
-        item.cover,
-        item.imageUrl,
-        item.imgUrl,
-        item.picUrl,
-        item.photoUrl,
-        item.thumbnailUrl,
-        item.coverUrl,
-        item.mainImage,
-        item.main_image,
-        item.url
+        item.image, item.img, item.picture, item.photo, item.thumbnail, item.cover,
+        item.imageUrl, item.imgUrl, item.picUrl, item.photoUrl, item.thumbnailUrl, item.coverUrl,
+        item.mainImage, item.main_image, item.url
       ) ?? null;
 
-    let image: string | null = null;
-    if (typeof direct === 'string') {
-      image = direct;
-    } else {
-      // 常见数组字段
+    if (!image) {
       const arrays: any[] = [
         item.images, item.imgs, item.pictures, item.photos, item.thumbnails, item.gallery, item.media
       ].filter(Boolean);
-
       for (const arr of arrays) {
         if (Array.isArray(arr) && arr.length > 0) {
           const first = arr[0];
@@ -163,10 +144,8 @@ export default function ItemPage({ params }: { params: { num: string } }) {
           }
         }
       }
-
-      // 兜底：全量递归扫描
-      if (!image) image = findImageUrlDeep(item);
     }
+    if (!image) image = findImageUrlDeep(item);
 
     return { name, brand, model, year, price, stock, image };
   }, [item]);
@@ -179,6 +158,9 @@ export default function ItemPage({ params }: { params: { num: string } }) {
         <p style={{ marginTop: 16 }}>
           <Link href="/stock">← 返回列表</Link>
         </p>
+        <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
+          数据源：niuniuparts.com（测试预览用途）
+        </div>
       </div>
     );
   }
@@ -191,6 +173,9 @@ export default function ItemPage({ params }: { params: { num: string } }) {
         <p style={{ marginTop: 16 }}>
           <Link href="/stock">← 返回列表</Link>
         </p>
+        <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
+          数据源：niuniuparts.com（测试预览用途）
+        </div>
       </div>
     );
   }
@@ -226,6 +211,24 @@ export default function ItemPage({ params }: { params: { num: string } }) {
           </button>
         </Link>
       </p>
+
+      {/* 原始数据预览（只读） */}
+      <details style={{ marginTop: 24 }}>
+        <summary style={{ cursor: 'pointer' }}>查看原始数据（调试用）</summary>
+        <pre
+          style={{
+            marginTop: 12,
+            padding: 12,
+            background: '#0b1020',
+            color: '#d6e1ff',
+            borderRadius: 8,
+            overflowX: 'auto',
+            maxWidth: '100%',
+          }}
+        >
+{JSON.stringify(item, null, 2)}
+        </pre>
+      </details>
 
       <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
         数据源：niuniuparts.com（测试预览用途）
