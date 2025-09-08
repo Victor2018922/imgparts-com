@@ -14,7 +14,7 @@ const nextConfig = {
       },
     ],
   },
-  // 可选：在本地开发时更快一点
+  // 保持默认：不要添加 output: 'export'
   experimental: {
     optimizeCss: true,
   },
