@@ -1,3 +1,4 @@
+// IMGParts v2 - expose images[] on 2025-09-08
 import { NextResponse } from "next/server";
 
 type StockItem = {
