@@ -7,14 +7,15 @@ type StockItem = {
   brand: string; // 使用外部 car 字段（如 TOYOTA/HONDA）
   model: string; // 使用外部 carCode
   year: string;  // 外部暂无明确年份字段，先留空
-  image?: string; // pics[0]
+  image?: string;   // pics[0]
+  images?: string[]; // ✅ 新增：全部图片
 };
 
 // ——本地兜底（外网不可达时不白屏）——
 const FALLBACK: StockItem[] = [
-  { num: "JS0260", product: "Oil Filter",  oe: "90915-YZZE1", brand: "Toyota",     model: "Corolla",  year: "", image: "" },
-  { num: "VW1234", product: "Air Filter",  oe: "06C133843",   brand: "Volkswagen", model: "Passat",   year: "", image: "" },
-  { num: "BMW5678",product: "Brake Pad",   oe: "34116761252", brand: "BMW",        model: "X5",       year: "", image: "" },
+  { num: "JS0260", product: "Oil Filter",  oe: "90915-YZZE1", brand: "Toyota",     model: "Corolla",  year: "", image: "", images: [] },
+  { num: "VW1234", product: "Air Filter",  oe: "06C133843",   brand: "Volkswagen", model: "Passat",   year: "", image: "", images: [] },
+  { num: "BMW5678",product: "Brake Pad",   oe: "34116761252", brand: "BMW",        model: "X5",       year: "", image: "", images: [] },
 ];
 
 // 忽略大小写相等
@@ -34,14 +35,15 @@ function mapItem(raw: any): StockItem {
     model: String(raw?.carCode ?? ""),   // 用车型/年款段
     year: "",                            // 暂无
     image: pics.length > 0 ? String(pics[0]) : "",
+    images: pics,
   };
 }
 
-// ✅ 兼容多种返回结构（这次重点新增：根级 {"data":[...]}）
+// ✅ 兼容多种返回结构（含根级 {"data":[...]}）
 function pickList(json: any): any[] {
   if (Array.isArray(json)) return json;
   if (Array.isArray(json?.content)) return json.content;
-  if (Array.isArray(json?.data)) return json.data;                // 新增：直接支持 {"data":[...]}
+  if (Array.isArray(json?.data)) return json.data;
   if (Array.isArray(json?.data?.content)) return json.data.content;
   if (Array.isArray(json?.data?.data)) return json.data.data;
   return [];
@@ -59,7 +61,6 @@ async function fetchExternal(apiBase: string, qsIn: URLSearchParams, apiKey?: st
     q.set("size", String(size));
     q.set("page", String(p));
     return `${apiBase}?${q.toString()}`;
-    // 你的 API： https://niuniuparts.com:6001/scm-product/v1/stock2?size=...&page=...
   };
 
   const results: any[] = [];
@@ -84,7 +85,7 @@ async function fetchExternal(apiBase: string, qsIn: URLSearchParams, apiKey?: st
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
-  // ✅ 即使 .env 没配置，也默认使用你的外部 API
+  // ✅ 默认直连你的外部 API（未配置 .env 时）
   const DEFAULT_API = "https://niuniuparts.com:6001/scm-product/v1/stock2";
   const apiBase = process.env.SOURCE_API_URL || DEFAULT_API;
   const apiKey  = process.env.SOURCE_API_KEY || "";
