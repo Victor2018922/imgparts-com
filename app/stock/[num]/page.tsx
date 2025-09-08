@@ -1,161 +1,213 @@
-import Image from "next/image";
-import Link from "next/link";
+'use client';
 
-type Item = {
+import { useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
+import Link from 'next/link';
+
+type StockItem = {
   num: string;
   product: string;
   oe: string;
   brand: string;
   model: string;
-  year?: string;
+  year: string;
   image?: string;
   images?: string[];
 };
 
-async function getItem(num: string): Promise<Item | null> {
-  const url = `${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/stock/item?num=${encodeURIComponent(num)}`;
-  // 在 Node 端，用相对路径同样可行（兼容本地 dev）
-  const res = await fetch(url.startsWith("http") ? url : `/api/stock/item?num=${encodeURIComponent(num)}`, {
-    cache: "no-store",
-  });
+async function fetchItem(num: string): Promise<StockItem | null> {
+  const res = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, { cache: 'no-store' });
   if (!res.ok) return null;
-  const arr: Item[] = await res.json();
-  return arr && arr.length > 0 ? arr[0] : null;
+  const data: StockItem[] = await res.json();
+  return data && data.length ? data[0] : null;
 }
 
-export default async function StockDetailPage(props: { params: { num: string } }) {
-  const num = decodeURIComponent(props.params.num);
-  const item = await getItem(num);
+export default function ItemDetailPage({ params }: { params: { num: string } }) {
+  const { num } = params;
+  const [item, setItem] = useState<StockItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [idx, setIdx] = useState(0);
 
-  if (!item) {
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    fetchItem(num).then((it) => {
+      if (mounted) {
+        setItem(it);
+        setIdx(0);
+        setLoading(false);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [num]);
+
+  const gallery = useMemo(() => {
+    const list = item?.images && item.images.length ? item.images : (item?.image ? [item.image] : []);
+    // 去重，防止相同URL重复
+    return Array.from(new Set(list));
+  }, [item]);
+
+  const current = gallery[idx] || '';
+
+  const hasPrev = idx > 0;
+  const hasNext = idx < Math.max(0, gallery.length - 1);
+
+  const goPrev = () => hasPrev && setIdx((v) => v - 1);
+  const goNext = () => hasNext && setIdx((v) => v + 1);
+  const onThumb = (i: number) => setIdx(i);
+
+  const copy = (text: string) => {
+    navigator.clipboard?.writeText(text);
+  };
+
+  if (loading) {
     return (
-      <div className="mx-auto max-w-5xl px-4 py-6">
-        <div className="text-sm text-gray-500 mb-2">
-          数据源：niuniuparts.com（测试预览用途）
-        </div>
-        <h1 className="text-xl font-semibold mb-2">Item not found.</h1>
-        <Link href="/stock" className="text-blue-600 hover:underline">← Back to Stock</Link>
-      </div>
+      <main className="mx-auto max-w-6xl p-4">
+        <h1 className="text-xl font-semibold">加载中…</h1>
+      </main>
     );
   }
 
-  // 画廊数据
-  const gallery = (item.images && item.images.length > 0)
-    ? item.images
-    : (item.image ? [item.image] : []);
-
-  // 简单的服务端“默认当前索引”为 0（交互在客户端用 <Image> 自适应加载）
-  const currentIndex = 0;
+  if (!item) {
+    return (
+      <main className="mx-auto max-w-6xl p-4 space-y-3">
+        <h1 className="text-2xl font-bold">Item not found.</h1>
+        <Link href="/stock" className="text-blue-600 hover:underline">← Back to Stock</Link>
+        <p className="text-sm opacity-70">数据源：niuniuparts.com（测试预览用途）</p>
+      </main>
+    );
+  }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6">
-      <div className="text-sm text-gray-500 mb-2">
-        数据源：niuniuparts.com（测试预览用途）
+    <main className="mx-auto max-w-6xl p-4 space-y-6">
+      {/* 面包屑 */}
+      <div className="text-sm text-gray-500">
+        <Link href="/" className="hover:underline">首页</Link>
+        <span className="mx-2">/</span>
+        <Link href="/stock" className="hover:underline">库存预览</Link>
+        <span className="mx-2">/</span>
+        <span className="text-gray-900">{item.product || item.num}</span>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-6">
-        {/* 画廊区域 */}
-        <div className="md:w-1/2">
-          <div className="relative w-full aspect-square bg-gray-100 rounded overflow-hidden">
-            {gallery.length > 0 ? (
+      {/* 标题区 */}
+      <header className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">{item.product || '未命名'}</h1>
+          <p className="text-gray-500 mt-1">Num: <span className="font-mono">{item.num}</span></p>
+        </div>
+        <button
+          className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm hover:opacity-90"
+          onClick={() => copy(item.num)}
+          title="复制编号"
+        >
+          复制编号
+        </button>
+      </header>
+
+      {/* 画廊 */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* 主图区 */}
+        <div className="relative">
+          <div className="relative w-full aspect-[4/3] bg-gray-100 rounded-lg overflow-hidden">
+            {current ? (
               <Image
-                src={gallery[currentIndex]}
+                src={current}
                 alt={item.product || item.num}
                 fill
+                // 关键：让 Next 按容器尺寸做压缩和懒加载
                 sizes="(max-width: 768px) 100vw, 50vw"
-                quality={70}
-                style={{ objectFit: "contain", background: "white" }}
-                priority
+                priority={false}
+                // 占位 & 优化
+                placeholder="blur"
+                blurDataURL="data:image/gif;base64,R0lGODlhAQABAAAAACw="
+                className="object-contain"
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-400">
-                No Image
+                无图片
               </div>
             )}
           </div>
 
-          {/* 缩略图条（简单版：首屏展示所有缩略图，点击跳到 hash） */}
+          {/* 上/下一张 */}
           {gallery.length > 1 && (
-            <div className="mt-3 grid grid-cols-5 sm:grid-cols-6 gap-2">
-              {gallery.map((src, idx) => (
-                <a key={idx} href={`#img-${idx}`} className="block border rounded overflow-hidden bg-gray-100">
-                  <div className="relative w-full aspect-square">
-                    <Image
-                      src={src}
-                      alt={`thumb-${idx}`}
-                      fill
-                      sizes="100px"
-                      quality={40}
-                      style={{ objectFit: "cover" }}
-                    />
-                  </div>
-                </a>
-              ))}
-            </div>
-          )}
-
-          {/* 上一张/下一张（无状态简化：用锚点引导，前端不持久状态；如需更强交互可后续加 use client 版本） */}
-          {gallery.length > 1 && (
-            <div className="flex gap-2 mt-3">
-              <a className="px-3 py-2 border rounded text-sm" href="#img-prev" title="上一张">上一张</a>
-              <a className="px-3 py-2 border rounded text-sm" href="#img-next" title="下一张">下一张</a>
-              <span className="text-xs text-gray-500">(简化版切换；若需真正切图交互，下一步我给你客户端版)</span>
-            </div>
+            <>
+              <button
+                onClick={goPrev}
+                disabled={!hasPrev}
+                className="absolute left-2 top-1/2 -translate-y-1/2 px-3 py-2 rounded-md bg-white/80 hover:bg-white shadow disabled:opacity-50"
+                title="上一张"
+              >
+                ‹
+              </button>
+              <button
+                onClick={goNext}
+                disabled={!hasNext}
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-2 rounded-md bg-white/80 hover:bg-white shadow disabled:opacity-50"
+                title="下一张"
+              >
+                ›
+              </button>
+            </>
           )}
         </div>
 
-        {/* 信息区域 */}
-        <div className="md:w-1/2">
-          <h1 className="text-2xl font-semibold mb-2">{item.product || "-"}</h1>
-          <div className="text-gray-700 space-y-1">
-            <div><b>SKU / Num：</b>{item.num}</div>
-            <div><b>OE：</b>{item.oe || "-"}</div>
-            <div><b>Brand：</b>{item.brand || "-"}</div>
-            <div><b>Model：</b>{item.model || "-"}</div>
-            {item.year ? <div><b>Year：</b>{item.year}</div> : null}
+        {/* 参数/规格 */}
+        <div className="space-y-4">
+          <div>
+            <h2 className="font-semibold mb-2">Specifications</h2>
+            <div className="space-y-1 text-sm">
+              <div>SKU / Num: <span className="font-mono">{item.num}</span></div>
+              <div>OE: <span className="font-mono">{item.oe || '-'}</span> <button className="ml-2 text-blue-600 hover:underline" onClick={() => copy(item.oe || '')}>复制</button></div>
+              <div>Brand: {item.brand || '-'}</div>
+              <div>Model: {item.model || '-'}</div>
+              <div>Year: {item.year || '-'}</div>
+            </div>
           </div>
 
-          <div className="mt-3 flex gap-2">
-            <CopyButton label="复制 OE" value={item.oe || ""} disabled={!item.oe} />
-            <CopyButton label="复制 Num" value={item.num} />
+          <div>
+            <h2 className="font-semibold mb-2">Compatibility</h2>
+            <div className="space-y-1 text-sm">
+              <div>Brand: {item.brand || '-'}</div>
+              <div>Model: {item.model || '-'}</div>
+              <div>Year: {item.year || '-'}</div>
+            </div>
           </div>
 
-          <div className="mt-6">
-            <Link href="/stock" className="text-blue-600 hover:underline">← Back to Stock</Link>
-          </div>
+          <p className="text-xs text-gray-500">数据源：niuniuparts.com（测试预览用途）</p>
         </div>
+      </section>
+
+      {/* 缩略图 */}
+      {gallery.length > 1 && (
+        <section className="space-y-2">
+          <h3 className="font-semibold">更多图片（{gallery.length}）</h3>
+          <div className="flex gap-3 overflow-x-auto py-2">
+            {gallery.map((url, i) => (
+              <button
+                key={url + i}
+                onClick={() => onThumb(i)}
+                className={`relative shrink-0 w-28 h-20 rounded-md overflow-hidden border ${i === idx ? 'border-blue-600' : 'border-gray-200'}`}
+                title={`图片 ${i + 1}`}
+              >
+                <Image
+                  src={url}
+                  alt={`thumb-${i + 1}`}
+                  fill
+                  sizes="112px"
+                  className="object-contain bg-gray-100"
+                />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div>
+        <Link href="/stock" className="text-blue-600 hover:underline">← Back to Stock</Link>
       </div>
-    </div>
-  );
-}
-
-// —— 轻量的服务端可用按钮（用 form+JS 实现复制，避免引入 client 组件复杂度）——
-function CopyButton({ label, value, disabled }: { label: string; value: string; disabled?: boolean }) {
-  return (
-    <form
-      action={async () => {
-        "use server";
-        // 服务器动作本身无法访问客户端剪贴板，这里仅作占位。
-        // 真正复制发生在浏览器端：我们用最简单的 progressive enhancement 写法。
-      }}
-      onSubmit={(e) => {
-        // 阻止提交，用浏览器 API 复制
-        e.preventDefault();
-        if (disabled || !value) return;
-        navigator.clipboard
-          .writeText(value)
-          .then(() => alert("已复制到剪贴板：" + value))
-          .catch(() => alert("复制失败，请手动选择文本复制。"));
-      }}
-    >
-      <button
-        type="submit"
-        className="px-3 py-2 border rounded text-sm disabled:opacity-50"
-        disabled={disabled}
-        title={label}
-      >
-        {label}
-      </button>
-    </form>
+    </main>
   );
 }
