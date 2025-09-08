@@ -14,58 +14,58 @@ function pickFirst<T = any>(...candidates: T[]) {
   return undefined as unknown as T;
 }
 
-function pickImage(item: AnyItem): string | null {
-  // 单值字段
-  const single =
-    pickFirst(
-      item.image,
-      item.img,
-      item.picture,
-      item.photo,
-      item.thumbnail,
-      item.cover,
-      item.imageUrl,
-      item.imgUrl,
-      item.picUrl,
-      item.photoUrl,
-      item.thumbnailUrl,
-      item.coverUrl,
-      item.mainImage,
-      item.main_image,
-      item.url
-    );
+// 递归扫描对象里所有字符串，找到第一条看起来像图片的 URL
+function findImageUrlDeep(obj: any): string | null {
+  const seen = new Set<any>();
+  const exts = /\.(png|jpe?g|webp|gif|bmp|svg|avif)$/i;
 
-  if (typeof single === 'string') return single;
+  function walk(x: any): string | null {
+    if (x === null || x === undefined) return null;
+    if (typeof x === 'string') {
+      const s = x.trim();
+      if (
+        exts.test(s) ||
+        (s.startsWith('http') && (s.includes('/img') || s.includes('/image') || s.includes('/images') || s.includes('/picture')))
+      ) {
+        return s;
+      }
+      return null;
+    }
+    if (typeof x !== 'object') return null;
+    if (seen.has(x)) return null;
+    seen.add(x);
 
-  // 数组字段
-  const arrays: any[] = [
-    item.images,
-    item.imgs,
-    item.pictures,
-    item.photos,
-    item.thumbnails,
-    item.gallery,
-    item.media,
-  ].filter(Boolean);
+    if (Array.isArray(x)) {
+      for (const it of x) {
+        const got = walk(it);
+        if (got) return got;
+      }
+      return null;
+    }
 
-  for (const arr of arrays) {
-    if (Array.isArray(arr) && arr.length > 0) {
-      const first = arr[0];
-      if (typeof first === 'string') return first;
-      if (first && typeof first === 'object') {
-        const nested = pickFirst(
-          first.url,
-          first.src,
-          first.image,
-          first.img,
-          first.thumbnail
-        );
-        if (typeof nested === 'string') return nested;
+    // 优先扫一些可能的字段
+    const preferKeys = [
+      'image','img','picture','photo','thumbnail','cover',
+      'imageUrl','imgUrl','picUrl','photoUrl','thumbnailUrl','coverUrl',
+      'mainImage','main_image','url','src','path','file'
+    ];
+    for (const k of preferKeys) {
+      if (k in x) {
+        const got = walk(x[k]);
+        if (got) return got;
       }
     }
+
+    // 其余字段兜底扫描
+    for (const k of Object.keys(x)) {
+      if (preferKeys.includes(k)) continue;
+      const got = walk(x[k]);
+      if (got) return got;
+    }
+    return null;
   }
 
-  return null;
+  return walk(obj);
 }
 
 function pickPrice(item: AnyItem): string | number | null {
@@ -103,7 +103,6 @@ export default function ItemPage({ params }: { params: { num: string } }) {
   useEffect(() => {
     (async () => {
       try {
-        // 相对路径，避免 SSR 环境变量问题
         const res = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, {
           cache: 'no-store',
         });
@@ -124,7 +123,50 @@ export default function ItemPage({ params }: { params: { num: string } }) {
     const year = pickFirst(item.year, item.years, '—');
     const price = pickPrice(item) ?? 'N/A';
     const stock = pickStock(item) ?? 'N/A';
-    const image = pickImage(item);
+
+    // 先尝试常见字段；若取不到，再用深度扫描兜底
+    const direct =
+      pickFirst(
+        item.image,
+        item.img,
+        item.picture,
+        item.photo,
+        item.thumbnail,
+        item.cover,
+        item.imageUrl,
+        item.imgUrl,
+        item.picUrl,
+        item.photoUrl,
+        item.thumbnailUrl,
+        item.coverUrl,
+        item.mainImage,
+        item.main_image,
+        item.url
+      ) ?? null;
+
+    let image: string | null = null;
+    if (typeof direct === 'string') {
+      image = direct;
+    } else {
+      // 常见数组字段
+      const arrays: any[] = [
+        item.images, item.imgs, item.pictures, item.photos, item.thumbnails, item.gallery, item.media
+      ].filter(Boolean);
+
+      for (const arr of arrays) {
+        if (Array.isArray(arr) && arr.length > 0) {
+          const first = arr[0];
+          if (typeof first === 'string') { image = first; break; }
+          if (first && typeof first === 'object') {
+            const nested = pickFirst(first.url, first.src, first.image, first.img, first.thumbnail, first.path);
+            if (typeof nested === 'string') { image = nested; break; }
+          }
+        }
+      }
+
+      // 兜底：全量递归扫描
+      if (!image) image = findImageUrlDeep(item);
+    }
 
     return { name, brand, model, year, price, stock, image };
   }, [item]);
@@ -173,7 +215,9 @@ export default function ItemPage({ params }: { params: { num: string } }) {
             style={{ maxWidth: 420, width: '100%', height: 'auto', borderRadius: 8, border: '1px solid #eee' }}
           />
         </div>
-      ) : null}
+      ) : (
+        <p style={{ marginTop: 12, color: '#666' }}>（暂无可识别的图片链接）</p>
+      )}
 
       <p style={{ marginTop: 20 }}>
         <Link href="/stock">
