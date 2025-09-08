@@ -1,9 +1,99 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
 type AnyItem = Record<string, any>;
+
+function pickFirst<T = any>(...candidates: T[]) {
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    if (typeof c === 'string' && c.trim() === '') continue;
+    return c as T;
+  }
+  return undefined as unknown as T;
+}
+
+function pickImage(item: AnyItem): string | null {
+  // 单值字段
+  const single =
+    pickFirst(
+      item.image,
+      item.img,
+      item.picture,
+      item.photo,
+      item.thumbnail,
+      item.cover,
+      item.imageUrl,
+      item.imgUrl,
+      item.picUrl,
+      item.photoUrl,
+      item.thumbnailUrl,
+      item.coverUrl,
+      item.mainImage,
+      item.main_image,
+      item.url
+    );
+
+  if (typeof single === 'string') return single;
+
+  // 数组字段
+  const arrays: any[] = [
+    item.images,
+    item.imgs,
+    item.pictures,
+    item.photos,
+    item.thumbnails,
+    item.gallery,
+    item.media,
+  ].filter(Boolean);
+
+  for (const arr of arrays) {
+    if (Array.isArray(arr) && arr.length > 0) {
+      const first = arr[0];
+      if (typeof first === 'string') return first;
+      if (first && typeof first === 'object') {
+        const nested = pickFirst(
+          first.url,
+          first.src,
+          first.image,
+          first.img,
+          first.thumbnail
+        );
+        if (typeof nested === 'string') return nested;
+      }
+    }
+  }
+
+  return null;
+}
+
+function pickPrice(item: AnyItem): string | number | null {
+  const val = pickFirst(
+    item.price,
+    item.salePrice,
+    item.retailPrice,
+    item.unitPrice,
+    item.usdPrice,
+    item.priceUsd,
+    item.cnyPrice,
+    item.priceRmb
+  );
+  return val ?? null;
+}
+
+function pickStock(item: AnyItem): string | number | null {
+  const val = pickFirst(
+    item.stock,
+    item.qty,
+    item.quantity,
+    item.stockQty,
+    item.inventory,
+    item.balance,
+    item.onHand
+  );
+  return val ?? null;
+}
 
 export default function ItemPage({ params }: { params: { num: string } }) {
   const { num } = params;
@@ -13,7 +103,7 @@ export default function ItemPage({ params }: { params: { num: string } }) {
   useEffect(() => {
     (async () => {
       try {
-        // 关键：使用相对地址，避免环境变量导致 SSR 崩溃
+        // 相对路径，避免 SSR 环境变量问题
         const res = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, {
           cache: 'no-store',
         });
@@ -25,6 +115,19 @@ export default function ItemPage({ params }: { params: { num: string } }) {
       }
     })();
   }, [num]);
+
+  const view = useMemo(() => {
+    if (!item) return null;
+    const name = pickFirst(item.product, item.name, item.title, item.oe, '—');
+    const brand = pickFirst(item.brand, item.make, '—');
+    const model = pickFirst(item.model, item.vehicle, '—');
+    const year = pickFirst(item.year, item.years, '—');
+    const price = pickPrice(item) ?? 'N/A';
+    const stock = pickStock(item) ?? 'N/A';
+    const image = pickImage(item);
+
+    return { name, brand, model, year, price, stock, image };
+  }, [item]);
 
   if (err) {
     return (
@@ -38,7 +141,7 @@ export default function ItemPage({ params }: { params: { num: string } }) {
     );
   }
 
-  if (!item) {
+  if (!item || !view) {
     return (
       <div style={{ padding: 20 }}>
         <h1>Product Detail</h1>
@@ -50,36 +153,25 @@ export default function ItemPage({ params }: { params: { num: string } }) {
     );
   }
 
-  // 适配不同字段名
-  const name = item.product ?? item.name ?? item.title ?? item.oe ?? '—';
-  const brand = item.brand ?? item.make ?? '—';
-  const model = item.model ?? item.vehicle ?? '—';
-  const year = item.year ?? item.years ?? '—';
-  const price = item.price ?? item.salePrice ?? item.retailPrice ?? 'N/A';
-  const stock = item.stock ?? item.qty ?? item.quantity ?? 'N/A';
-  const image =
-    item.image ??
-    item.img ??
-    item.picture ??
-    item.thumbnail ??
-    null;
-
   return (
     <div style={{ padding: 20 }}>
       <h1>Product Detail</h1>
       <p><strong>Num:</strong> {num}</p>
-      <p><strong>Name:</strong> {name}</p>
-      <p><strong>Brand:</strong> {brand}</p>
-      <p><strong>Model:</strong> {model}</p>
-      <p><strong>Year:</strong> {year}</p>
-      <p><strong>Price:</strong> {price}</p>
-      <p><strong>Stock:</strong> {stock}</p>
+      <p><strong>Name:</strong> {view.name}</p>
+      <p><strong>Brand:</strong> {view.brand}</p>
+      <p><strong>Model:</strong> {view.model}</p>
+      <p><strong>Year:</strong> {view.year}</p>
+      <p><strong>Price:</strong> {view.price}</p>
+      <p><strong>Stock:</strong> {view.stock}</p>
 
-      {image ? (
+      {view.image ? (
         <div style={{ marginTop: 12 }}>
-          {/* 尺寸简单自适应展示 */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={image} alt={name} style={{ maxWidth: 360, height: 'auto', borderRadius: 8 }} />
+          <img
+            src={view.image}
+            alt={String(view.name)}
+            style={{ maxWidth: 420, width: '100%', height: 'auto', borderRadius: 8, border: '1px solid #eee' }}
+          />
         </div>
       ) : null}
 
@@ -90,6 +182,10 @@ export default function ItemPage({ params }: { params: { num: string } }) {
           </button>
         </Link>
       </p>
+
+      <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
+        数据源：niuniuparts.com（测试预览用途）
+      </div>
     </div>
   );
 }
