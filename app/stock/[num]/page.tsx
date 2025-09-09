@@ -1,184 +1,217 @@
-'use client';
+import Link from "next/link";
+import { headers } from "next/headers";
 
-import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+type Item = {
+  brand?: string;
+  car?: string;
+  carCode?: string;
+  count?: number;
+  name: string;
+  num: string;
+  oe?: string;
+  pics?: string[];
+  price?: number | string;
+};
 
-type AnyItem = Record<string, any>;
-
-function pickFirst<T = any>(...candidates: T[]) {
-  for (const c of candidates) {
-    if (c === undefined || c === null) continue;
-    if (typeof c === 'string' && c.trim() === '') continue;
-    return c as T;
-  }
-  return undefined as unknown as T;
+function getOriginFromHeaders() {
+  const h = headers();
+  const proto = h.get("x-forwarded-proto") || "https";
+  const host = h.get("x-forwarded-host") || h.get("host");
+  if (host) return `${proto}://${host}`;
+  return process.env.NEXT_PUBLIC_SITE_URL || "https://imgparts-com.vercel.app";
 }
 
-// http -> https
-function toHttps(s: string): string {
-  const t = (s || '').trim();
-  if (!t) return t;
-  if (t.startsWith('https://')) return t;
-  if (t.startsWith('http://')) return 'https://' + t.slice(7);
-  if (t.startsWith('//')) return 'https:' + t;
-  return t;
+function safeNum(v: unknown, def: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
 }
 
-export default function ItemPage({ params }: { params: { num: string } }) {
-  const { num } = params;
-  const [item, setItem] = useState<AnyItem | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [activeIdx, setActiveIdx] = useState(0);
+export default async function StockDetail({
+  params,
+  searchParams,
+}: {
+  params: { num: string };
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
+  const num = decodeURIComponent(params.num);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        setItem(data);
-        setActiveIdx(0);
-      } catch (e: any) {
-        setErr(String(e?.message || e));
-      }
-    })();
-  }, [num]);
+  // 列表携带过来的定位信息
+  const size = safeNum(searchParams?.size, 20);
+  const page = safeNum(searchParams?.page, 0);
+  const idx = safeNum(searchParams?.i, 0);
+  const imgIndex = Math.max(0, safeNum(searchParams?.img, 0));
 
-  const view = useMemo(() => {
-    if (!item) return null;
+  const origin = getOriginFromHeaders();
 
-    const name  = pickFirst(item.product, item.name, item.title, item.oe, '—');
-    const brand = pickFirst(item.brand, item.make, '—');
-    const model = pickFirst(item.model, item.vehicle, '—');
-    const year  = pickFirst(item.year, item.years, '—');
-    const price = pickFirst(item.price, item.salePrice, item.retailPrice, 'N/A');
-    const stock = pickFirst(item.stock, item.qty, item.quantity, 'N/A');
-
-    // 图片相册：优先 pics 数组；无则尝试几个常见字段拼一个数组
-    let pics: string[] = [];
-    if (Array.isArray(item.pics)) {
-      pics = item.pics.filter(Boolean).map((u: any) => toHttps(String(u)));
+  // 单条详情
+  let item: Item | null = null;
+  try {
+    const res = await fetch(`${origin}/api/stock/item?num=${encodeURIComponent(num)}`, {
+      cache: "no-store",
+      next: { revalidate: 0 },
+    });
+    if (res.ok) {
+      const json = await res.json().catch(() => null);
+      const data = (json as any)?.data;
+      if (data && typeof data === "object") item = data as Item;
     }
-    const fallbackOne = pickFirst(
-      item.image, item.img, item.picture, item.photo,
-      item.imageUrl, item.imgUrl, item.picUrl, item.photoUrl
-    );
-    if (pics.length === 0 && typeof fallbackOne === 'string') {
-      pics = [toHttps(fallbackOne)];
+  } catch {}
+
+  // 当前页列表（用于上一条/下一条）
+  let list: Item[] = [];
+  try {
+    const qs = new URLSearchParams({ size: String(size), page: String(page) }).toString();
+    const res2 = await fetch(`${origin}/api/stock?${qs}`, {
+      cache: "no-store",
+      next: { revalidate: 0 },
+    });
+    if (res2.ok) {
+      const json2 = await res2.json().catch(() => null);
+      const data2 = (json2 as any)?.data;
+      if (Array.isArray(data2)) list = data2 as Item[];
     }
+  } catch {}
 
-    return { name, brand, model, year, price, stock, pics };
-  }, [item]);
-
-  if (err) {
-    return (
-      <div style={{ padding: 20 }}>
-        <h1>Product Detail</h1>
-        <p style={{ color: 'red' }}>加载失败：{err}</p>
-        <p style={{ marginTop: 16 }}><Link href="/stock">← 返回列表</Link></p>
-        <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>数据源：niuniuparts.com（测试预览用途）</div>
-      </div>
-    );
+  // 如果 /item 没拿到，用列表兜底
+  if (!item && list.length) {
+    item = list.find((x) => x.num === num) ?? null;
   }
 
-  if (!item || !view) {
-    return (
-      <div style={{ padding: 20 }}>
-        <h1>Product Detail</h1>
-        <p>加载中…</p>
-        <p style={{ marginTop: 16 }}><Link href="/stock">← 返回列表</Link></p>
-        <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>数据源：niuniuparts.com（测试预览用途）</div>
-      </div>
-    );
-  }
+  // 相册
+  const pics =
+    item?.pics && item.pics.length > 0
+      ? item.pics
+      : ["https://dummyimage.com/1024x768/eeeeee/aaaaaa&text=No+Image"];
 
-  const mainImg = view.pics[activeIdx];
+  const chosen = pics[Math.min(imgIndex, pics.length - 1)] ?? pics[0];
+
+  // 上一条/下一条（基于本页索引）
+  const currentIndex = Math.min(Math.max(idx, 0), Math.max(0, list.length - 1));
+  const prevIdx = currentIndex - 1;
+  const nextIdx = currentIndex + 1;
+
+  const prevItem = prevIdx >= 0 ? list[prevIdx] : null;
+  const nextItem = nextIdx < list.length ? list[nextIdx] : null;
+
+  const backHref = `/stock?size=${size}&page=${page}`;
+  const toHref = (it: Item | null, i: number) =>
+    it ? `/stock/${encodeURIComponent(it.num)}?size=${size}&page=${page}&i=${i}` : "#";
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Product Detail</h1>
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      {/* 顶部：返回 + 上/下一条 */}
+      <div className="flex items-center justify-between mb-4">
+        <Link
+          href={backHref}
+          prefetch={false}
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-md border hover:bg-gray-50"
+        >
+          ← 返回列表
+        </Link>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 480px) 1fr', gap: 24, alignItems: 'start' }}>
-        {/* 左侧：图片相册 */}
-        <div>
-          <div
-            style={{
-              width: '100%',
-              aspectRatio: '4/3',
-              background: '#f8fafc',
-              border: '1px solid #e5e7eb',
-              borderRadius: 12,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden',
-              marginBottom: 12,
-            }}
+        <div className="flex items-center gap-2">
+          <Link
+            href={toHref(prevItem, prevIdx)}
+            prefetch={false}
+            aria-disabled={!prevItem}
+            className={`px-3 py-2 rounded-md border ${
+              !prevItem ? "opacity-40 pointer-events-none" : ""
+            }`}
           >
-            {mainImg ? (
-              // eslint-disable-next-line @next/next/no-img-element
+            上一条
+          </Link>
+          <Link
+            href={toHref(nextItem, nextIdx)}
+            prefetch={false}
+            aria-disabled={!nextItem}
+            className={`px-3 py-2 rounded-md border ${
+              !nextItem ? "opacity-40 pointer-events-none" : ""
+            }`}
+          >
+            下一条
+          </Link>
+        </div>
+      </div>
+
+      {/* 主体两列 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* 相册：大图 + 缩略图（无 JS，靠地址参数切换） */}
+        <div className="rounded-xl border p-3">
+          <a href={chosen} target="_blank" rel="noopener" className="block">
+            <div className="aspect-[4/3] bg-white flex items-center justify-center overflow-hidden rounded-lg">
               <img
-                src={mainImg}
-                alt={String(view.name)}
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                src={chosen}
+                alt={item?.name ?? item?.num ?? "image"}
+                className="w-full h-full object-contain"
               />
-            ) : (
-              <span style={{ color: '#94a3b8' }}>（暂无图片）</span>
-            )}
+            </div>
+          </a>
+
+          <div className="mt-3 grid grid-cols-5 sm:grid-cols-6 md:grid-cols-5 gap-2">
+            {pics.map((p, i) => {
+              const href = `/stock/${encodeURIComponent(
+                num
+              )}?size=${size}&page=${page}&i=${currentIndex}&img=${i}`;
+              const active = i === Math.min(imgIndex, pics.length - 1);
+              return (
+                <Link
+                  key={p + i}
+                  href={href}
+                  prefetch={false}
+                  className={`border rounded-md overflow-hidden ${
+                    active ? "ring-2 ring-black" : ""
+                  }`}
+                >
+                  <img src={p} alt={`thumb-${i}`} className="w-full h-20 object-cover" />
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 信息 */}
+        <div>
+          <h2 className="text-lg font-semibold mb-2">Product Detail</h2>
+          <div className="space-y-1 text-sm">
+            <div>
+              <span className="text-gray-500">Num:</span> {item?.num ?? "—"}
+            </div>
+            <div>
+              <span className="text-gray-500">Name:</span> {item?.name ?? "—"}
+            </div>
+            <div>
+              <span className="text-gray-500">Brand:</span> {item?.brand ?? "—"}
+            </div>
+            <div>
+              <span className="text-gray-500">Model:</span> {item?.carCode ?? "—"}
+            </div>
+            <div>
+              <span className="text-gray-500">Year:</span> — 
+            </div>
+            <div>
+              <span className="text-gray-500">Price:</span>{" "}
+              {typeof item?.price === "number"
+                ? (item!.price as number).toFixed(2)
+                : item?.price ?? "N/A"}
+            </div>
+            <div>
+              <span className="text-gray-500">Stock:</span>{" "}
+              {Number.isFinite(item?.count) ? String(item?.count) : "N/A"}
+            </div>
           </div>
 
-          {/* 缩略图列表 */}
-          {view.pics.length > 1 && (
-            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-              {view.pics.map((u, i) => (
-                <button
-                  key={i}
-                  onClick={() => setActiveIdx(i)}
-                  style={{
-                    border: i === activeIdx ? '2px solid #0ea5e9' : '1px solid #e5e7eb',
-                    borderRadius: 8,
-                    background: '#fff',
-                    padding: 0,
-                    width: 90,
-                    height: 68,
-                    cursor: 'pointer',
-                    flex: '0 0 auto',
-                    overflow: 'hidden',
-                  }}
-                  title={`图片 ${i + 1}`}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={u} alt={`thumb-${i}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                </button>
-              ))}
+          {item?.oe && (
+            <div className="mt-4 text-sm">
+              <span className="text-gray-500">OE：</span>
+              {item.oe}
             </div>
           )}
         </div>
-
-        {/* 右侧：信息 */}
-        <div>
-          <p><strong>Num:</strong> {num}</p>
-          <p><strong>Name:</strong> {view.name}</p>
-          <p><strong>Brand:</strong> {view.brand}</p>
-          <p><strong>Model:</strong> {view.model}</p>
-          <p><strong>Year:</strong> {view.year}</p>
-          <p><strong>Price:</strong> {view.price}</p>
-          <p><strong>Stock:</strong> {view.stock}</p>
-
-          <p style={{ marginTop: 16 }}>
-            <Link href="/stock">
-              <button style={{ padding: '10px 20px', background: '#0070f3', color: '#fff', border: 'none', borderRadius: 6 }}>
-                ← 返回列表
-              </button>
-            </Link>
-          </p>
-        </div>
       </div>
 
-      {/* 只保留一个数据源 footer */}
-      <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
-        数据源：niuniuparts.com（测试预览用途）
-      </div>
+      <footer className="mt-10 text-xs text-gray-400">
+        数据源： niuniuparts.com（测试预览用途）
+      </footer>
     </div>
   );
 }
