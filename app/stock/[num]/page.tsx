@@ -175,24 +175,7 @@ export default function ItemPage({ params }: { params: { num: string } }) {
         </div>
       </div>
 
-      {/* 原始数据（折叠，默认收起，截图更干净） */}
-      <details style={{ marginTop: 24 }}>
-        <summary style={{ cursor: 'pointer' }}>查看原始数据（调试用）</summary>
-        <pre
-          style={{
-            marginTop: 8,
-            padding: 12,
-            background: '#0b1020',
-            color: '#d6e1ff',
-            borderRadius: 8,
-            overflowX: 'auto',
-            maxWidth: '100%',
-            fontSize: 12,
-          }}
-        >{JSON.stringify(item, null, 2)}</pre>
-      </details>
-
-      {/* 只保留一个数据源 footer，去重 */}
+      {/* 只保留一个数据源 footer */}
       <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
         数据源：niuniuparts.com（测试预览用途）
       </div>
