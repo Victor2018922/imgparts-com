@@ -1,125 +1,231 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 
-type StockItem = {
-  num: string;
-  product: string;
-  oe: string;
-  brand: string;
-  model: string;
-  year: string;
-  image?: string;
-};
+type AnyItem = Record<string, any>;
 
-export default function StockDetailPage({ params }: { params: { num: string } }) {
+function pickFirst<T = any>(...candidates: T[]) {
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    if (typeof c === 'string' && c.trim() === '') continue;
+    return c as T;
+  }
+  return undefined as unknown as T;
+}
+
+// 允许带 ?query 的图片扩展名
+const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(\?.*)?$/i;
+
+// 把 http 升级为 https；// 开头的也补 https
+function upgradeToHttps(s: string): string {
+  const t = s.trim();
+  if (t.startsWith('https://')) return t;
+  if (t.startsWith('http://')) return 'https://' + t.slice(7);
+  if (t.startsWith('//')) return 'https:' + t;
+  return t;
+}
+
+// 递归扫描对象里所有字符串，找第一个像图片的链接，并升级为 https
+function findImageUrlDeep(obj: any): string | null {
+  const seen = new Set<any>();
+
+  function walk(x: any): string | null {
+    if (x === null || x === undefined) return null;
+
+    if (typeof x === 'string') {
+      const s = x.trim();
+      if (IMG_EXT.test(s)) return upgradeToHttps(s);
+      if (
+        s.startsWith('http') &&
+        (s.includes('/img') || s.includes('/image') || s.includes('/images') || s.includes('/picture') || s.includes('/upload') || s.includes('productImg'))
+      ) {
+        return upgradeToHttps(s);
+      }
+      return null;
+    }
+
+    if (typeof x !== 'object') return null;
+    if (seen.has(x)) return null;
+    seen.add(x);
+
+    if (Array.isArray(x)) {
+      for (const it of x) {
+        const got = walk(it);
+        if (got) return got;
+      }
+      return null;
+    }
+
+    const preferKeys = [
+      'pics', // <-- 重点：你家接口的图片数组字段
+      'image','img','picture','photo','thumbnail','cover',
+      'imageUrl','imgUrl','picUrl','photoUrl','thumbnailUrl','coverUrl',
+      'mainImage','main_image','url','src','path','file','filePath','imagePath'
+    ];
+    for (const k of preferKeys) {
+      if (k in x) {
+        const got = walk(x[k]);
+        if (got) return got;
+      }
+    }
+
+    for (const k of Object.keys(x)) {
+      if (preferKeys.includes(k)) continue;
+      const got = walk(x[k]);
+      if (got) return got;
+    }
+    return null;
+  }
+
+  return walk(obj);
+}
+
+function pickPrice(item: AnyItem): string | number | null {
+  const val = pickFirst(
+    item.price,
+    item.salePrice,
+    item.retailPrice,
+    item.unitPrice,
+    item.usdPrice,
+    item.priceUsd,
+    item.cnyPrice,
+    item.priceRmb
+  );
+  return val ?? null;
+}
+
+function pickStock(item: AnyItem): string | number | null {
+  const val = pickFirst(
+    item.stock,
+    item.qty,
+    item.quantity,
+    item.stockQty,
+    item.inventory,
+    item.balance,
+    item.onHand
+  );
+  return val ?? null;
+}
+
+export default function ItemPage({ params }: { params: { num: string } }) {
   const { num } = params;
-  const [item, setItem] = useState<StockItem | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const [qty, setQty] = useState<number>(1);
-  const dec = () => setQty((v) => Math.max(1, v - 1));
-  const inc = () => setQty((v) => v + 1);
-  const onQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value.replace(/[^\d]/g, "") || "1", 10);
-    setQty(Math.max(1, val));
-  };
-  const addToCart = () => {
-    if (!item) return;
-    alert(`已加入购物车：${qty} × ${item.product}（${item.num}）`);
-  };
+  const [item, setItem] = useState<AnyItem | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const resA = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, { cache: "no-store" });
-        if (resA.ok) {
-          const dataA = await resA.json();
-          if (Array.isArray(dataA) && dataA.length > 0) {
-            setItem(dataA[0]);
-            return;
-          }
-        }
-        const resB = await fetch("/api/stock/item", { cache: "no-store" });
-        const dataB: StockItem[] = await resB.json();
-        setItem(dataB.find((x) => x.num === num) || null);
-      } finally {
-        setLoading(false);
+        const res = await fetch(`/api/stock/item?num=${encodeURIComponent(num)}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setItem(data);
+      } catch (e: any) {
+        setErr(String(e?.message || e));
       }
     })();
   }, [num]);
 
-  if (loading) {
-    return <div className="p-4 max-w-6xl mx-auto">Loading...</div>;
-  }
+  const view = useMemo(() => {
+    if (!item) return null;
 
-  if (!item) {
+    const name  = pickFirst(item.product, item.name, item.title, item.oe, '—');
+    const brand = pickFirst(item.brand, item.make, '—');
+    const model = pickFirst(item.model, item.vehicle, '—');
+    const year  = pickFirst(item.year, item.years, '—');
+    const price = pickPrice(item) ?? 'N/A';
+    const stock = pickStock(item) ?? 'N/A';
+
+    // 1) 优先使用 pics 数组里的第一张图
+    let image: string | null = null;
+    if (Array.isArray(item.pics) && item.pics.length > 0) {
+      const first = item.pics[0];
+      if (typeof first === 'string') image = upgradeToHttps(first);
+      else if (first && typeof first === 'object') {
+        const nested = pickFirst(first.url, first.src, first.image, first.img, first.thumbnail, first.path, first.filePath, first.imagePath);
+        if (typeof nested === 'string') image = upgradeToHttps(nested);
+      }
+    }
+
+    // 2) 常见字段兜底
+    if (!image) {
+      image =
+        pickFirst(
+          item.image, item.img, item.picture, item.photo, item.thumbnail, item.cover,
+          item.imageUrl, item.imgUrl, item.picUrl, item.photoUrl, item.thumbnailUrl, item.coverUrl,
+          item.mainImage, item.main_image, item.url, item.imagePath, item.filePath
+        ) ?? null;
+      if (typeof image === 'string') image = upgradeToHttps(image);
+    }
+
+    // 3) 最终兜底：递归深度扫描（带 productImg 关键字）
+    if (!image) image = findImageUrlDeep(item);
+
+    return { name, brand, model, year, price, stock, image };
+  }, [item]);
+
+  if (err) {
     return (
-      <div className="p-4 max-w-6xl mx-auto">
-        <p className="text-red-600 mb-4">Item not found.</p>
-        <Link href="/stock" className="text-blue-600 underline">← Back to Stock</Link>
+      <div style={{ padding: 20 }}>
+        <h1>Product Detail</h1>
+        <p style={{ color: 'red' }}>加载失败：{err}</p>
+        <p style={{ marginTop: 16 }}><Link href="/stock">← 返回列表</Link></p>
+        <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>数据源：niuniuparts.com（测试预览用途）</div>
       </div>
     );
   }
 
-  const imgSrc =
-    (item.image && String(item.image)) ||
-    `https://via.placeholder.com/800x450?text=${encodeURIComponent(item.product || "No Image")}`;
-
   return (
-    <div className="p-4 max-w-6xl mx-auto">
-      <div className="mb-3">
-        <Link href="/stock" className="text-blue-600 underline">← Back to Stock</Link>
+    <div style={{ padding: 20 }}>
+      <h1>Product Detail</h1>
+      <p><strong>Num:</strong> {num}</p>
+      <p><strong>Name:</strong> {view?.name ?? '—'}</p>
+      <p><strong>Brand:</strong> {view?.brand ?? '—'}</p>
+      <p><strong>Model:</strong> {view?.model ?? '—'}</p>
+      <p><strong>Year:</strong> {view?.year ?? '—'}</p>
+      <p><strong>Price:</strong> {view?.price ?? 'N/A'}</p>
+      <p><strong>Stock:</strong> {view?.stock ?? 'N/A'}</p>
+
+      {view?.image ? (
+        <div style={{ marginTop: 12 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={view.image}
+            alt={String(view.name)}
+            style={{ maxWidth: 420, width: '100%', height: 'auto', borderRadius: 8, border: '1px solid #eee' }}
+          />
+        </div>
+      ) : (
+        <p style={{ marginTop: 12, color: '#666' }}>（暂无可识别的图片链接）</p>
+      )}
+
+      <p style={{ marginTop: 20 }}>
+        <Link href="/stock">
+          <button style={{ padding: '10px 20px', background: '#0070f3', color: '#fff', border: 'none', borderRadius: 6 }}>
+            ← 返回列表
+          </button>
+        </Link>
+      </p>
+
+      {/* 原始数据（只读） */}
+      <div style={{ marginTop: 24 }}>
+        <h3 style={{ marginBottom: 8 }}>原始数据（只读）</h3>
+        <pre
+          style={{
+            marginTop: 8,
+            padding: 12,
+            background: '#0b1020',
+            color: '#d6e1ff',
+            borderRadius: 8,
+            overflowX: 'auto',
+            maxWidth: '100%',
+            fontSize: 12,
+          }}
+        >{item ? JSON.stringify(item, null, 2) : '—'}</pre>
       </div>
 
-      <div className="flex items-start justify-between gap-6">
-        <div className="flex-1 space-y-4">
-          <div className="w-full border rounded overflow-hidden bg-gray-100">
-            <img src={imgSrc} alt={`${item.product} image`} style={{ width: "100%", height: "auto" }} />
-          </div>
-
-          <div className="border rounded p-4">
-            <h2 className="font-bold mb-3 text-lg">Specifications</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-sm">
-              <div><span className="text-gray-500">SKU / Num:</span> <span className="font-medium">{item.num}</span></div>
-              <div><span className="text-gray-500">OE:</span> <span className="font-medium">{item.oe}</span></div>
-              <div><span className="text-gray-500">Brand:</span> <span className="font-medium">{item.brand}</span></div>
-              <div><span className="text-gray-500">Model:</span> <span className="font-medium">{item.model}</span></div>
-              <div><span className="text-gray-500">Year:</span> <span className="font-medium">{item.year}</span></div>
-            </div>
-          </div>
-
-          <div className="border rounded p-4">
-            <h2 className="font-bold mb-3 text-lg">Compatibility</h2>
-            <ul className="list-disc pl-5 text-sm space-y-1">
-              <li>Brand: {item.brand}</li>
-              <li>Model: {item.model}</li>
-              <li>Year: {item.year}</li>
-            </ul>
-          </div>
-        </div>
-
-        <aside className="w-full md:w-80 shrink-0">
-          <div className="border rounded p-4 sticky top-4">
-            <h2 className="font-bold text-lg mb-3">Buy Box</h2>
-            <div className="text-sm text-gray-600 mb-2">（占位）未来显示价格、库存、配送、卖家评分等</div>
-            <div className="flex items-center gap-2 mb-3">
-              <button className="border rounded px-3 py-2" onClick={dec} aria-label="decrease quantity">-</button>
-              <input
-                className="w-16 border rounded px-2 py-2 text-center"
-                value={qty}
-                onChange={onQtyChange}
-                inputMode="numeric"
-                aria-label="quantity"
-              />
-              <button className="border rounded px-3 py-2" onClick={inc} aria-label="increase quantity">+</button>
-            </div>
-            <button className="w-full bg-black text-white rounded py-2" onClick={addToCart}>
-              Add to Cart
-            </button>
-          </div>
-        </aside>
+      <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
+        数据源：niuniuparts.com（测试预览用途）
       </div>
     </div>
   );
