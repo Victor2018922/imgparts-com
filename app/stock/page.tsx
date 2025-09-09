@@ -1,170 +1,166 @@
-'use client';
+import Link from "next/link";
 
-import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+type Item = {
+  brand?: string;
+  car?: string;
+  carCode?: string;
+  count?: number;
+  name: string;
+  num: string;
+  oe?: string;
+  pics?: string[];
+  price?: number | string;
+};
 
-type AnyItem = Record<string, any>;
-
-function pickFirst<T = any>(...candidates: T[]) {
-  for (const c of candidates) {
-    if (c === undefined || c === null) continue;
-    if (typeof c === 'string' && c.trim() === '') continue;
-    return c as T;
-  }
-  return undefined as unknown as T;
+function cn(...a: (string | false | null | undefined)[]) {
+  return a.filter(Boolean).join(" ");
 }
 
-// http -> https
-function toHttps(s: string): string {
-  const t = (s || '').trim();
-  if (!t) return t;
-  if (t.startsWith('https://')) return t;
-  if (t.startsWith('http://')) return 'https://' + t.slice(7);
-  if (t.startsWith('//')) return 'https:' + t;
-  return t;
-}
+export default async function StockPage({
+  searchParams,
+}: {
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
+  const size = Number(searchParams?.size ?? 20);
+  const page = Number(searchParams?.page ?? 0);
 
-function getThumb(it: AnyItem): string | null {
-  // 优先 pics[0]
-  if (Array.isArray(it?.pics) && it.pics.length > 0) {
-    const first = it.pics[0];
-    if (typeof first === 'string') return toHttps(first);
+  const qs = new URLSearchParams({
+    size: String(size),
+    page: String(page),
+  }).toString();
+
+  // 拉取当前页数据
+  const res = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL ?? ""}/api/stock?${qs}`, {
+    // 保证每次刷新取新数据
+    cache: "no-store",
+  });
+
+  let items: Item[] = [];
+  if (res.ok) {
+    const json = await res.json();
+    items = Array.isArray(json?.data) ? (json.data as Item[]) : [];
   }
-  // 兜底一些常见字段
-  const direct = pickFirst(
-    it.image, it.img, it.picture, it.photo, it.thumbnail,
-    it.imageUrl, it.imgUrl, it.picUrl, it.photoUrl
-  );
-  if (typeof direct === 'string') return toHttps(direct);
-  return null;
-}
 
-export default function StockPage() {
-  const [items, setItems] = useState<AnyItem[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+  // 分页链接（上一页/下一页）
+  const prevPage = Math.max(0, page - 1);
+  const nextPage = page + 1;
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/stock', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
+  const prevHref = `/stock?size=${size}&page=${prevPage}`;
+  const nextHref = `/stock?size=${size}&page=${nextPage}`;
 
-        // 兼容各种返回结构
-        const list =
-          Array.isArray(json) ? json
-          : Array.isArray(json?.content) ? json.content
-          : Array.isArray(json?.data) ? json.data
-          : Array.isArray(json?.items) ? json.items
-          : Array.isArray(json?.list) ? json.list
-          : [];
-
-        setItems(list);
-      } catch (e: any) {
-        setErr(String(e?.message || e));
-      }
-    })();
-  }, []);
-
-  const view = useMemo(() => {
-    return items.map((it, idx) => {
-      const num =
-        pickFirst(it.num, it.code, it.sku, it.id, String(idx)) as string;
-      const name =
-        pickFirst(it.product, it.name, it.title, it.oe, '—') as string;
-      const price =
-        pickFirst(it.price, it.salePrice, it.retailPrice, 'N/A') as
-          | string
-          | number;
-      const img = getThumb(it);
-      return { num, name, price, img };
-    });
-  }, [items]);
-
-  if (err) {
-    return (
-      <div style={{ padding: 20 }}>
-        <h1>库存预览</h1>
-        <p style={{ color: 'red' }}>加载失败：{err}</p>
-      </div>
-    );
-  }
+  // 到达末尾的简单判定：返回数量 < size 就认为是最后一页
+  const isLastPage = items.length < size;
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>库存预览</h1>
-      <p style={{ color: '#666', marginBottom: 12 }}>共 {items.length} 条</p>
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      <header className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold">库存预览</h1>
 
-      {view.length === 0 ? (
-        <p>暂无数据</p>
-      ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 16,
-          }}
-        >
-          {view.map((v) => (
-            <Link key={v.num} href={`/stock/${encodeURIComponent(v.num)}`} style={{ textDecoration: 'none' }}>
-              <div
-                style={{
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 12,
-                  padding: 12,
-                  background: '#fff',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-                }}
-              >
-                <div
-                  style={{
-                    width: '100%',
-                    aspectRatio: '4/3',
-                    background: '#f8fafc',
-                    borderRadius: 8,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    overflow: 'hidden',
-                    marginBottom: 10,
-                  }}
-                >
-                  {v.img ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={v.img}
-                      alt={v.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                    />
-                  ) : (
-                    <span style={{ color: '#94a3b8', fontSize: 12 }}>无图</span>
+        {/* 每页数量切换 */}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">每页数量</span>
+          <nav className="flex rounded-md overflow-hidden border">
+            {[12, 20, 30, 40].map((n) => {
+              const href = `/stock?size=${n}&page=0`;
+              const active = n === size;
+              return (
+                <Link
+                  key={n}
+                  href={href}
+                  prefetch={false}
+                  className={cn(
+                    "px-3 py-1.5 text-sm border-r last:border-r-0",
+                    active && "bg-black text-white"
                   )}
-                </div>
-
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{v.num}</div>
-                <div
-                  style={{
-                    color: '#334155',
-                    fontSize: 14,
-                    minHeight: 40,
-                    lineHeight: '20px',
-                    overflow: 'hidden',
-                    display: '-webkit-box',
-                    WebkitBoxOrient: 'vertical',
-                    WebkitLineClamp: 2,
-                  }}
-                  title={v.name}
                 >
-                  {v.name}
+                  {n}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+      </header>
+
+      {/* 卡片网格 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+        {items.map((it) => {
+          const thumb =
+            (it.pics && it.pics[0]) ||
+            "https://dummyimage.com/640x480/eeeeee/aaaaaa&text=No+Image";
+
+          return (
+            <Link
+              key={it.num}
+              href={`/stock/${encodeURIComponent(it.num)}`}
+              prefetch={false}
+              className="block rounded-xl border hover:shadow-md transition overflow-hidden"
+            >
+              {/* 图片 */}
+              {/* 直接用 <img>，保持与现有外链兼容 */}
+              <div className="aspect-[4/3] bg-white flex items-center justify-center overflow-hidden">
+                <img
+                  src={thumb}
+                  alt={it.name ?? it.num}
+                  className="w-full h-full object-contain"
+                  loading="lazy"
+                />
+              </div>
+
+              {/* 文本 */}
+              <div className="p-3">
+                <div className="text-sm text-gray-500 mb-1">{it.num}</div>
+                <div className="font-medium leading-snug line-clamp-2 min-h-[40px]">
+                  {it.name}
                 </div>
-                <div style={{ marginTop: 8, color: '#0f766e', fontWeight: 600 }}>
-                  {typeof v.price === 'number' ? v.price : v.price}
+                <div className="mt-2 text-emerald-600 font-semibold">
+                  {typeof it.price === "number" ? it.price.toFixed(2) : it.price ?? ""}
                 </div>
               </div>
             </Link>
-          ))}
-        </div>
+          );
+        })}
+      </div>
+
+      {/* 空状态 */}
+      {items.length === 0 && (
+        <div className="text-center text-gray-500 py-16">本页暂无数据</div>
       )}
+
+      {/* 分页条 */}
+      <div className="flex items-center justify-between mt-8">
+        <div className="text-sm text-gray-500">当前第 {page + 1} 页</div>
+
+        <div className="flex items-center gap-3">
+          <Link
+            href={prevHref}
+            prefetch={false}
+            className={cn(
+              "px-4 py-2 rounded-md border",
+              page <= 0 && "pointer-events-none opacity-40"
+            )}
+            aria-disabled={page <= 0}
+          >
+            上一页
+          </Link>
+
+          <Link
+            href={nextHref}
+            prefetch={false}
+            className={cn(
+              "px-4 py-2 rounded-md border",
+              isLastPage && "pointer-events-none opacity-40"
+            )}
+            aria-disabled={isLastPage}
+          >
+            下一页
+          </Link>
+        </div>
+      </div>
+
+      {/* 数据源标注（仅一处） */}
+      <footer className="mt-10 text-xs text-gray-400">
+        数据源： niuniuparts.com（测试预览用途）
+      </footer>
     </div>
   );
 }
