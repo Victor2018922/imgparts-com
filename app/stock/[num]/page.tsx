@@ -14,104 +14,21 @@ function pickFirst<T = any>(...candidates: T[]) {
   return undefined as unknown as T;
 }
 
-// 允许带 ?query 的图片扩展名
-const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(\?.*)?$/i;
-
-// 把 http 升级为 https；// 开头的也补 https
-function upgradeToHttps(s: string): string {
-  const t = s.trim();
+// http -> https
+function toHttps(s: string): string {
+  const t = (s || '').trim();
+  if (!t) return t;
   if (t.startsWith('https://')) return t;
   if (t.startsWith('http://')) return 'https://' + t.slice(7);
   if (t.startsWith('//')) return 'https:' + t;
   return t;
 }
 
-// 递归扫描对象里所有字符串，找第一个像图片的链接，并升级为 https
-function findImageUrlDeep(obj: any): string | null {
-  const seen = new Set<any>();
-
-  function walk(x: any): string | null {
-    if (x === null || x === undefined) return null;
-
-    if (typeof x === 'string') {
-      const s = x.trim();
-      if (IMG_EXT.test(s)) return upgradeToHttps(s);
-      if (
-        s.startsWith('http') &&
-        (s.includes('/img') || s.includes('/image') || s.includes('/images') || s.includes('/picture') || s.includes('/upload') || s.includes('productImg'))
-      ) {
-        return upgradeToHttps(s);
-      }
-      return null;
-    }
-
-    if (typeof x !== 'object') return null;
-    if (seen.has(x)) return null;
-    seen.add(x);
-
-    if (Array.isArray(x)) {
-      for (const it of x) {
-        const got = walk(it);
-        if (got) return got;
-      }
-      return null;
-    }
-
-    const preferKeys = [
-      'pics', // <-- 重点：你家接口的图片数组字段
-      'image','img','picture','photo','thumbnail','cover',
-      'imageUrl','imgUrl','picUrl','photoUrl','thumbnailUrl','coverUrl',
-      'mainImage','main_image','url','src','path','file','filePath','imagePath'
-    ];
-    for (const k of preferKeys) {
-      if (k in x) {
-        const got = walk(x[k]);
-        if (got) return got;
-      }
-    }
-
-    for (const k of Object.keys(x)) {
-      if (preferKeys.includes(k)) continue;
-      const got = walk(x[k]);
-      if (got) return got;
-    }
-    return null;
-  }
-
-  return walk(obj);
-}
-
-function pickPrice(item: AnyItem): string | number | null {
-  const val = pickFirst(
-    item.price,
-    item.salePrice,
-    item.retailPrice,
-    item.unitPrice,
-    item.usdPrice,
-    item.priceUsd,
-    item.cnyPrice,
-    item.priceRmb
-  );
-  return val ?? null;
-}
-
-function pickStock(item: AnyItem): string | number | null {
-  const val = pickFirst(
-    item.stock,
-    item.qty,
-    item.quantity,
-    item.stockQty,
-    item.inventory,
-    item.balance,
-    item.onHand
-  );
-  return val ?? null;
-}
-
 export default function ItemPage({ params }: { params: { num: string } }) {
   const { num } = params;
   const [item, setItem] = useState<AnyItem | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -120,6 +37,7 @@ export default function ItemPage({ params }: { params: { num: string } }) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         setItem(data);
+        setActiveIdx(0);
       } catch (e: any) {
         setErr(String(e?.message || e));
       }
@@ -133,35 +51,23 @@ export default function ItemPage({ params }: { params: { num: string } }) {
     const brand = pickFirst(item.brand, item.make, '—');
     const model = pickFirst(item.model, item.vehicle, '—');
     const year  = pickFirst(item.year, item.years, '—');
-    const price = pickPrice(item) ?? 'N/A';
-    const stock = pickStock(item) ?? 'N/A';
+    const price = pickFirst(item.price, item.salePrice, item.retailPrice, 'N/A');
+    const stock = pickFirst(item.stock, item.qty, item.quantity, 'N/A');
 
-    // 1) 优先使用 pics 数组里的第一张图
-    let image: string | null = null;
-    if (Array.isArray(item.pics) && item.pics.length > 0) {
-      const first = item.pics[0];
-      if (typeof first === 'string') image = upgradeToHttps(first);
-      else if (first && typeof first === 'object') {
-        const nested = pickFirst(first.url, first.src, first.image, first.img, first.thumbnail, first.path, first.filePath, first.imagePath);
-        if (typeof nested === 'string') image = upgradeToHttps(nested);
-      }
+    // 图片相册：优先 pics 数组；无则尝试几个常见字段拼一个数组
+    let pics: string[] = [];
+    if (Array.isArray(item.pics)) {
+      pics = item.pics.filter(Boolean).map((u: any) => toHttps(String(u)));
+    }
+    const fallbackOne = pickFirst(
+      item.image, item.img, item.picture, item.photo,
+      item.imageUrl, item.imgUrl, item.picUrl, item.photoUrl
+    );
+    if (pics.length === 0 && typeof fallbackOne === 'string') {
+      pics = [toHttps(fallbackOne)];
     }
 
-    // 2) 常见字段兜底
-    if (!image) {
-      image =
-        pickFirst(
-          item.image, item.img, item.picture, item.photo, item.thumbnail, item.cover,
-          item.imageUrl, item.imgUrl, item.picUrl, item.photoUrl, item.thumbnailUrl, item.coverUrl,
-          item.mainImage, item.main_image, item.url, item.imagePath, item.filePath
-        ) ?? null;
-      if (typeof image === 'string') image = upgradeToHttps(image);
-    }
-
-    // 3) 最终兜底：递归深度扫描（带 productImg 关键字）
-    if (!image) image = findImageUrlDeep(item);
-
-    return { name, brand, model, year, price, stock, image };
+    return { name, brand, model, year, price, stock, pics };
   }, [item]);
 
   if (err) {
@@ -175,37 +81,99 @@ export default function ItemPage({ params }: { params: { num: string } }) {
     );
   }
 
+  if (!item || !view) {
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Product Detail</h1>
+        <p>加载中…</p>
+        <p style={{ marginTop: 16 }}><Link href="/stock">← 返回列表</Link></p>
+        <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>数据源：niuniuparts.com（测试预览用途）</div>
+      </div>
+    );
+  }
+
+  const mainImg = view.pics[activeIdx];
+
   return (
     <div style={{ padding: 20 }}>
       <h1>Product Detail</h1>
-      <p><strong>Num:</strong> {num}</p>
-      <p><strong>Name:</strong> {view?.name ?? '—'}</p>
-      <p><strong>Brand:</strong> {view?.brand ?? '—'}</p>
-      <p><strong>Model:</strong> {view?.model ?? '—'}</p>
-      <p><strong>Year:</strong> {view?.year ?? '—'}</p>
-      <p><strong>Price:</strong> {view?.price ?? 'N/A'}</p>
-      <p><strong>Stock:</strong> {view?.stock ?? 'N/A'}</p>
 
-      {view?.image ? (
-        <div style={{ marginTop: 12 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={view.image}
-            alt={String(view.name)}
-            style={{ maxWidth: 420, width: '100%', height: 'auto', borderRadius: 8, border: '1px solid #eee' }}
-          />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 480px) 1fr', gap: 24, alignItems: 'start' }}>
+        {/* 左侧：图片相册 */}
+        <div>
+          <div
+            style={{
+              width: '100%',
+              aspectRatio: '4/3',
+              background: '#f8fafc',
+              border: '1px solid #e5e7eb',
+              borderRadius: 12,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+              marginBottom: 12,
+            }}
+          >
+            {mainImg ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={mainImg}
+                alt={String(view.name)}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              />
+            ) : (
+              <span style={{ color: '#94a3b8' }}>（暂无图片）</span>
+            )}
+          </div>
+
+          {/* 缩略图列表 */}
+          {view.pics.length > 1 && (
+            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+              {view.pics.map((u, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveIdx(i)}
+                  style={{
+                    border: i === activeIdx ? '2px solid #0ea5e9' : '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    background: '#fff',
+                    padding: 0,
+                    width: 90,
+                    height: 68,
+                    cursor: 'pointer',
+                    flex: '0 0 auto',
+                    overflow: 'hidden',
+                  }}
+                  title={`图片 ${i + 1}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={u} alt={`thumb-${i}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      ) : (
-        <p style={{ marginTop: 12, color: '#666' }}>（暂无可识别的图片链接）</p>
-      )}
 
-      <p style={{ marginTop: 20 }}>
-        <Link href="/stock">
-          <button style={{ padding: '10px 20px', background: '#0070f3', color: '#fff', border: 'none', borderRadius: 6 }}>
-            ← 返回列表
-          </button>
-        </Link>
-      </p>
+        {/* 右侧：信息 */}
+        <div>
+          <p><strong>Num:</strong> {num}</p>
+          <p><strong>Name:</strong> {view.name}</p>
+          <p><strong>Brand:</strong> {view.brand}</p>
+          <p><strong>Model:</strong> {view.model}</p>
+          <p><strong>Year:</strong> {view.year}</p>
+          <p><strong>Price:</strong> {view.price}</p>
+          <p><strong>Stock:</strong> {view.stock}</p>
+
+          <p style={{ marginTop: 16 }}>
+            <Link href="/stock">
+              <button style={{ padding: '10px 20px', background: '#0070f3', color: '#fff', border: 'none', borderRadius: 6 }}>
+                ← 返回列表
+              </button>
+            </Link>
+          </p>
+        </div>
+      </div>
 
       {/* 原始数据（只读） */}
       <div style={{ marginTop: 24 }}>
@@ -221,7 +189,7 @@ export default function ItemPage({ params }: { params: { num: string } }) {
             maxWidth: '100%',
             fontSize: 12,
           }}
-        >{item ? JSON.stringify(item, null, 2) : '—'}</pre>
+        >{JSON.stringify(item, null, 2)}</pre>
       </div>
 
       <div style={{ marginTop: 28, fontSize: 12, color: '#666' }}>
