@@ -12,6 +12,7 @@ type Item = {
   oe?: string;
   pics?: string[];
   price?: number | string;
+  specs?: string;
 };
 
 function cn(...a: (string | false | null | undefined)[]) {
@@ -114,6 +115,7 @@ export default async function DetailPage({
     typeof item?.count === "number" ? (item!.count >= 0 ? String(item!.count) : "N/A") : "N/A";
   const pics = Array.isArray(item?.pics) ? item!.pics : [];
   const oeText = item?.oe || "—";
+  const specsText = item?.specs || ""; // 目前 API 里为空，预留字段
 
   const backHref = buildHref("/stock", sharedParams);
 
@@ -325,6 +327,44 @@ export default async function DetailPage({
           </div>
         </div>
       </div>
+
+      {/* 产品参数区块 */}
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold mb-3">产品参数</h2>
+        <div className="border rounded-xl overflow-hidden">
+          <dl className="grid grid-cols-1 sm:grid-cols-2">
+            <div className="px-4 py-3 border-b sm:border-b sm:border-r">
+              <dt className="text-xs text-gray-500 mb-1">商品编号（Num）</dt>
+              <dd className="text-sm text-gray-900">{num}</dd>
+            </div>
+            <div className="px-4 py-3 border-b">
+              <dt className="text-xs text-gray-500 mb-1">品牌（Brand）</dt>
+              <dd className="text-sm text-gray-900">{brandText}</dd>
+            </div>
+            <div className="px-4 py-3 border-b sm:border-r">
+              <dt className="text-xs text-gray-500 mb-1">OE 编号</dt>
+              <dd className="text-sm text-gray-900">{oeText}</dd>
+            </div>
+            <div className="px-4 py-3 border-b">
+              <dt className="text-xs text-gray-500 mb-1">适配车型（Model）</dt>
+              <dd className="text-sm text-gray-900">{modelText}</dd>
+            </div>
+            <div className="px-4 py-3 sm:border-r">
+              <dt className="text-xs text-gray-500 mb-1">库存（Stock）</dt>
+              <dd className="text-sm text-gray-900">{stockText}</dd>
+            </div>
+            <div className="px-4 py-3">
+              <dt className="text-xs text-gray-500 mb-1">价格（Price）</dt>
+              <dd className="text-sm text-gray-900">{priceText !== "—" ? priceText : "—"}</dd>
+            </div>
+          </dl>
+          {specsText && (
+            <div className="px-4 py-3 border-t text-sm text-gray-700">
+              {specsText}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* 灯箱（放大预览） */}
       <div
