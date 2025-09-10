@@ -201,7 +201,6 @@ export default async function DetailPage({
           {/* 缩略图条：可横向滚动 + 左右箭头 */}
           {pics.length > 1 && (
             <div className="relative mt-3">
-              {/* 左侧渐变 + 按钮 */}
               <button
                 type="button"
                 aria-label="Scroll left"
@@ -210,7 +209,6 @@ export default async function DetailPage({
               >
                 ‹
               </button>
-              {/* 右侧渐变 + 按钮 */}
               <button
                 type="button"
                 aria-label="Scroll right"
@@ -222,8 +220,7 @@ export default async function DetailPage({
 
               <div
                 id="thumb-strip"
-                className="overflow-x-auto no-scrollbar scroll-smooth pr-8 pl-8"
-                style={{ scrollbarWidth: "thin" as any }}
+                className="overflow-x-auto scroll-smooth pr-8 pl-8"
               >
                 <div className="flex gap-2 min-w-full">
                   {pics.slice(0, 20).map((p, tIdx) => (
@@ -397,7 +394,7 @@ export default async function DetailPage({
             var right = document.getElementById('thumb-right');
             function scrollByAmount(dir){
               if (!strip) return;
-              var step = 160; // 每次滚动一个缩略图宽度左右
+              var step = 160;
               strip.scrollBy({ left: dir * step, behavior: 'smooth' });
             }
             if (left) left.addEventListener('click', function(){ scrollByAmount(-1); });
@@ -412,14 +409,6 @@ export default async function DetailPage({
           })();
         `}
       </Script>
-
-      {/* 隐藏原生滚动条的简易样式（仍可滚动） */}
-      <style jsx>{`
-        .no-scrollbar::-webkit-scrollbar { height: 8px; }
-        .no-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 8px; }
-        .no-scrollbar::-webkit-scrollbar-thumb { background: #cfcfcf; border-radius: 8px; }
-        .no-scrollbar:hover::-webkit-scrollbar-thumb { background: #b5b5b5; }
-      `}</style>
     </div>
   );
 }
