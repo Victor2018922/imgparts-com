@@ -33,7 +33,7 @@ function s(v: unknown, def = ""): string {
   if (typeof v === "string") return v;
   return def;
 }
-function toNumber(val: unknown): number | null {
+function toNumOrNull(val: unknown): number | null {
   const num = Number(val);
   return Number.isFinite(num) ? num : null;
 }
@@ -57,7 +57,7 @@ export default async function DetailPage({
 }) {
   const num = decodeURIComponent(params.num);
 
-  // 从列表页保留过来的参数（用于“返回列表”）
+  // 从列表页保留过来的参数（用于“返回列表”与 Prev/Next）
   const size = n(searchParams?.size, 20);
   const page = n(searchParams?.page, 0);
   const i = n(searchParams?.i, -1);
@@ -65,21 +65,21 @@ export default async function DetailPage({
   const q = s(searchParams?.q, "");
   const sort = s(searchParams?.sort, "default");
   const hasPic = s(searchParams?.hasPic, "") === "1";
-  const minPrice = searchParams?.minPrice ? Number(searchParams?.minPrice) : undefined;
-  const maxPrice = searchParams?.maxPrice ? Number(searchParams?.maxPrice) : undefined;
+  const minPrice = toNumOrNull(searchParams?.minPrice);
+  const maxPrice = toNumOrNull(searchParams?.maxPrice);
 
-  const backParams: Record<string, any> = {
+  const sharedParams: Record<string, any> = {
     size,
     page,
     brand: brand || undefined,
     q: q || undefined,
     sort: sort !== "default" ? sort : undefined,
     hasPic: hasPic ? 1 : undefined,
-    minPrice,
-    maxPrice,
+    minPrice: minPrice ?? undefined,
+    maxPrice: maxPrice ?? undefined,
   };
 
-  // 拉取当前页数据（用于拿到该条目的完整信息与图片）
+  // 拉取该页数据（用于拿到该条目与同页前后条）
   const origin = getOriginFromHeaders();
   const url = `${origin}/api/stock?size=${size}&page=${page}`;
   let items: Item[] = [];
@@ -94,13 +94,12 @@ export default async function DetailPage({
     // 忽略
   }
 
-  // 优先用列表传来的索引 i；找不到就按 num 匹配
-  let item: Item | undefined;
-  if (i >= 0 && i < items.length && items[i]?.num === num) {
-    item = items[i];
-  } else {
-    item = items.find((x) => x.num === num);
+  // 优先用列表传来的索引 i；否则按 num 匹配
+  let idx = i;
+  if (!(idx >= 0 && idx < items.length && items[idx]?.num === num)) {
+    idx = Math.max(0, items.findIndex((x) => x.num === num));
   }
+  const item: Item | undefined = items[idx];
 
   const name = item?.name || num;
   const brandText = item?.brand || "—";
@@ -114,24 +113,71 @@ export default async function DetailPage({
     typeof item?.count === "number" ? (item!.count >= 0 ? String(item!.count) : "N/A") : "N/A";
   const pics = Array.isArray(item?.pics) ? item!.pics : [];
 
-  const backHref = buildHref("/stock", backParams);
+  const backHref = buildHref("/stock", sharedParams);
+
+  // 计算同页的上一条/下一条
+  const hasPrev = idx > 0 && idx < items.length;
+  const hasNext = idx >= 0 && idx < items.length - 1;
+
+  const prevHref =
+    hasPrev && items[idx - 1]
+      ? buildHref(`/stock/${encodeURIComponent(items[idx - 1].num)}`, {
+          ...sharedParams,
+          i: idx - 1,
+        })
+      : null;
+
+  const nextHref =
+    hasNext && items[idx + 1]
+      ? buildHref(`/stock/${encodeURIComponent(items[idx + 1].num)}`, {
+          ...sharedParams,
+          i: idx + 1,
+        })
+      : null;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
-      <nav className="text-sm mb-4">
+      <nav className="text-sm mb-4 flex flex-wrap items-center gap-2">
         <Link href="/" className="text-gray-500 hover:underline">首页</Link>
-        <span className="mx-2">/</span>
+        <span className="mx-1">/</span>
         <Link href={backHref} prefetch={false} className="text-gray-500 hover:underline">
           库存预览
         </Link>
-        <span className="mx-2">/</span>
+        <span className="mx-1">/</span>
         <span className="text-gray-900">商品详情</span>
+
+        {/* 同页上一条/下一条 */}
+        <span className="flex-1" />
+        <div className="flex items-center gap-2">
+          <Link
+            href={prevHref || "#"}
+            prefetch={false}
+            aria-disabled={!prevHref}
+            className={cn(
+              "inline-flex items-center px-3 py-1.5 rounded-md border text-sm",
+              prevHref ? "hover:bg-gray-50" : "opacity-40 cursor-not-allowed"
+            )}
+          >
+            ← 上一条
+          </Link>
+          <Link
+            href={nextHref || "#"}
+            prefetch={false}
+            aria-disabled={!nextHref}
+            className={cn(
+              "inline-flex items-center px-3 py-1.5 rounded-md border text-sm",
+              nextHref ? "hover:bg-gray-50" : "opacity-40 cursor-not-allowed"
+            )}
+          >
+            下一条 →
+          </Link>
+        </div>
       </nav>
 
       <h1 className="text-xl font-semibold mb-4">Product Detail</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 图片画廊 */}
+        {/* 图片区 */}
         <div>
           <div className="aspect-[4/3] rounded-xl border bg-white flex items-center justify-center overflow-hidden">
             {pics.length > 0 ? (
@@ -187,13 +233,35 @@ export default async function DetailPage({
           </div>
           <div className="text-sm text-gray-700">Stock: {stockText}</div>
 
-          <div className="pt-4">
+          <div className="pt-4 flex gap-3">
             <Link
               href={backHref}
               prefetch={false}
               className="inline-flex items-center px-4 py-2 rounded-md border hover:bg-gray-50"
             >
               ← 返回列表
+            </Link>
+            <Link
+              href={prevHref || "#"}
+              prefetch={false}
+              aria-disabled={!prevHref}
+              className={cn(
+                "inline-flex items-center px-3 py-2 rounded-md border",
+                prevHref ? "hover:bg-gray-50" : "opacity-40 cursor-not-allowed"
+              )}
+            >
+              上一条
+            </Link>
+            <Link
+              href={nextHref || "#"}
+              prefetch={false}
+              aria-disabled={!nextHref}
+              className={cn(
+                "inline-flex items-center px-3 py-2 rounded-md border",
+                nextHref ? "hover:bg-gray-50" : "opacity-40 cursor-not-allowed"
+              )}
+            >
+              下一条
             </Link>
           </div>
 
