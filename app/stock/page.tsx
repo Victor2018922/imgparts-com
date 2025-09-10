@@ -29,17 +29,18 @@ function n(v: unknown, def: number) {
   const x = Number(v);
   return Number.isFinite(x) ? x : def;
 }
-
+function fnum(v: unknown): number | null {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+}
 function toNumber(val: unknown): number | null {
   const num = Number(val);
   return Number.isFinite(num) ? num : null;
 }
-
 function uniq<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
 }
-
-function buildHref(base: string, params: Record<string, string | number | undefined>) {
+function buildHref(base: string, params: Record<string, string | number | undefined | null>) {
   const sp = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {
     if (v === undefined || v === null || v === "") return;
@@ -54,16 +55,21 @@ export default async function StockPage({
 }: {
   searchParams?: Record<string, string | string[] | undefined>;
 }) {
-  // 基础分页参数
+  // 基础分页
   const size = n(searchParams?.size, 20);
   const page = n(searchParams?.page, 0);
 
-  // 筛选 & 排序参数（雏形）
-  const brand = (searchParams?.brand as string | undefined) || ""; // 品牌精确匹配（当前页）
-  const q = (searchParams?.q as string | undefined)?.trim() || ""; // 关键字（当前页）
-  const sort = (searchParams?.sort as string | undefined) || "default"; // default | price_asc | price_desc | name_asc
+  // 已有筛选/排序
+  const brand = (searchParams?.brand as string | undefined) || "";
+  const q = (searchParams?.q as string | undefined)?.trim() || "";
+  const sort = (searchParams?.sort as string | undefined) || "default";
 
-  const baseParams = { size, page, brand, q, sort };
+  // 新增：只看有图 + 价格区间
+  const hasPic = (searchParams?.hasPic as string | undefined) === "1"; // 1 表示开启
+  const minPrice = fnum(searchParams?.minPrice) ?? null;
+  const maxPrice = fnum(searchParams?.maxPrice) ?? null;
+
+  const baseParams = { size, page, brand, q, sort, hasPic: hasPic ? 1 : undefined, minPrice, maxPrice };
 
   // 拉取当前页数据
   const qsApi = new URLSearchParams({ size: String(size), page: String(page) }).toString();
@@ -78,16 +84,15 @@ export default async function StockPage({
       if (Array.isArray(data)) items = data as Item[];
     }
   } catch {
-    // 保持 items = []
+    // 忽略
   }
 
-  // —— 在“当前页数据”上做雏形筛选（后续可换成后端查询）——
+  // —— 在“当前页数据”上做雏形筛选 —— //
   let filtered = items.slice();
 
   if (brand) {
     filtered = filtered.filter((it) => (it.brand || "").toLowerCase() === brand.toLowerCase());
   }
-
   if (q) {
     const key = q.toLowerCase();
     filtered = filtered.filter((it) => {
@@ -96,6 +101,18 @@ export default async function StockPage({
         (it.num || "").toLowerCase().includes(key) ||
         (it.oe || "").toLowerCase().includes(key)
       );
+    });
+  }
+  if (hasPic) {
+    filtered = filtered.filter((it) => Array.isArray(it.pics) && it.pics.length > 0);
+  }
+  if (minPrice !== null || maxPrice !== null) {
+    filtered = filtered.filter((it) => {
+      const p = toNumber(it.price);
+      if (p === null) return false;
+      if (minPrice !== null && p < minPrice) return false;
+      if (maxPrice !== null && p > maxPrice) return false;
+      return true;
     });
   }
 
@@ -109,16 +126,15 @@ export default async function StockPage({
   } else if (sort === "name_asc") {
     filtered.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }
-  // default 不处理
 
-  // 当前页可用品牌（从当前页汇总，雏形）
+  // 当前页可用品牌
   const brands = uniq(
     items
       .map((x) => (x.brand || "").trim())
       .filter((x) => x && x !== "-")
   ).sort((a, b) => a.localeCompare(b));
 
-  // 分页链接（保持筛选/排序参数不丢）
+  // 分页链接
   const prevPage = Math.max(0, page - 1);
   const nextPage = page + 1;
   const isLastPage = items.length < size;
@@ -126,8 +142,17 @@ export default async function StockPage({
   const prevHref = buildHref("/stock", { ...baseParams, page: prevPage });
   const nextHref = buildHref("/stock", { ...baseParams, page: nextPage });
 
-  // 每页数量切换（重置到第 0 页，保留筛选/排序）
   const sizeOptions = [12, 20, 30, 40];
+
+  // 构建一个工具：提交“价格区间”的链接（由于是纯 SSR，我们用链接组合）
+  function submitPrice(min: number | null, max: number | null) {
+    return buildHref("/stock", {
+      ...baseParams,
+      page: 0,
+      minPrice: min ?? undefined,
+      maxPrice: max ?? undefined,
+    });
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -159,9 +184,9 @@ export default async function StockPage({
         </div>
       </header>
 
-      {/* 筛选与排序（雏形，基于当前页数据） */}
+      {/* 筛选区 */}
       <section className="mb-4 space-y-3">
-        {/* 品牌筛选 */}
+        {/* 品牌 */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-gray-500">品牌</span>
           <Link
@@ -189,7 +214,7 @@ export default async function StockPage({
           ))}
         </div>
 
-        {/* 快速关键字（示例） */}
+        {/* 常用关键词 */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-gray-500">常用关键词</span>
           {["保险杠", "马达", "油封", "节温器"].map((kw) => (
@@ -205,7 +230,6 @@ export default async function StockPage({
               {kw}
             </Link>
           ))}
-          {/* 清除关键词 */}
           <Link
             href={buildHref("/stock", { ...baseParams, q: "", page: 0 })}
             prefetch={false}
@@ -219,9 +243,21 @@ export default async function StockPage({
           </Link>
         </div>
 
-        {/* 排序 */}
+        {/* 只看有图 + 排序 */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-gray-500">排序</span>
+          <span className="text-sm text-gray-500">筛选</span>
+          <Link
+            href={buildHref("/stock", { ...baseParams, hasPic: hasPic ? undefined : 1, page: 0 })}
+            prefetch={false}
+            className={cn(
+              "px-3 py-1.5 text-sm rounded-full border hover:bg-gray-50",
+              hasPic && "bg-black text-white hover:bg-black"
+            )}
+          >
+            只看有图
+          </Link>
+
+          <span className="ml-3 text-sm text-gray-500">排序</span>
           {[
             { key: "default", label: "综合" },
             { key: "price_asc", label: "价格 ↑" },
@@ -241,7 +277,6 @@ export default async function StockPage({
             </Link>
           ))}
 
-          {/* 一键重置所有筛选与排序 */}
           <Link
             href={buildHref("/stock", { size, page: 0 })}
             prefetch={false}
@@ -250,7 +285,68 @@ export default async function StockPage({
             重置
           </Link>
         </div>
+
+        {/* 价格区间（链接式提交） */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-gray-500">价格</span>
+          {/* 常用价格快捷键 */}
+          {[
+            { label: "≤ 50", min: null, max: 50 },
+            { label: "50 - 200", min: 50, max: 200 },
+            { label: "200 - 500", min: 200, max: 500 },
+            { label: "≥ 500", min: 500, max: null },
+          ].map((r) => {
+            const active =
+              (minPrice ?? null) === (r.min ?? null) && (maxPrice ?? null) === (r.max ?? null);
+            return (
+              <Link
+                key={r.label}
+                href={submitPrice(r.min, r.max)}
+                prefetch={false}
+                className={cn(
+                  "px-3 py-1.5 text-sm rounded-full border hover:bg-gray-50",
+                  active && "bg-black text-white hover:bg-black"
+                )}
+              >
+                {r.label}
+              </Link>
+            );
+          })}
+
+          {/* 清除价格 */}
+          <Link
+            href={submitPrice(null, null)}
+            prefetch={false}
+            className={cn(
+              "px-3 py-1.5 text-sm rounded-full border hover:bg-gray-50",
+              minPrice === null && maxPrice === null && "opacity-60 pointer-events-none"
+            )}
+            aria-disabled={minPrice === null && maxPrice === null}
+          >
+            清除价格
+          </Link>
+        </div>
       </section>
+
+      {/* 统计条 */}
+      <div className="text-sm text-gray-600 mb-3">
+        共 <strong>{filtered.length}</strong> 条（当前页筛选结果）
+        {brand && <> · 品牌：<strong>{brand}</strong></>}
+        {q && <> · 关键词：<strong>{q}</strong></>}
+        {hasPic && <> · <strong>只看有图</strong></>}
+        {(minPrice !== null || maxPrice !== null) && (
+          <>
+            {" "}
+            · 价格：
+            <strong>
+              {minPrice !== null ? `≥ ${minPrice}` : ""}
+              {minPrice !== null && maxPrice !== null ? " & " : ""}
+              {maxPrice !== null ? `≤ ${maxPrice}` : ""}
+            </strong>
+          </>
+        )}
+        {sort !== "default" && <> · 排序：<strong>{sort}</strong></>}
+      </div>
 
       {/* 列表 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
@@ -258,9 +354,6 @@ export default async function StockPage({
           const thumb =
             (it.pics && it.pics[0]) ||
             "https://dummyimage.com/640x480/eeeeee/aaaaaa&text=No+Image";
-
-          // 注意：i 是“过滤后”的索引，仅作为当前页的相对位置用于详情的 prev/next。
-          // 详情页的返回列表仍基于 page/size，不受筛选影响（后续我们再升级同步返回状态）。
           return (
             <Link
               key={it.num}
@@ -268,6 +361,12 @@ export default async function StockPage({
                 size,
                 page,
                 i,
+                brand,
+                q,
+                sort,
+                hasPic: hasPic ? 1 : undefined,
+                minPrice: minPrice ?? undefined,
+                maxPrice: maxPrice ?? undefined,
               })}
               prefetch={false}
               className="block rounded-xl border hover:shadow-md transition overflow-hidden"
@@ -285,11 +384,9 @@ export default async function StockPage({
                   <span>{it.num}</span>
                   {it.brand && <span className="ml-2 truncate max-w-[50%]">{it.brand}</span>}
                 </div>
-                <div className="font-medium leading-snug line-clamp-2 min-h-[40px]">
-                  {it.name}
-                </div>
+                <div className="font-medium leading-snug line-clamp-2 min-h-[40px]">{it.name}</div>
                 <div className="mt-2 text-emerald-600 font-semibold">
-                  {typeof it.price === "number" ? it.price.toFixed(2) : it.price ?? ""}
+                  {typeof it.price === "number" ? Number(it.price).toFixed(2) : it.price ?? ""}
                 </div>
               </div>
             </Link>
@@ -299,7 +396,7 @@ export default async function StockPage({
 
       {filtered.length === 0 && (
         <div className="text-center text-gray-500 py-16">
-          当前页无匹配结果（可尝试更换品牌/关键字/排序，或切换页码）
+          当前页无匹配结果（可尝试更换品牌/关键字/排序/价格/只看有图，或切换页码）
         </div>
       )}
 
@@ -307,9 +404,6 @@ export default async function StockPage({
       <div className="flex items-center justify-between mt-8">
         <div className="text-sm text-gray-500">
           当前第 <strong>{page + 1}</strong> 页
-          {brand && <> · 品牌：<strong>{brand}</strong></>}
-          {q && <> · 关键词：<strong>{q}</strong></>}
-          {sort !== "default" && <> · 排序：<strong>{sort}</strong></>}
         </div>
 
         <div className="flex items-center gap-3">
