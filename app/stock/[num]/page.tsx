@@ -137,6 +137,8 @@ export default async function DetailPage({
         })
       : null;
 
+  const picsJson = JSON.stringify(pics);
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
       {/* 复制提示气泡 */}
@@ -192,7 +194,7 @@ export default async function DetailPage({
                 id="main-img"
                 src={pics[0] || "https://dummyimage.com/800x600/eeeeee/aaaaaa&text=No+Image"}
                 alt={name}
-                className="w-full h-full object-contain"
+                className="w-full h-full object-contain cursor-zoom-in"
                 loading="eager"
               />
             </div>
@@ -218,10 +220,7 @@ export default async function DetailPage({
                 ›
               </button>
 
-              <div
-                id="thumb-strip"
-                className="overflow-x-auto scroll-smooth pr-8 pl-8"
-              >
+              <div id="thumb-strip" className="overflow-x-auto scroll-smooth pr-8 pl-8">
                 <div className="flex gap-2 min-w-full">
                   {pics.slice(0, 20).map((p, tIdx) => (
                     <button
@@ -232,6 +231,7 @@ export default async function DetailPage({
                         tIdx === 0 ? "ring-2 ring-emerald-500" : "hover:border-gray-400"
                       )}
                       data-src={p}
+                      data-index={tIdx}
                       title={`图片 ${tIdx + 1}`}
                     >
                       <img
@@ -326,11 +326,55 @@ export default async function DetailPage({
         </div>
       </div>
 
-      {/* 内联脚本：复制 + 画廊交互 + 缩略条滚动 */}
+      {/* 灯箱（放大预览） */}
+      <div
+        id="lightbox"
+        className="hidden fixed inset-0 z-50 bg-black/80"
+        role="dialog"
+        aria-modal="true"
+      >
+        <button
+          id="lb-close"
+          aria-label="关闭"
+          className="absolute top-4 right-4 text-white text-3xl leading-none px-3"
+        >
+          ×
+        </button>
+
+        <button
+          id="lb-prev"
+          aria-label="上一张"
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-white text-4xl px-3"
+        >
+          ‹
+        </button>
+        <button
+          id="lb-next"
+          aria-label="下一张"
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-white text-4xl px-3"
+        >
+          ›
+        </button>
+
+        <div className="w-full h-full flex items-center justify-center p-4">
+          <img
+            id="lb-img"
+            src=""
+            alt="preview"
+            className="max-w-[96%] max-h-[92%] object-contain select-none"
+            draggable={false}
+          />
+        </div>
+      </div>
+
+      {/* 交互脚本：复制、画廊、缩略滚动、灯箱 */}
       <Script id="detail-interactions" strategy="afterInteractive">
         {`
           (function(){
-            // 复制提示
+            // 提供图片数组给脚本
+            window.__PICS = ${picsJson};
+
+            // ========== 复制 ==========
             function showToast(msg){
               var el = document.getElementById('copy-toast');
               if(!el) return;
@@ -371,20 +415,25 @@ export default async function DetailPage({
             bindCopy('copy-num');
             bindCopy('copy-oe');
 
-            // 画廊：点击缩略图切换大图 + 高亮边框
+            // ========== 画廊（缩略图切换大图） ==========
             var mainImg = document.getElementById('main-img');
             var strip = document.getElementById('thumb-strip');
             var btns = document.querySelectorAll('.thumb-btn');
-            function setActive(btn){
+            var currentIndex = 0;
+
+            function setActiveByIndex(i){
               btns.forEach(function(b){ b.classList.remove('ring-2','ring-emerald-500'); });
-              btn.classList.add('ring-2','ring-emerald-500');
+              if (btns[i]) btns[i].classList.add('ring-2','ring-emerald-500');
+              currentIndex = i;
             }
+
             btns.forEach(function(b){
               b.addEventListener('click', function(){
+                var idx = Number(b.getAttribute('data-index') || '0');
                 var src = b.getAttribute('data-src');
                 if (src && mainImg) {
                   mainImg.setAttribute('src', src);
-                  setActive(b);
+                  setActiveByIndex(idx);
                 }
               });
             });
@@ -399,13 +448,101 @@ export default async function DetailPage({
             }
             if (left) left.addEventListener('click', function(){ scrollByAmount(-1); });
             if (right) right.addEventListener('click', function(){ scrollByAmount(1); });
-
-            // 键盘左右键也可滚动缩略条
             document.addEventListener('keydown', function(e){
-              if (!strip) return;
               if (e.key === 'ArrowLeft') scrollByAmount(-1);
               if (e.key === 'ArrowRight') scrollByAmount(1);
             });
+
+            // ========== 灯箱（放大预览） ==========
+            var lb = document.getElementById('lightbox');
+            var lbImg = document.getElementById('lb-img');
+            var lbClose = document.getElementById('lb-close');
+            var lbPrev = document.getElementById('lb-prev');
+            var lbNext = document.getElementById('lb-next');
+            var PICS = Array.isArray(window.__PICS) ? window.__PICS : [];
+
+            function openLightbox(index){
+              if (!PICS.length) return;
+              currentIndex = Math.max(0, Math.min(index || 0, PICS.length - 1));
+              if (lb && lbImg) {
+                lbImg.src = PICS[currentIndex];
+                lb.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+                preloadAround(currentIndex);
+              }
+            }
+            function closeLightbox(){
+              if (lb) {
+                lb.classList.add('hidden');
+                document.body.style.overflow = '';
+              }
+            }
+            function showIndex(i){
+              if (!PICS.length) return;
+              currentIndex = (i + PICS.length) % PICS.length;
+              if (lbImg) lbImg.src = PICS[currentIndex];
+              setActiveByIndex(currentIndex);
+              preloadAround(currentIndex);
+            }
+            function preloadAround(i){
+              [i-1, i+1].forEach(function(k){
+                if (k >=0 && k < PICS.length){
+                  var img = new Image();
+                  img.src = PICS[k];
+                }
+              });
+            }
+
+            // 点击大图打开
+            if (mainImg) {
+              mainImg.addEventListener('click', function(){
+                var idx = currentIndex || 0;
+                openLightbox(idx);
+              });
+            }
+            // 灯箱按钮/遮罩/ESC
+            if (lbClose) lbClose.addEventListener('click', closeLightbox);
+            if (lbPrev) lbPrev.addEventListener('click', function(){ showIndex(currentIndex - 1); });
+            if (lbNext) lbNext.addEventListener('click', function(){ showIndex(currentIndex + 1); });
+            if (lb) {
+              lb.addEventListener('click', function(e){
+                // 点击黑色遮罩关闭（点图片不关）
+                if (e.target === lb) closeLightbox();
+              });
+            }
+            document.addEventListener('keydown', function(e){
+              if (lb && !lb.classList.contains('hidden')) {
+                if (e.key === 'Escape') closeLightbox();
+                if (e.key === 'ArrowLeft') showIndex(currentIndex - 1);
+                if (e.key === 'ArrowRight') showIndex(currentIndex + 1);
+              }
+            });
+
+            // 触控滑动（灯箱）
+            var startX = 0, startY = 0, moved = false;
+            function onTouchStart(e){
+              var t = e.touches && e.touches[0];
+              if (!t) return;
+              startX = t.clientX; startY = t.clientY; moved = false;
+            }
+            function onTouchMove(e){
+              moved = true;
+            }
+            function onTouchEnd(e){
+              if (!moved) return;
+              var t = e.changedTouches && e.changedTouches[0];
+              if (!t) return;
+              var dx = t.clientX - startX;
+              var dy = t.clientY - startY;
+              if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40){
+                if (dx < 0) showIndex(currentIndex + 1); else showIndex(currentIndex - 1);
+              }
+            }
+            if (lb) {
+              lb.addEventListener('touchstart', onTouchStart, {passive:true});
+              lb.addEventListener('touchmove', onTouchMove, {passive:true});
+              lb.addEventListener('touchend', onTouchEnd, {passive:true});
+            }
           })();
         `}
       </Script>
