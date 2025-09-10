@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { headers } from "next/headers";
+import Script from "next/script";
 
 type Item = {
   brand?: string;
@@ -57,7 +58,7 @@ export default async function DetailPage({
 }) {
   const num = decodeURIComponent(params.num);
 
-  // 从列表页保留过来的参数（用于“返回列表”与 Prev/Next）
+  // 从列表页保留过来的参数（用于返回与 Prev/Next）
   const size = n(searchParams?.size, 20);
   const page = n(searchParams?.page, 0);
   const i = n(searchParams?.i, -1);
@@ -112,10 +113,11 @@ export default async function DetailPage({
   const stockText =
     typeof item?.count === "number" ? (item!.count >= 0 ? String(item!.count) : "N/A") : "N/A";
   const pics = Array.isArray(item?.pics) ? item!.pics : [];
+  const oeText = item?.oe || "—";
 
   const backHref = buildHref("/stock", sharedParams);
 
-  // 计算同页的上一条/下一条
+  // 同页的上一条/下一条
   const hasPrev = idx > 0 && idx < items.length;
   const hasNext = idx >= 0 && idx < items.length - 1;
 
@@ -137,6 +139,12 @@ export default async function DetailPage({
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
+      {/* 复制提示气泡 */}
+      <div id="copy-toast" className="hidden fixed top-4 right-4 z-50 rounded-md border bg-white px-3 py-2 text-sm shadow">
+        已复制
+      </div>
+
+      {/* 顶部导航 + 上一条/下一条 */}
       <nav className="text-sm mb-4 flex flex-wrap items-center gap-2">
         <Link href="/" className="text-gray-500 hover:underline">首页</Link>
         <span className="mx-1">/</span>
@@ -146,7 +154,6 @@ export default async function DetailPage({
         <span className="mx-1">/</span>
         <span className="text-gray-900">商品详情</span>
 
-        {/* 同页上一条/下一条 */}
         <span className="flex-1" />
         <div className="flex items-center gap-2">
           <Link
@@ -223,11 +230,39 @@ export default async function DetailPage({
 
         {/* 右侧信息 */}
         <div className="space-y-2">
-          <div className="text-sm text-gray-500">Num: {num}</div>
+          <div className="text-sm text-gray-500 flex items-center gap-2">
+            <span>Num: {num}</span>
+            <button
+              id="copy-num"
+              data-copy={num}
+              type="button"
+              className="px-2 py-0.5 text-xs rounded border hover:bg-gray-50"
+              title="复制编号"
+            >
+              复制编号
+            </button>
+          </div>
+
           <div className="text-lg font-medium">{name}</div>
           <div className="text-sm text-gray-700">Brand: {brandText}</div>
           <div className="text-sm text-gray-700">Model: {modelText}</div>
           <div className="text-sm text-gray-700">Year: {yearText}</div>
+
+          <div className="text-sm text-gray-700 flex items-center gap-2">
+            <span>OE: {oeText}</span>
+            {oeText !== "—" && (
+              <button
+                id="copy-oe"
+                data-copy={oeText}
+                type="button"
+                className="px-2 py-0.5 text-xs rounded border hover:bg-gray-50"
+                title="复制 OE"
+              >
+                复制 OE
+              </button>
+            )}
+          </div>
+
           <div className="text-emerald-600 text-xl font-semibold mt-2">
             {priceText !== "—" ? `${priceText}` : "—"}
           </div>
@@ -270,6 +305,56 @@ export default async function DetailPage({
           </div>
         </div>
       </div>
+
+      {/* 内联脚本：负责复制到剪贴板和提示 */}
+      <Script id="copy-handlers" strategy="afterInteractive">
+        {`
+          (function(){
+            function showToast(msg){
+              var el = document.getElementById('copy-toast');
+              if(!el) return;
+              el.textContent = msg || '已复制';
+              el.classList.remove('hidden');
+              clearTimeout(window.__copy_toast_timer);
+              window.__copy_toast_timer = setTimeout(function(){
+                el.classList.add('hidden');
+              }, 1200);
+            }
+            function bindCopy(btnId){
+              var b = document.getElementById(btnId);
+              if(!b) return;
+              b.addEventListener('click', function(){
+                var text = b.getAttribute('data-copy') || '';
+                if (!text) return;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(text).then(function(){
+                    showToast('已复制：' + text);
+                  }, function(){
+                    fallbackCopy(text);
+                  });
+                } else {
+                  fallbackCopy(text);
+                }
+              });
+            }
+            function fallbackCopy(text){
+              var ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.left = '-9999px';
+              document.body.appendChild(ta);
+              ta.select();
+              try {
+                document.execCommand('copy');
+                showToast('已复制：' + text);
+              } catch(e) {}
+              document.body.removeChild(ta);
+            }
+            bindCopy('copy-num');
+            bindCopy('copy-oe');
+          })();
+        `}
+      </Script>
     </div>
   );
 }
