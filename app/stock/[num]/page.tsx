@@ -186,44 +186,67 @@ export default async function DetailPage({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* 图片区 */}
         <div>
-          <div className="aspect-[4/3] rounded-xl border bg-white flex items-center justify-center overflow-hidden">
-            {pics.length > 0 ? (
+          <div className="relative">
+            <div className="aspect-[4/3] rounded-xl border bg-white flex items-center justify-center overflow-hidden">
               <img
-                src={pics[0]}
+                id="main-img"
+                src={pics[0] || "https://dummyimage.com/800x600/eeeeee/aaaaaa&text=No+Image"}
                 alt={name}
                 className="w-full h-full object-contain"
                 loading="eager"
               />
-            ) : (
-              <img
-                src="https://dummyimage.com/800x600/eeeeee/aaaaaa&text=No+Image"
-                alt="No image"
-                className="w-full h-full object-contain"
-                loading="eager"
-              />
-            )}
+            </div>
           </div>
 
-          {/* 缩略图 */}
+          {/* 缩略图条：可横向滚动 + 左右箭头 */}
           {pics.length > 1 && (
-            <div className="mt-3 grid grid-cols-5 sm:grid-cols-6 md:grid-cols-5 gap-2">
-              {pics.slice(0, 10).map((p, idx) => (
-                <a
-                  key={p}
-                  href={p}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block border rounded-lg overflow-hidden bg-white"
-                  title={`图片 ${idx + 1}`}
-                >
-                  <img
-                    src={p}
-                    alt={`thumb ${idx + 1}`}
-                    className="w-full h-20 object-contain"
-                    loading="lazy"
-                  />
-                </a>
-              ))}
+            <div className="relative mt-3">
+              {/* 左侧渐变 + 按钮 */}
+              <button
+                type="button"
+                aria-label="Scroll left"
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-10 rounded-full border bg-white/90 px-2 py-2 shadow hover:bg-white"
+                id="thumb-left"
+              >
+                ‹
+              </button>
+              {/* 右侧渐变 + 按钮 */}
+              <button
+                type="button"
+                aria-label="Scroll right"
+                className="absolute right-0 top-1/2 -translate-y-1/2 z-10 rounded-full border bg-white/90 px-2 py-2 shadow hover:bg-white"
+                id="thumb-right"
+              >
+                ›
+              </button>
+
+              <div
+                id="thumb-strip"
+                className="overflow-x-auto no-scrollbar scroll-smooth pr-8 pl-8"
+                style={{ scrollbarWidth: "thin" as any }}
+              >
+                <div className="flex gap-2 min-w-full">
+                  {pics.slice(0, 20).map((p, tIdx) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={cn(
+                        "thumb-btn block border rounded-lg overflow-hidden bg-white shrink-0",
+                        tIdx === 0 ? "ring-2 ring-emerald-500" : "hover:border-gray-400"
+                      )}
+                      data-src={p}
+                      title={`图片 ${tIdx + 1}`}
+                    >
+                      <img
+                        src={p}
+                        alt={`thumb ${tIdx + 1}`}
+                        className="w-28 h-20 object-contain"
+                        loading="lazy"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -306,10 +329,11 @@ export default async function DetailPage({
         </div>
       </div>
 
-      {/* 内联脚本：负责复制到剪贴板和提示 */}
-      <Script id="copy-handlers" strategy="afterInteractive">
+      {/* 内联脚本：复制 + 画廊交互 + 缩略条滚动 */}
+      <Script id="detail-interactions" strategy="afterInteractive">
         {`
           (function(){
+            // 复制提示
             function showToast(msg){
               var el = document.getElementById('copy-toast');
               if(!el) return;
@@ -344,17 +368,58 @@ export default async function DetailPage({
               ta.style.left = '-9999px';
               document.body.appendChild(ta);
               ta.select();
-              try {
-                document.execCommand('copy');
-                showToast('已复制：' + text);
-              } catch(e) {}
+              try { document.execCommand('copy'); showToast('已复制：' + text); } catch(e) {}
               document.body.removeChild(ta);
             }
             bindCopy('copy-num');
             bindCopy('copy-oe');
+
+            // 画廊：点击缩略图切换大图 + 高亮边框
+            var mainImg = document.getElementById('main-img');
+            var strip = document.getElementById('thumb-strip');
+            var btns = document.querySelectorAll('.thumb-btn');
+            function setActive(btn){
+              btns.forEach(function(b){ b.classList.remove('ring-2','ring-emerald-500'); });
+              btn.classList.add('ring-2','ring-emerald-500');
+            }
+            btns.forEach(function(b){
+              b.addEventListener('click', function(){
+                var src = b.getAttribute('data-src');
+                if (src && mainImg) {
+                  mainImg.setAttribute('src', src);
+                  setActive(b);
+                }
+              });
+            });
+
+            // 缩略条左右滚动
+            var left = document.getElementById('thumb-left');
+            var right = document.getElementById('thumb-right');
+            function scrollByAmount(dir){
+              if (!strip) return;
+              var step = 160; // 每次滚动一个缩略图宽度左右
+              strip.scrollBy({ left: dir * step, behavior: 'smooth' });
+            }
+            if (left) left.addEventListener('click', function(){ scrollByAmount(-1); });
+            if (right) right.addEventListener('click', function(){ scrollByAmount(1); });
+
+            // 键盘左右键也可滚动缩略条
+            document.addEventListener('keydown', function(e){
+              if (!strip) return;
+              if (e.key === 'ArrowLeft') scrollByAmount(-1);
+              if (e.key === 'ArrowRight') scrollByAmount(1);
+            });
           })();
         `}
       </Script>
+
+      {/* 隐藏原生滚动条的简易样式（仍可滚动） */}
+      <style jsx>{`
+        .no-scrollbar::-webkit-scrollbar { height: 8px; }
+        .no-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 8px; }
+        .no-scrollbar::-webkit-scrollbar-thumb { background: #cfcfcf; border-radius: 8px; }
+        .no-scrollbar:hover::-webkit-scrollbar-thumb { background: #b5b5b5; }
+      `}</style>
     </div>
   );
 }
