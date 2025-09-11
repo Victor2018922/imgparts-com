@@ -1,98 +1,59 @@
-import { NextResponse } from "next/server";
+// app/api/stock/item/route.ts
+import { NextResponse } from 'next/server';
 
-const BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
+export const dynamic = 'force-dynamic'; // 禁用缓存，确保每次实时拉取
 
-// http -> https（带查询参数也保留）
-function toHttps(u: string): string {
-  const t = u?.trim?.() ?? "";
-  if (!t) return t;
-  if (t.startsWith("https://")) return t;
-  if (t.startsWith("http://")) return "https://" + t.slice(7);
-  if (t.startsWith("//")) return "https:" + t;
-  return t;
-}
+const STOCK_EXCEL_API =
+  'https://niuniuparts.com:6001/scm-product/v1/stock2/excel?size=2000&page=0';
 
-// 从一条记录上拿首图
-function pickImage(item: any): string | null {
-  if (Array.isArray(item?.pics) && item.pics.length > 0) {
-    const first = item.pics[0];
-    if (typeof first === "string") return toHttps(first);
-  }
-  return null;
-}
-
-/**
- * 详情接口策略：
- * - 读取 ?num=xxx
- * - 依次抓取多页列表（最多 5 页，每页 200 条），直到匹配到为止
- * - 匹配字段：num / code / sku / id（全等比较）
- * - 命中后，附加 image 字段（来自 pics[0]，自动升级为 https）
- */
+// 统一返回：{ status: 'ok', item: {...} }
+// 未找到：HTTP 404 + { status: 'not_found' }
+// 异常：HTTP 500 + { error: '...' }
 export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const num = searchParams.get('num');
+
+  if (!num) {
+    return NextResponse.json({ error: 'missing num' }, { status: 400 });
+  }
+
   try {
-    const { searchParams } = new URL(req.url);
-    const num = (searchParams.get("num") || "").trim();
-    if (!num) {
-      return NextResponse.json({ error: "Missing num" }, { status: 400 });
+    // 直接使用 excel 接口一次性拿全量，然后按 num 精确匹配
+    const res = await fetch(STOCK_EXCEL_API, { cache: 'no-store' });
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: `upstream ${res.status}` },
+        { status: 502 }
+      );
     }
 
-    const MAX_PAGES = 5;
-    const SIZE = 200;
+    const json = await res.json();
+    const list: any[] = Array.isArray(json?.data) ? json.data : [];
 
-    let found: any = null;
+    const target = list.find(
+      (it) =>
+        String(it?.num ?? '').trim().toLowerCase() ===
+        String(num).trim().toLowerCase()
+    );
 
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const url = `${BASE}?size=${SIZE}&page=${page}`;
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) {
-        // 外部异常直接返回对应状态码
-        return NextResponse.json(
-          { error: "Failed to fetch external list" },
-          { status: res.status }
-        );
-      }
-
-      const json = await res.json();
-
-      // 兼容外部返回结构
-      const list: any[] = Array.isArray(json)
-        ? json
-        : Array.isArray((json as any)?.content)
-        ? (json as any).content
-        : Array.isArray((json as any)?.data)
-        ? (json as any).data
-        : Array.isArray((json as any)?.items)
-        ? (json as any).items
-        : Array.isArray((json as any)?.list)
-        ? (json as any).list
-        : [];
-
-      const needle = num;
-      found =
-        list.find((it: any) => String(it?.num ?? "").trim() === needle) ??
-        list.find((it: any) => String(it?.code ?? "").trim() === needle) ??
-        list.find((it: any) => String(it?.sku ?? "").trim() === needle) ??
-        list.find((it: any) => String(it?.id ?? "").trim() === needle) ??
-        null;
-
-      if (found) break;
-
-      // 如果这一页已经没有数据，提前结束
-      if (!Array.isArray(list) || list.length < SIZE) break;
+    if (!target) {
+      return NextResponse.json({ status: 'not_found' }, { status: 404 });
     }
 
-    if (!found) {
-      return NextResponse.json({ error: "Item not found" }, { status: 404 });
-    }
+    // 规范化图片字段（只保留 http/https）
+    const pics = Array.isArray(target.pics)
+      ? target.pics.filter(
+          (p: any) => typeof p === 'string' && /^https?:\/\//i.test(p)
+        )
+      : [];
 
-    // 附加 image 字段（首图）
-    const image = pickImage(found);
-    const result = image ? { ...found, image } : found;
+    const item = { ...target, pics };
 
-    return NextResponse.json(result);
-  } catch (err: any) {
+    // 兼容前端老代码（item / data 双字段都带上）
+    return NextResponse.json({ status: 'ok', item, data: item });
+  } catch (e: any) {
     return NextResponse.json(
-      { error: "Server error", detail: String(err?.message || err) },
+      { error: String(e?.message || e) },
       { status: 500 }
     );
   }
