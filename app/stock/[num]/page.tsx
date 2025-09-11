@@ -6,9 +6,9 @@ import { useParams, useRouter } from "next/navigation";
 
 // ---------- 类型 ----------
 type StockItem = {
-  brand?: string;
-  car?: string;
-  carCode?: string;
+  brand?: string;      // 配件品牌（Parts Brand）
+  car?: string;        // 汽车品牌（Brand）如 HONDA/TOYOTA
+  carCode?: string;    // 适配车型/型号（Model）
   count?: number;
   name?: string;
   num: string;
@@ -18,7 +18,8 @@ type StockItem = {
   specs?: string;
   tradePrice?: number;
   weight?: string;
-  image?: string; // 有些记录仅给一个主图
+  image?: string;
+  year?: string;       // 生产年份（Year）——数据里有就显示
 };
 
 type ApiResp =
@@ -26,7 +27,6 @@ type ApiResp =
   | StockItem
   | StockItem[];
 
-// ---------- 小工具 ----------
 const fmtPrice = (n?: number) =>
   typeof n === "number" && !Number.isNaN(n) ? n.toFixed(2) : "N/A";
 
@@ -35,7 +35,6 @@ const firstNonEmpty = (...arr: (string | undefined)[]) =>
 
 const unique = (arr: string[]) => Array.from(new Set(arr));
 
-// 行组件
 function Row({ label, value }: { label: string; value?: React.ReactNode }) {
   return (
     <div className="grid grid-cols-3 md:grid-cols-6">
@@ -47,10 +46,9 @@ function Row({ label, value }: { label: string; value?: React.ReactNode }) {
   );
 }
 
-// ---------- 本页组件 ----------
 export default function StockDetailPage() {
-  // 这里不要直接解构，避免 “可能为 null” 的类型报错
-  const params = useParams() as { [key: string]: string | undefined } | null;
+  // 避免解构 null
+  const params = useParams() as { [k: string]: string | undefined } | null;
   const num = (params?.["num"] ?? "") as string;
 
   const router = useRouter();
@@ -59,26 +57,8 @@ export default function StockDetailPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // 图集
-  const pics = useMemo(() => {
-    const p = unique(
-      [
-        ...(item?.pics || []),
-        ...(item?.image ? [item.image] : []), // 有些接口只给 image
-      ].filter(Boolean) as string[]
-    );
-    return p;
-  }, [item]);
-
-  // 当前大图索引
-  const [idx, setIdx] = useState(0);
-
-  // 灯箱
-  const [openLightbox, setOpenLightbox] = useState(false);
-  const lightboxRef = useRef<HTMLDivElement | null>(null);
-
-  // 缩略图滚动
-  const thumbsRef = useRef<HTMLDivElement | null>(null);
+  // 画廊 key：当切换到不同商品时强制重建，避免点击缩略图第一次不响应的问题
+  const [galleryKey, setGalleryKey] = useState<string>("");
 
   // 轻提示
   const [toast, setToast] = useState<string | null>(null);
@@ -87,10 +67,9 @@ export default function StockDetailPage() {
     setTimeout(() => setToast(null), 1400);
   }, []);
 
-  // ---------- 拉取详情（先尝试站内 API，再降级） ----------
+  // 拉数据
   useEffect(() => {
     if (!num) return;
-
     let abort = false;
 
     async function load() {
@@ -112,12 +91,11 @@ export default function StockDetailPage() {
             const j: ApiResp = await r.json();
 
             if (Array.isArray(j)) {
-              const found = j.find((x) => x.num === num);
-              if (found) record = found;
-            } else if ("data" in (j as any)) {
+              record = j.find((x) => x.num === num) || j[0] || null;
+            } else if (j && typeof j === "object" && "data" in (j as any)) {
               const d = (j as any).data;
               if (Array.isArray(d)) {
-                record = d.find((x: StockItem) => x.num === num) ?? d[0];
+                record = d.find((x: StockItem) => x.num === num) ?? d[0] ?? null;
               } else if (d && typeof d === "object") {
                 record = d as StockItem;
               }
@@ -127,17 +105,15 @@ export default function StockDetailPage() {
 
             if (record) break;
           } catch {
-            // 继续尝试下一个
+            // ignore, try next
           }
         }
 
-        if (!record) {
-          throw new Error("未从站内 API 获取到该商品的数据");
-        }
+        if (!record) throw new Error("未从站内 API 获取到该商品的数据");
 
         if (!abort) {
           setItem(record);
-          setIdx(0);
+          setGalleryKey(`${record.num}-${Date.now()}`); // 强制重建画廊
         }
       } catch (e: any) {
         if (!abort) setErr(e?.message || "加载失败");
@@ -152,57 +128,67 @@ export default function StockDetailPage() {
     };
   }, [num]);
 
-  // ---------- 交互：复制 OE ----------
-  const onCopyOE = useCallback(async () => {
-    const text = item?.oe || "";
-    try {
-      if (text) {
-        await navigator.clipboard.writeText(text);
-        showToast("OE 已复制");
-      }
-    } catch {
-      showToast("复制失败");
-    }
-  }, [item, showToast]);
+  // ===== 画廊 & 缩略图 =====
+  const pics = useMemo(() => {
+    const p = unique(
+      [
+        ...(item?.pics || []),
+        ...(item?.image ? [item.image] : []),
+      ].filter(Boolean) as string[]
+    );
+    return p;
+  }, [item]);
 
-  // ---------- 交互：加入询价单（localStorage） ----------
-  const onAddInquiry = useCallback(() => {
-    if (!item) return;
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    setIdx(0);
+  }, [galleryKey]); // 重建后回到第 0 张
 
-    const key = "inq_items";
-    const raw = localStorage.getItem(key);
-    let arr: any[] = [];
-    try {
-      arr = raw ? JSON.parse(raw) : [];
-    } catch {
-      arr = [];
-    }
+  // 缩略图滚动与箭头
+  const thumbsRef = useRef<HTMLDivElement | null>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
 
-    const cover = pics[0] || item.image || "";
+  const updateThumbArrows = useCallback(() => {
+    const el = thumbsRef.current;
+    if (!el) return;
+    setCanLeft(el.scrollLeft > 0);
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
 
-    const existing = arr.find((x) => x.num === item.num);
-    if (existing) {
-      existing.qty = Math.min((existing.qty || 1) + 1, 9999);
-    } else {
-      arr.push({
-        num: item.num,
-        name: item.name,
-        brand: item.brand,
-        price: item.price ?? 0,
-        oe: item.oe,
-        cover,
-        qty: 1,
-      });
-    }
+  useEffect(() => {
+    const el = thumbsRef.current;
+    if (!el) return;
+    updateThumbArrows();
+    const onScroll = () => updateThumbArrows();
+    el.addEventListener("scroll", onScroll);
+    const ro = new ResizeObserver(updateThumbArrows);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [updateThumbArrows, galleryKey]);
 
-    localStorage.setItem(key, JSON.stringify(arr));
-    showToast("已加入询价单");
-  }, [item, pics, showToast]);
+  // pics 变化后异步刷新一次箭头状态，避免首次进入时不响应
+  useEffect(() => {
+    const t = setTimeout(updateThumbArrows, 0);
+    return () => clearTimeout(t);
+  }, [pics, updateThumbArrows]);
 
-  // ---------- 灯箱：键盘 & 触摸 ----------
+  const scrollThumbs = (dir: "left" | "right") => {
+    const el = thumbsRef.current;
+    if (!el) return;
+    const delta = el.clientWidth * 0.9 * (dir === "left" ? -1 : 1);
+    el.scrollBy({ left: delta, behavior: "smooth" });
+  };
+
+  // 灯箱
+  const [openLightbox, setOpenLightbox] = useState(false);
+  const lightboxRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (!openLightbox) return;
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpenLightbox(false);
       if (e.key === "ArrowLeft") setIdx((i) => (i - 1 + pics.length) % pics.length);
@@ -214,9 +200,7 @@ export default function StockDetailPage() {
     let startX = 0;
     let endX = 0;
     const el = lightboxRef.current;
-    const onTouchStart = (ev: TouchEvent) => {
-      startX = ev.touches[0].clientX;
-    };
+    const onTouchStart = (ev: TouchEvent) => { startX = ev.touches[0].clientX; };
     const onTouchEnd = (ev: TouchEvent) => {
       endX = ev.changedTouches[0].clientX;
       const dx = endX - startX;
@@ -235,39 +219,47 @@ export default function StockDetailPage() {
     };
   }, [openLightbox, pics.length]);
 
-  // ---------- 缩略图滚动按钮可用状态 ----------
-  const [canLeft, setCanLeft] = useState(false);
-  const [canRight, setCanRight] = useState(false);
+  // 复制 OE
+  const onCopyOE = useCallback(async () => {
+    const text = item?.oe || "";
+    try {
+      if (text) {
+        await navigator.clipboard.writeText(text);
+        showToast("OE 已复制");
+      }
+    } catch {
+      showToast("复制失败");
+    }
+  }, [item, showToast]);
 
-  const updateThumbArrows = useCallback(() => {
-    const el = thumbsRef.current;
-    if (!el) return;
-    setCanLeft(el.scrollLeft > 0);
-    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
-  }, []);
+  // 加入询价单
+  const onAddInquiry = useCallback(() => {
+    if (!item) return;
+    const key = "inq_items";
+    const raw = localStorage.getItem(key);
+    let arr: any[] = [];
+    try { arr = raw ? JSON.parse(raw) : []; } catch { arr = []; }
 
-  useEffect(() => {
-    const el = thumbsRef.current;
-    if (!el) return;
-    updateThumbArrows();
-    const onScroll = () => updateThumbArrows();
-    el.addEventListener("scroll", onScroll);
-    const r = new ResizeObserver(updateThumbArrows);
-    r.observe(el);
-    return () => {
-      el.removeEventListener("scroll", onScroll);
-      r.disconnect();
-    };
-  }, [updateThumbArrows]);
+    const cover = pics[0] || item.image || "";
+    const exists = arr.find((x) => x.num === item.num);
+    if (exists) {
+      exists.qty = Math.min((exists.qty || 1) + 1, 9999);
+    } else {
+      arr.push({
+        num: item.num,
+        name: item.name,
+        brand: item.brand,
+        price: item.price ?? 0,
+        oe: item.oe,
+        cover,
+        qty: 1,
+      });
+    }
+    localStorage.setItem(key, JSON.stringify(arr));
+    showToast("已加入询价单");
+  }, [item, pics, showToast]);
 
-  const scrollThumbs = (dir: "left" | "right") => {
-    const el = thumbsRef.current;
-    if (!el) return;
-    const delta = el.clientWidth * 0.9 * (dir === "left" ? -1 : 1);
-    el.scrollBy({ left: delta, behavior: "smooth" });
-  };
-
-  // ---------- 渲染 ----------
+  // ===== 渲染 =====
   if (loading) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-10">
@@ -290,10 +282,7 @@ export default function StockDetailPage() {
         <p className="text-lg text-red-600 font-medium">加载失败</p>
         <p className="text-sm text-gray-500 mt-2">{err || "未找到该商品"}</p>
         <div className="mt-6">
-          <Link
-            href="/stock"
-            className="inline-flex items-center rounded-md border px-4 py-2 text-gray-700 hover:bg-gray-50"
-          >
+          <Link href="/stock" className="inline-flex items-center rounded-md border px-4 py-2 text-gray-700 hover:bg-gray-50">
             ← 返回列表
           </Link>
         </div>
@@ -302,30 +291,28 @@ export default function StockDetailPage() {
   }
 
   const title = firstNonEmpty(item.name);
-  const brand = firstNonEmpty(item.brand);
-  const model = firstNonEmpty(item.carCode);
-  const year = firstNonEmpty(item.car);
+  const partsBrand = firstNonEmpty(item.brand);     // 配件品牌（Parts Brand）
+  const carBrand   = firstNonEmpty(item.car);       // 车辆品牌（Brand）
+  const model      = firstNonEmpty(item.carCode);   // 车型/型号（Model）
+  const yearLabel  = firstNonEmpty(item.year);      // 年份（Year）——只读 year
   const price = fmtPrice(item.price);
   const stockText = typeof item.count === "number" ? String(item.count) : "N/A";
-
   const mainSrc = pics[idx];
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
       {/* 面包屑 */}
       <nav className="text-sm text-gray-500 mb-4 space-x-1">
-        <Link href="/" className="hover:underline">首页</Link>
-        <span> / </span>
-        <Link href="/stock" className="hover:underline">库存预览</Link>
-        <span> / </span>
+        <Link href="/" className="hover:underline">首页</Link><span> / </span>
+        <Link href="/stock" className="hover:underline">库存预览</Link><span> / </span>
         <span className="text-gray-700">商品详情</span>
       </nav>
 
       <h1 className="text-xl font-semibold mb-4">Product Detail</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* 左：图片 */}
-        <div>
+        {/* 左：图片区域（用 key 强制重建） */}
+        <div key={galleryKey}>
           <div className="relative rounded-lg border bg-white">
             {mainSrc ? (
               <img
@@ -333,6 +320,7 @@ export default function StockDetailPage() {
                 alt={title}
                 className="w-full h-auto object-contain cursor-zoom-in select-none"
                 onClick={() => setOpenLightbox(true)}
+                onLoad={updateThumbArrows}
               />
             ) : (
               <div className="aspect-video flex items-center justify-center text-gray-400">
@@ -386,6 +374,7 @@ export default function StockDetailPage() {
                         alt={`thumb-${i}`}
                         className="h-20 w-28 object-cover"
                         draggable={false}
+                        onLoad={updateThumbArrows}
                       />
                     </button>
                   ))}
@@ -402,19 +391,23 @@ export default function StockDetailPage() {
 
           <dl className="mt-4 space-y-1 text-gray-700">
             <div className="flex gap-2">
-              <dt className="w-16 text-gray-500">Brand:</dt>
-              <dd>{brand}</dd>
+              <dt className="w-24 text-gray-500">Parts Brand:</dt>
+              <dd>{partsBrand}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="w-16 text-gray-500">Model:</dt>
+              <dt className="w-24 text-gray-500">Brand:</dt>
+              <dd>{carBrand}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-24 text-gray-500">Model:</dt>
               <dd>{model}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="w-16 text-gray-500">Year:</dt>
-              <dd>{year}</dd>
+              <dt className="w-24 text-gray-500">Year:</dt>
+              <dd>{yearLabel}</dd>
             </div>
             <div className="flex gap-2 items-center">
-              <dt className="w-16 text-gray-500">OE:</dt>
+              <dt className="w-24 text-gray-500">OE:</dt>
               <dd className="break-all">
                 {item.oe || "—"}
                 {item.oe && (
@@ -430,11 +423,11 @@ export default function StockDetailPage() {
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="w-16 text-gray-500">Price:</dt>
+              <dt className="w-24 text-gray-500">Price:</dt>
               <dd className="text-emerald-600 font-semibold">${price}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="w-16 text-gray-500">Stock:</dt>
+              <dt className="w-24 text-gray-500">Stock:</dt>
               <dd>{stockText}</dd>
             </div>
           </dl>
@@ -447,8 +440,6 @@ export default function StockDetailPage() {
             >
               ← 返回列表
             </Link>
-
-            {/* 上一条 / 下一条（占位） */}
             <button
               type="button"
               className="inline-flex items-center rounded-md border px-4 py-2 hover:bg-gray-50"
@@ -463,7 +454,6 @@ export default function StockDetailPage() {
               下一条
             </Link>
 
-            {/* 新增：加入询价单 */}
             <button
               id="add-inquiry"
               type="button"
@@ -473,7 +463,6 @@ export default function StockDetailPage() {
               加入询价单
             </button>
 
-            {/* 可选：查看询价单（如果你已有 /inquiry 页面） */}
             <Link
               href="/inquiry"
               className="inline-flex items-center rounded-md border px-4 py-2 hover:bg-gray-50"
@@ -488,15 +477,17 @@ export default function StockDetailPage() {
         </div>
       </div>
 
-      {/* 规格参数（保持简洁，展示核心字段） */}
+      {/* 参数区：字段也同步成 Parts Brand / Brand / Model / Year */}
       <section className="mt-10">
         <h3 className="text-lg font-semibold mb-3">产品参数</h3>
         <div className="rounded-lg border divide-y">
           <Row label="商品编号 (Num)" value={item.num} />
-          <Row label="品牌 (Brand)" value={brand} />
-          <Row label="适配车型 (Model)" value={model} />
-          <Row label="价格 (Price)" value={`$${price}`} />
-          <Row label="库存 (Stock)" value={stockText} />
+          <Row label="Parts Brand" value={partsBrand} />
+          <Row label="Brand" value={carBrand} />
+          <Row label="Model" value={model} />
+          <Row label="Year" value={yearLabel} />
+          <Row label="Price" value={`$${price}`} />
+          <Row label="Stock" value={stockText} />
         </div>
       </section>
 
@@ -523,7 +514,6 @@ export default function StockDetailPage() {
             ✕
           </button>
 
-          {/* 上一张 / 下一张 */}
           <button
             type="button"
             className="absolute left-3 md:left-6 text-white text-3xl"
