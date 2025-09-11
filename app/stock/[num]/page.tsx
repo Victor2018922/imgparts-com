@@ -35,9 +35,24 @@ const firstNonEmpty = (...arr: (string | undefined)[]) =>
 
 const unique = (arr: string[]) => Array.from(new Set(arr));
 
+// 行组件
+function Row({ label, value }: { label: string; value?: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-3 md:grid-cols-6">
+      <div className="col-span-1 bg-gray-50 px-4 py-2 text-sm text-gray-500">{label}</div>
+      <div className="col-span-2 md:col-span-5 px-4 py-2 text-sm text-gray-800 break-all">
+        {value || "—"}
+      </div>
+    </div>
+  );
+}
+
 // ---------- 本页组件 ----------
 export default function StockDetailPage() {
-  const { num } = useParams<{ num: string }>();
+  // 这里不要直接解构，避免 “可能为 null” 的类型报错
+  const params = useParams() as { [key: string]: string | undefined } | null;
+  const num = (params?.["num"] ?? "") as string;
+
   const router = useRouter();
 
   const [item, setItem] = useState<StockItem | null>(null);
@@ -74,13 +89,14 @@ export default function StockDetailPage() {
 
   // ---------- 拉取详情（先尝试站内 API，再降级） ----------
   useEffect(() => {
+    if (!num) return;
+
     let abort = false;
 
     async function load() {
       setLoading(true);
       setErr(null);
       try {
-        // 顺序尝试多个可能存在的站内 API（不改你现有后端就能兼容）
         const tryUrls = [
           `/api/stock/item?num=${encodeURIComponent(num)}`,
           `/api/stock/detail?num=${encodeURIComponent(num)}`,
@@ -95,7 +111,6 @@ export default function StockDetailPage() {
             if (!r.ok) continue;
             const j: ApiResp = await r.json();
 
-            // 兼容不同返回形态
             if (Array.isArray(j)) {
               const found = j.find((x) => x.num === num);
               if (found) record = found;
@@ -112,11 +127,10 @@ export default function StockDetailPage() {
 
             if (record) break;
           } catch {
-            // 下一条
+            // 继续尝试下一个
           }
         }
 
-        // 兜底：如果站内 API 都没命中，就不再扫大列表，直接让页面提示“暂无图片”等，不影响已运行环境
         if (!record) {
           throw new Error("未从站内 API 获取到该商品的数据");
         }
@@ -314,7 +328,6 @@ export default function StockDetailPage() {
         <div>
           <div className="relative rounded-lg border bg-white">
             {mainSrc ? (
-              // 用 <img>，避免 next/image 的域名配置
               <img
                 src={mainSrc}
                 alt={title}
@@ -435,7 +448,7 @@ export default function StockDetailPage() {
               ← 返回列表
             </Link>
 
-            {/* 上一条 / 下一条（保持按钮位置，逻辑视你现有实现，此处只做占位跳转回列表） */}
+            {/* 上一条 / 下一条（占位） */}
             <button
               type="button"
               className="inline-flex items-center rounded-md border px-4 py-2 hover:bg-gray-50"
@@ -542,18 +555,6 @@ export default function StockDetailPage() {
           />
         </div>
       )}
-    </div>
-  );
-}
-
-// 行组件
-function Row({ label, value }: { label: string; value?: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-3 md:grid-cols-6">
-      <div className="col-span-1 bg-gray-50 px-4 py-2 text-sm text-gray-500">{label}</div>
-      <div className="col-span-2 md:col-span-5 px-4 py-2 text-sm text-gray-800 break-all">
-        {value || "—"}
-      </div>
     </div>
   );
 }
