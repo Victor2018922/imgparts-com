@@ -19,11 +19,7 @@ export default function StockPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const controller = new AbortController();
-
     fetch("https://niuniuparts.com:6001/scm-product/v1/stock2", {
-      signal: controller.signal,
-      // 明确禁用缓存，避免意外的旧响应
       cache: "no-store",
     })
       .then((res) => {
@@ -31,23 +27,28 @@ export default function StockPage() {
         return res.json();
       })
       .then((json) => {
-        const arr = Array.isArray(json) ? json : [];
-        setData(arr);
+        console.log("API返回内容:", json); // 调试输出，部署后可在浏览器Console查看
+        if (Array.isArray(json) && json.length > 0) {
+          setData(json);
+        } else if (json?.data && Array.isArray(json.data)) {
+          // 万一后端是包了一层 { data: [...] }
+          setData(json.data);
+        } else {
+          setData([]);
+        }
         setLoading(false);
       })
-      .catch(() => {
-        // 任何异常都不抛出，避免客户端崩溃
+      .catch((err) => {
+        console.error("加载错误:", err);
         setError("数据加载失败，请稍后再试");
-        setData([]); // 兜底为空数组，防止 .map 崩溃
+        setData([]);
         setLoading(false);
       });
-
-    return () => controller.abort();
   }, []);
 
   const handleDownload = () => {
-    // 只做简单跳转，不依赖外部窗口状态
-    location.href = "https://niuniuparts.com:6001/scm-product/v1/stock2/excel";
+    location.href =
+      "https://niuniuparts.com:6001/scm-product/v1/stock2/excel";
   };
 
   if (loading) return <p className="p-4">Loading...</p>;
@@ -56,14 +57,12 @@ export default function StockPage() {
     <div className="p-4">
       <h1 className="text-xl font-bold mb-4">Stock List</h1>
 
-      {/* 提示区（不阻塞渲染） */}
       {error ? (
         <p className="mb-3 text-red-600">{error}</p>
       ) : (
         <p className="mb-3 text-gray-600">共 {data.length} 条数据</p>
       )}
 
-      {/* 下载按钮 */}
       <button
         onClick={handleDownload}
         className="mb-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -83,8 +82,7 @@ export default function StockPage() {
           </tr>
         </thead>
         <tbody>
-          {(Array.isArray(data) ? data : []).map((item, idx) => {
-            // 全面防御：任何缺失字段都给占位符，避免渲染时报错
+          {(data || []).map((item, idx) => {
             const num = item?.num ? String(item.num) : "";
             return (
               <tr key={`${num}-${idx}`} className="hover:bg-gray-50">
@@ -103,25 +101,4 @@ export default function StockPage() {
                 <td className="border px-2 py-1">{item?.product ?? "-"}</td>
                 <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
                 <td className="border px-2 py-1">{item?.brand ?? "-"}</td>
-                <td className="border px-2 py-1">{item?.model ?? "-"}</td>
-                <td className="border px-2 py-1">{item?.year ?? "-"}</td>
-              </tr>
-            );
-          })}
-          {(!data || data.length === 0) && (
-            <tr>
-              <td colSpan={6} className="border px-2 py-6 text-center text-gray-500">
-                暂无数据
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      <p className="text-xs text-gray-500 mt-3">
-        数据源：niuniuparts.com（测试预览用途）
-      </p>
-    </div>
-  );
-}
 
