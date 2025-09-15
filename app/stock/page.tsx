@@ -14,12 +14,24 @@ type StockItem = {
 };
 
 const demoData: StockItem[] = [
-  { num: "610474", product: "Wheel Hub Bearing", oe: "OE-610474", brand: "VW", model: "Golf", year: "2018" },
-  { num: "819077", product: "Brake Pad Set", oe: "OE-819077", brand: "Audi", model: "A4", year: "2017" },
-  { num: "JS0260", product: "Oil Filter", oe: "90915-YZZE1", brand: "Toyota", model: "Corolla", year: "2018" },
-  { num: "1K0129620D", product: "Air Filter", oe: "1K0 129 620 D", brand: "VW", model: "Jetta", year: "2012" },
-  { num: "4F0615301", product: "Shock Absorber", oe: "4F0 615 301", brand: "Audi", model: "A6", year: "2010" },
+  { num: "610474", product: "-", oe: "68500-T20-H20ZZ", brand: "IMG(OE配套)", model: "-", year: "-" },
+  { num: "819077", product: "-", oe: "31100-5AY-H01", brand: "IMG", model: "-", year: "-" },
+  { num: "JS0260", product: "-", oe: "52453-02130", brand: "雷根斯堡", model: "-", year: "-" },
+  { num: "510082", product: "-", oe: "51360-TW0-H00", brand: "IMG", model: "-", year: "-" },
+  { num: "113039", product: "-", oe: "19502-R1A-A01", brand: "IMG", model: "-", year: "-" },
 ];
+
+function buildDetailUrl(it: StockItem) {
+  const num = String(it?.num ?? "").trim();
+  const q = new URLSearchParams({
+    product: (it?.product ?? "-").toString(),
+    oe: (it?.oe ?? "-").toString(),
+    brand: (it?.brand ?? "-").toString(),
+    model: (it?.model ?? "-").toString(),
+    year: (it?.year ?? "-").toString(),
+  }).toString();
+  return `/stock/${encodeURIComponent(num)}?${q}`;
+}
 
 export default function StockPage() {
   const [data, setData] = useState<StockItem[]>([]);
@@ -27,20 +39,15 @@ export default function StockPage() {
   const [error, setError] = useState<string | null>(null);
   const [usingDemo, setUsingDemo] = useState(false);
 
-  // 搜索相关
   const [q, setQ] = useState("");
 
-  // 尝试更稳健地解析返回体（兼容 text/JSON、BOM、包壳）
+  // 尽量稳健解析返回体
   const parseResponse = async (res: Response) => {
     try {
       return await res.json();
     } catch {
       const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
-      try {
-        return JSON.parse(txt);
-      } catch {
-        return txt;
-      }
+      try { return JSON.parse(txt); } catch { return txt; }
     }
   };
 
@@ -75,7 +82,7 @@ export default function StockPage() {
     location.href = "https://niuniuparts.com:6001/scm-product/v1/stock2/excel";
   };
 
-  // 过滤逻辑（Num / Product / OE / Brand）
+  // 关键词过滤（Num / Product / OE / Brand）
   const filtered = useMemo(() => {
     const kw = q.trim().toLowerCase();
     if (!kw) return data;
@@ -84,18 +91,11 @@ export default function StockPage() {
       const product = String(it?.product ?? "").toLowerCase();
       const oe = String(it?.oe ?? "").toLowerCase();
       const brand = String(it?.brand ?? "").toLowerCase();
-      return (
-        num.includes(kw) ||
-        product.includes(kw) ||
-        oe.includes(kw) ||
-        brand.includes(kw)
-      );
+      return num.includes(kw) || product.includes(kw) || oe.includes(kw) || brand.includes(kw);
     });
   }, [q, data]);
 
-  if (loading) {
-    return <p className="p-4">Loading...</p>;
-  }
+  if (loading) return <p className="p-4">Loading...</p>;
 
   return (
     <div className="p-4">
@@ -115,7 +115,6 @@ export default function StockPage() {
         <span className="text-gray-500">当前筛选：{filtered.length} 条</span>
       </div>
 
-      {/* 搜索框 */}
       <div className="mb-4 flex items-center gap-2">
         <input
           value={q}
@@ -124,11 +123,7 @@ export default function StockPage() {
           className="w-80 max-w-full px-3 py-2 border rounded outline-none focus:ring"
         />
         {q && (
-          <button
-            onClick={() => setQ("")}
-            className="px-3 py-2 border rounded hover:bg-gray-50"
-            aria-label="clear"
-          >
+          <button onClick={() => setQ("")} className="px-3 py-2 border rounded hover:bg-gray-50">
             清空
           </button>
         )}
@@ -159,10 +154,7 @@ export default function StockPage() {
                 <tr key={`${num || "row"}-${idx}`} className="hover:bg-gray-50">
                   <td className="border px-2 py-1">
                     {num ? (
-                      <Link
-                        href={`/stock/${encodeURIComponent(num)}`}
-                        className="text-blue-600 hover:underline"
-                      >
+                      <Link href={buildDetailUrl(item)} className="text-blue-600 hover:underline">
                         {num}
                       </Link>
                     ) : (
@@ -187,11 +179,8 @@ export default function StockPage() {
         </tbody>
       </table>
 
-      <p className="text-xs text-gray-500 mt-3">
-        数据源：niuniuparts.com（测试预览用途）
-      </p>
+      <p className="text-xs text-gray-500 mt-3">数据源：niuniuparts.com（测试预览用途）</p>
     </div>
   );
 }
-
 
