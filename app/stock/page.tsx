@@ -27,11 +27,10 @@ export default function StockPage() {
         return res.json();
       })
       .then((json) => {
-        console.log("API返回内容:", json); // 调试输出，部署后可在浏览器Console查看
+        console.log("API返回内容:", json); // 调试输出
         if (Array.isArray(json) && json.length > 0) {
           setData(json);
         } else if (json?.data && Array.isArray(json.data)) {
-          // 万一后端是包了一层 { data: [...] }
           setData(json.data);
         } else {
           setData([]);
@@ -51,7 +50,9 @@ export default function StockPage() {
       "https://niuniuparts.com:6001/scm-product/v1/stock2/excel";
   };
 
-  if (loading) return <p className="p-4">Loading...</p>;
+  if (loading) {
+    return <p className="p-4">Loading...</p>;
+  }
 
   return (
     <div className="p-4">
@@ -101,4 +102,28 @@ export default function StockPage() {
                 <td className="border px-2 py-1">{item?.product ?? "-"}</td>
                 <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
                 <td className="border px-2 py-1">{item?.brand ?? "-"}</td>
+                <td className="border px-2 py-1">{item?.model ?? "-"}</td>
+                <td className="border px-2 py-1">{item?.year ?? "-"}</td>
+              </tr>
+            );
+          })}
+          {(!data || data.length === 0) && (
+            <tr>
+              <td
+                colSpan={6}
+                className="border px-2 py-6 text-center text-gray-500"
+              >
+                暂无数据
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <p className="text-xs text-gray-500 mt-3">
+        数据源：niuniuparts.com（测试预览用途）
+      </p>
+    </div>
+  );
+}
 
