@@ -3,34 +3,26 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-/** -------- 工具：通用解析 + 字段识别 -------- */
-
+/* ---------------- 工具：解析 & 字段识别 ---------------- */
 type AnyRec = Record<string, any>;
-
-function safeJsonParse(text: string) {
-  try { return JSON.parse(text); } catch { return text; }
-}
 
 async function parseResponse(res: Response) {
   try {
     return await res.json();
   } catch {
     const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
-    return safeJsonParse(txt);
+    try { return JSON.parse(txt); } catch { return txt; }
   }
 }
 
-/** 在对象树里“找到第一个数组对象列表” */
 function findArrayInObject(input: any): any[] {
   if (Array.isArray(input)) return input;
   if (input && typeof input === "object") {
-    // 常见容器字段
-    const candidates = ["data", "records", "list", "content", "items", "rows", "result"];
-    for (const k of candidates) {
+    const prefer = ["data", "records", "list", "content", "items", "rows", "result"];
+    for (const k of prefer) {
       const v = (input as AnyRec)[k];
       if (Array.isArray(v)) return v;
     }
-    // 否则遍历一层 value，找最大的数组
     let best: any[] = [];
     for (const v of Object.values(input)) {
       if (Array.isArray(v) && v.length > best.length) best = v;
@@ -40,7 +32,6 @@ function findArrayInObject(input: any): any[] {
   return [];
 }
 
-/** 统一的字段识别器 */
 function pickStr(row: AnyRec, keys: string[], regex?: RegExp): string | null {
   if (!row) return null;
   for (const k of keys) {
@@ -54,7 +45,6 @@ function pickStr(row: AnyRec, keys: string[], regex?: RegExp): string | null {
   }
   return null;
 }
-
 function pickAny(row: AnyRec, keys: string[], regex?: RegExp): any {
   if (!row) return null;
   for (const k of keys) {
@@ -70,257 +60,224 @@ function pickAny(row: AnyRec, keys: string[], regex?: RegExp): any {
   return null;
 }
 
-function pickImage(row: AnyRec): string | null {
-  return pickStr(
-    row,
-    ["imageUrl","image_url","imgUrl","img_url","image","img","photo","picture","thumb","thumbnail","cover","pic"],
-    /image|img|photo|pic|thumb|cover/i
-  );
-}
-
-function pickPrice(row: AnyRec): string | null {
-  const v = pickAny(
-    row,
-    ["price","salePrice","sale_price","unit_price","unitPrice","amount","cost"],
-    /price|amount|cost|unit/i
-  );
-  if (v === null || v === undefined || v === "") return null;
-  return String(v);
-}
-
-function pickStock(row: AnyRec): string | null {
-  const v = pickAny(
-    row,
-    ["stock","qty","quantity","inventory","available","库存","数量"],
-    /stock|qty|quantity|inventory|可用|库存|数量/i
-  );
-  if (v === null || v === undefined || v === "") return null;
-  return String(v);
-}
-
-function pickTitle(row: AnyRec): string | null {
+function pickNum(row: AnyRec) {
   return (
-    pickStr(row, ["title","name","product","productName","goodsName","spuName","desc","description"]) ||
-    pickStr(row, [], /title|name|product|goods|desc/i)
+    pickStr(row, ["num", "code", "partNo", "sku", "编号", "编码"]) ||
+    pickStr(row, [], /num|code|part|sku|编号|编码/i) ||
+    "-"
   );
 }
-
-function pickNum(row: AnyRec): string | null {
+function pickTitle(row: AnyRec) {
   return (
-    pickStr(row, ["num","code","partNo","sku","编号","编码"]) ||
-    pickStr(row, [], /num|code|part|sku|编号|编码/i)
+    pickStr(row, ["title","name","product","productName","goodsName","desc","description"]) ||
+    pickStr(row, [], /title|name|product|goods|desc/i) ||
+    "-"
   );
 }
-
-function pickOE(row: AnyRec): string | null {
-  return pickStr(row, ["oe","oeNo","oe_num","oeNumber","OE号","OE码"], /oe/i);
+function pickBrand(row: AnyRec) {
+  return pickStr(row, ["brand","brandName","partBrand","品牌"], /brand|品牌/i) || "-";
+}
+function pickModel(row: AnyRec) {
+  return pickStr(row, ["model","carModel","vehicleModel","车型"], /model|车型/i) || "-";
+}
+function pickOE(row: AnyRec) {
+  return pickStr(row, ["oe","oeNo","oe_num","oeNumber","OE号","OE码"], /oe/i) || "-";
+}
+function pickYear(row: AnyRec) {
+  return pickStr(row, ["year","年份"], /year|年份/i) || "-";
+}
+function pickPrice(row: AnyRec) {
+  const v = pickAny(row, ["price","salePrice","sale_price","unit_price","unitPrice","amount","cost","usdPrice","cnyPrice"], /price|amount|cost|unit/i);
+  return v === null || v === undefined || v === "" ? "-" : String(v);
+}
+function pickStock(row: AnyRec) {
+  const v = pickAny(row, ["stock","stockQty","stockQuantity","qty","quantity","inventory","available","库存","数量"], /stock|qty|quantity|inventory|库存|数量|可用/i);
+  return v === null || v === undefined || v === "" ? "-" : String(v);
 }
 
-function pickBrand(row: AnyRec): string | null {
-  return pickStr(row, ["brand","brandName","partBrand","品牌"], /brand|品牌/i);
+/** 递归在任意层级中找第一张图片 URL（适配各种字段名/结构） */
+function findFirstImageUrlDeep(input: any, depth = 0, seen = new Set<any>()): string | null {
+  if (!input || depth > 5 || seen.has(input)) return null;
+  seen.add(input);
+
+  // 字符串：匹配图片后缀/带 query 的 URL
+  if (typeof input === "string") {
+    const s = input.trim();
+    if (/\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(s)) {
+      if (s.startsWith("//")) return "https:" + s;
+      return s;
+    }
+  }
+
+  // 数组
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      const hit = findFirstImageUrlDeep(item, depth + 1, seen);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // 对象：优先常见图片 key，再全量扫描
+  if (typeof input === "object") {
+    const prefer = ["imageUrl","image_url","imgUrl","img_url","image","img","photo","picture","thumb","thumbnail","cover","url","images","imgs","photos","pics","gallery","album","pictures"];
+    for (const k of prefer) {
+      if (k in input) {
+        const hit = findFirstImageUrlDeep(input[k], depth + 1, seen);
+        if (hit) return hit;
+      }
+    }
+    for (const v of Object.values(input)) {
+      const hit = findFirstImageUrlDeep(v, depth + 1, seen);
+      if (hit) return hit;
+    }
+  }
+  return null;
 }
 
-function pickModel(row: AnyRec): string | null {
-  return pickStr(row, ["model","carModel","vehicleModel","车型"], /model|车型/i);
-}
-
-type CardItem = {
-  num: string;
-  title: string;
-  image?: string | null;
-  price?: string | null;
-  stock?: string | null;
-  oe?: string | null;
-  brand?: string | null;
-  model?: string | null;
-  raw: AnyRec; // 备用
-};
-
-function toCard(row: AnyRec): CardItem | null {
-  const num = pickNum(row) || "";
-  const title = pickTitle(row) || "";
-  if (!num && !title) return null;
-  return {
-    num,
-    title,
-    image: pickImage(row),
-    price: pickPrice(row),
-    stock: pickStock(row),
-    oe: pickOE(row),
-    brand: pickBrand(row),
-    model: pickModel(row),
-    raw: row,
-  };
-}
-
-/** -------- 页面组件 -------- */
-
-export default function StockPage() {
-  const [items, setItems] = useState<CardItem[]>([]);
+/* ---------------- 列表页 ---------------- */
+export default function StockListPage() {
+  const [page, setPage] = useState(0);
+  const [size, setSize] = useState(20);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // 翻页（后端分页）
-  const [page, setPage] = useState(1);        // 1-based
-  const [pageSize, setPageSize] = useState(20);
-
-  // 搜索（本页内）
+  const [rows, setRows] = useState<AnyRec[]>([]);
   const [q, setQ] = useState("");
 
   useEffect(() => {
-    const url = `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${pageSize}&page=${page - 1}`;
+    const url = `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${size}&page=${page}`;
     setLoading(true);
     setError(null);
     fetch(url, { cache: "no-store" })
-      .then(parseResponse)
-      .then((raw) => {
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const raw = await parseResponse(res);
         const arr = findArrayInObject(raw);
-        const cards = arr
-          .map(toCard)
-          .filter(Boolean) as CardItem[];
-        setItems(cards);
+        setRows(arr || []);
       })
-      .catch(() => setError("数据加载失败"))
+      .catch(() => setError("加载失败"))
       .finally(() => setLoading(false));
-  }, [page, pageSize]);
+  }, [page, size]);
 
-  const filtered = useMemo(() => {
-    const kw = q.trim().toLowerCase();
-    if (!kw) return items;
-    return items.filter((it) => {
-      return (
-        it.num.toLowerCase().includes(kw) ||
-        (it.title || "").toLowerCase().includes(kw) ||
-        (it.oe || "").toLowerCase().includes(kw) ||
-        (it.brand || "").toLowerCase().includes(kw)
-      );
+  const list = useMemo(() => {
+    const mapped = rows.map((row) => {
+      const num = pickNum(row);
+      const title = pickTitle(row);
+      const brand = pickBrand(row);
+      const model = pickModel(row);
+      const oe = pickOE(row);
+      const year = pickYear(row);
+      const price = pickPrice(row);
+      const stock = pickStock(row);
+
+      // **关键：深度扫描图片 URL**
+      const image = findFirstImageUrlDeep(row) || "";
+
+      return { num, title, brand, model, oe, year, price, stock, image, _raw: row };
     });
-  }, [q, items]);
 
-  const handleDownload = () => {
-    const url = `https://niuniuparts.com:6001/scm-product/v1/stock2/excel?size=${pageSize}&page=${page - 1}`;
-    location.href = url;
-  };
+    // 简单搜索（当前页）
+    if (!q.trim()) return mapped;
+    const s = q.trim().toLowerCase();
+    return mapped.filter((it) =>
+      [it.num, it.title, it.brand, it.model, it.oe].some((x) => String(x || "").toLowerCase().includes(s))
+    );
+  }, [rows, q]);
 
   if (loading) return <p className="p-4">Loading...</p>;
-  if (error) {
-    return (
-      <div className="p-4">
-        <h1 className="text-xl font-bold mb-3">库存产品列表</h1>
-        <p className="text-red-600 mb-4">{error}</p>
-      </div>
-    );
-  }
-
-  // 翻页控件
-  const Pager = (
-    <div className="flex items-center gap-2 flex-wrap mb-4">
-      <button
-        onClick={() => setPage((p) => Math.max(1, p - 1))}
-        disabled={page <= 1}
-        className={`px-3 py-1 rounded border ${page <= 1 ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"}`}
-      >
-        上一页
-      </button>
-      <span className="text-sm text-gray-600">第 {page} 页</span>
-      <button
-        onClick={() => setPage((p) => p + 1)}
-        className="px-3 py-1 rounded border hover:bg-gray-50"
-      >
-        下一页
-      </button>
-
-      <span className="ml-4 text-sm text-gray-600">每页</span>
-      <select
-        value={pageSize}
-        onChange={(e) => { setPageSize(Number(e.target.value) || 20); setPage(1); }}
-        className="px-2 py-1 border rounded"
-      >
-        <option value={20}>20</option>
-        <option value={30}>30</option>
-        <option value={50}>50</option>
-      </select>
-      <span className="text-sm text-gray-600">条</span>
-
-      <button
-        onClick={handleDownload}
-        className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-      >
-        下载库存 Excel
-      </button>
-    </div>
-  );
+  if (error) return <p className="p-4 text-red-600">{error}</p>;
 
   return (
     <div className="p-4">
-      <h1 className="text-xl font-bold mb-1">库存产品列表</h1>
+      <h1 className="text-xl font-bold mb-2">库存产品列表</h1>
+      <div className="text-gray-500 mb-3">共 {rows.length} 条（当前页）</div>
 
-      <div className="mb-3 text-sm text-gray-600">共 {items.length} 条（当前页）</div>
-
-      {/* 搜索框 */}
-      <div className="mb-4 flex items-center gap-2">
+      <div className="flex gap-3 items-center mb-3 flex-wrap">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="搜索 编号 / 标题 / OE / 品牌（仅当前页）"
-          className="w-96 max-w-full px-3 py-2 border rounded outline-none focus:ring"
+          className="border px-3 py-2 rounded w-[380px] max-w-full"
         />
-        {q && (
-          <button onClick={() => setQ("")} className="px-3 py-2 border rounded hover:bg-gray-50">
-            清空
-          </button>
-        )}
+        <button
+          className="px-3 py-2 border rounded"
+          onClick={() => setPage(Math.max(0, page - 1))}
+        >
+          上一页
+        </button>
+        <span>第 {page + 1} 页</span>
+        <button
+          className="px-3 py-2 border rounded"
+          onClick={() => setPage(page + 1)}
+        >
+          下一页
+        </button>
+
+        <div className="flex items-center gap-2">
+          <span>每页</span>
+          <select
+            className="border px-2 py-1 rounded"
+            value={size}
+            onChange={(e) => setSize(Number(e.target.value))}
+          >
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+          <span>条</span>
+        </div>
+
+        <a
+          href="https://niuniuparts.com:6001/scm-product/v1/stock2/excel"
+          target="_blank"
+          className="ml-auto px-4 py-2 bg-blue-600 text-white rounded"
+        >
+          下载库存 Excel
+        </a>
       </div>
 
-      {Pager}
-
-      {/* 卡片网格 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filtered.map((it) => {
-          const href = `/stock/${encodeURIComponent(it.num)}?` + new URLSearchParams({
-            product: it.title || "-",
-            oe: it.oe || "-",
-            brand: it.brand || "-",
-            model: it.model || "-",
-            year: "-",
-            image: it.image || "",
-            price: it.price || "",
-          }).toString();
-
+      {/* 卡片列表 */}
+      <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {list.map((it) => {
+          const href = `/stock/${encodeURIComponent(it.num)}?product=${encodeURIComponent(it.title)}&oe=${encodeURIComponent(it.oe)}&brand=${encodeURIComponent(it.brand)}&model=${encodeURIComponent(it.model)}&year=${encodeURIComponent(it.year)}&image=${encodeURIComponent(it.image || "")}&price=${encodeURIComponent(it.price || "")}&stock=${encodeURIComponent(it.stock || "")}`;
           return (
-            <div key={it.num + (it.oe || "")} className="border rounded-2xl p-3 shadow-sm hover:shadow-md transition">
-              <div className="text-base font-semibold mb-2 line-clamp-2">{it.title || "-"}</div>
+            <div key={it.num} className="border rounded-xl p-3">
+              <div className="font-semibold mb-1">{it.title}</div>
               <div className="text-sm text-gray-600 space-y-1 mb-3">
-                <div>品牌：{it.brand || "-"}</div>
-                <div>车型：{it.model || "-"}</div>
-                <div>OE号：{it.oe || "-"}</div>
-                <div>编号：{it.num || "-"}</div>
-                <div>价格：{it.price || "-"}</div>
-                <div>库存：{it.stock || "-"}</div>
+                <div>品牌：{it.brand}</div>
+                <div>车型：{it.model}</div>
+                <div>OE号：{it.oe}</div>
+                <div>编号：{it.num}</div>
+                <div>价格：{it.price}</div>
+                <div>库存：{it.stock}</div>
               </div>
-              <div className="rounded-lg border bg-white flex items-center justify-center" style={{ minHeight: 220 }}>
+
+              <div className="border rounded-lg flex items-center justify-center mb-3" style={{ minHeight: 220 }}>
                 {it.image ? (
                   <img
                     src={it.image}
                     alt={it.num}
-                    style={{ maxWidth: "100%", maxHeight: 220, borderRadius: 8 }}
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    style={{ maxWidth: "100%", maxHeight: 210, objectFit: "contain", borderRadius: 8 }}
                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                   />
                 ) : (
                   <div className="text-gray-400">无图</div>
                 )}
               </div>
-              <div className="mt-3 flex items-center gap-2">
-                <Link href={href} className="px-3 py-2 bg-gray-900 text-white rounded hover:bg-black">
-                  查看详情
-                </Link>
-              </div>
+
+              <Link
+                href={href}
+                className="w-full inline-block text-center px-4 py-2 bg-gray-900 text-white rounded hover:opacity-90"
+              >
+                查看详情
+              </Link>
             </div>
           );
         })}
       </div>
-
-      <div className="mt-4">{Pager}</div>
 
       <p className="text-xs text-gray-500 mt-6">数据源：niuniuparts.com（测试预览用途）</p>
     </div>
