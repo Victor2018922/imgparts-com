@@ -5,66 +5,118 @@ import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/** 在任意对象里搜第一个图片 URL（支持 http/https/相对路径/HTML 片段） */
-function extractFirstImageUrlFromAny(input: any): string | null {
-  try {
-    const text = typeof input === 'string' ? input : JSON.stringify(input ?? {});
-
-    // 1) 直接的 http/https 图片
-    const m1 = text.match(/https?:\/\/[^\s"']+\.(?:jpg|jpeg|png|gif|webp)/i);
-    if (m1?.[0]) return m1[0];
-
-    // 2) 相对路径的图片（常见目录：/upload /uploads /images /img /files）
-    const m2 = text.match(/\/(?:upload|uploads|images|img|files)\/[^\s"']+\.(?:jpg|jpeg|png|gif|webp)/i);
-    if (m2?.[0]) return 'http://niuniuparts.com' + m2[0];
-
-    // 3) <img src="..."> 片段
-    const m3 = text.match(/<img\b[^>]*src=['"]?([^'">\s]+)['"]?/i);
-    if (m3?.[1]) {
-      const src = m3[1];
-      if (/^https?:\/\//i.test(src)) return src;
-      if (src.startsWith('//')) return 'http:' + src;
-      if (src.startsWith('/')) return 'http://niuniuparts.com' + src;
-      return src;
-    }
-
-    // 4) data:image
-    const m4 = text.match(/data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+/);
-    if (m4?.[0]) return m4[0];
-  } catch {}
-  return null;
+/* ========== 工具：把相对路径补全为绝对 http ========== */
+function absolutize(url: string): string {
+  if (!url) return url;
+  let u = url.trim();
+  if (u.startsWith('//')) return 'http:' + u;
+  if (u.startsWith('/')) return 'http://niuniuparts.com' + u;
+  return u;
 }
 
-/** 把任意图片地址经由 HTTPS 代理输出，并做轻量压缩（加速与防混合内容） */
+/* ========== 工具：把任意图片地址走 HTTPS 代理并压缩 ========== */
 function toHttpsImageProxy(raw?: string | null): string | null {
   if (!raw) return null;
-  let u = raw.trim();
-  if (!u) return null;
-
-  // 兼容 //xx 和 /xx
-  if (u.startsWith('//')) u = 'http:' + u;
-  if (u.startsWith('/')) u = 'http://niuniuparts.com' + u;
-
-  // data:image 直出
+  let u = absolutize(raw);
   if (/^data:image\//i.test(u)) return u;
-
-  // 去掉协议给 weserv 代理
   u = u.replace(/^https?:\/\//i, '');
-  // w/h 控制尺寸，fit=contain 保比例，we=auto 输出 webp，q=75 质量，il 渐进
+  // 800x600, 等比 contain, 自动 webp, q=75, 渐进
   return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=800&h=600&fit=contain&we=auto&q=75&il`;
 }
 
-/** 从对象中取值：优先英文 key，其次常见中文 key */
+/* ========== 工具：从任意字符串中尽可能提取 URL ========== */
+function extractUrlsFromText(text: string): string[] {
+  const urls = new Set<string>();
+
+  // 1) 常见图片后缀
+  const reExt = /(https?:\/\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = reExt.exec(text))) urls.add(m[1]);
+
+  // 2) <img src="...">
+  const reImg = /<img\b[^>]*src=['"]?([^'">\s]+)['"]?/gi;
+  while ((m = reImg.exec(text))) urls.add(m[1]);
+
+  // 3) 相对路径（/upload|/uploads|/images|/img|/files）
+  const reRel = /(\/(?:upload|uploads|images|img|files)\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
+  while ((m = reRel.exec(text))) urls.add('http://niuniuparts.com' + m[1]);
+
+  // 4) 兜底：所有 http(s) 字符串，后续再探测是否真图
+  const reAnyHttp = /(https?:\/\/[^\s"'<>]+)/gi;
+  while ((m = reAnyHttp.exec(text))) urls.add(m[1]);
+
+  return Array.from(urls);
+}
+
+/* ========== 工具：深度遍历对象，收集可能的图片候选 URL ========== */
+function collectCandidateUrls(obj: any, max = 2000): string[] {
+  const ret = new Set<string>();
+  const seen = new Set<any>();
+  const stack: any[] = [obj];
+  while (stack.length && ret.size < max) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
+    seen.add(cur);
+    for (const k of Object.keys(cur)) {
+      const v = (cur as AnyObj)[k];
+      if (v == null) continue;
+      if (typeof v === 'string') {
+        extractUrlsFromText(v).forEach((u) => ret.add(u));
+      } else if (Array.isArray(v) || typeof v === 'object') {
+        stack.push(v);
+      }
+      // 字段名命中 img/pic/photo/image 也尝试放进去
+      if (/(img|pic|photo|image)/i.test(k) && typeof v === 'string') {
+        ret.add(v);
+      }
+    }
+  }
+  return Array.from(ret);
+}
+
+/* ========== 工具：并发“探测”候选 URL，哪个能 load 我们就用哪个 ========== */
+function probeFirstWorkingImage(rawUrls: string[], timeoutMs = 5000): Promise<string | null> {
+  const urls = Array.from(new Set(rawUrls.filter(Boolean).map(absolutize)));
+  if (!urls.length) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, timeoutMs);
+
+    urls.slice(0, 30).forEach((u) => {
+      const test = new Image();
+      // 这里用代理地址进行探测，避免 http 混合内容与 Referer 限制
+      test.src = toHttpsImageProxy(u)!;
+      test.onload = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(u);
+        }
+      };
+      test.onerror = () => {
+        // 忽略错误，等待其它候选
+      };
+    });
+  });
+}
+
+/* ========== 工具：从对象里取值（兼顾中英文 key） ========== */
 function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-') {
   if (!obj) return fallback;
   for (const k of keys) {
-    const candidates = [k, k.toLowerCase(), k.toUpperCase()];
-    for (const c of candidates) {
-      if (obj[c] !== undefined && obj[c] !== null && obj[c] !== '') return obj[c];
-    }
+    if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+    const lo = k.toLowerCase();
+    if (obj[lo] !== undefined && obj[lo] !== null && obj[lo] !== '') return obj[lo];
+    const up = k.toUpperCase();
+    if (obj[up] !== undefined && obj[up] !== null && obj[up] !== '') return obj[up];
   }
-  // 常见中文别名
-  const aliasMap: Record<string, string[]> = {
+  const alias: Record<string, string[]> = {
     title: ['标题', '名称', '品名'],
     brand: ['品牌', '品牌名'],
     model: ['车型', '车型名称', '车型名'],
@@ -72,13 +124,12 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
     oe: ['OE', 'OE号', 'OE码', '配件号'],
     num: ['num', '编码', '编号', '货号'],
     price: ['价格', '单价', '售价'],
-    stock: ['库存', '数量', '库存数量', '在库'],
-    image: ['图片', '主图', '图片地址', '图', 'img', 'image'],
+    stock: ['库存', '库存数量', '数量', '在库'],
   };
   for (const k of keys) {
-    const aliases = aliasMap[k];
-    if (aliases) {
-      for (const a of aliases) {
+    const arr = alias[k];
+    if (arr) {
+      for (const a of arr) {
         if (obj[a] !== undefined && obj[a] !== null && obj[a] !== '') return obj[a];
       }
     }
@@ -86,7 +137,7 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
   return fallback;
 }
 
-/** 深度查找：找到包含 num 的那条记录 */
+/* ========== 在列表中找到与 num 匹配的记录 ========== */
 function findByNum(list: any[], num: string): AnyObj | null {
   if (!Array.isArray(list)) return null;
   const norm = (v: any) => String(v ?? '').trim();
@@ -96,7 +147,6 @@ function findByNum(list: any[], num: string): AnyObj | null {
       if (n1 && norm(n1) === num) return it;
       const n2 = pick(it, ['编码', '编号', '货号'], null);
       if (n2 && norm(n2) === num) return it;
-      // 兜底：扁平文本包含
       const txt = JSON.stringify(it);
       if (new RegExp(`["']${num}["']`).test(txt)) return it;
     } catch {}
@@ -104,7 +154,7 @@ function findByNum(list: any[], num: string): AnyObj | null {
   return null;
 }
 
-/** 组件 */
+/* ========== 页面组件 ========== */
 export default function StockDetailPage({
   params,
   searchParams,
@@ -114,9 +164,9 @@ export default function StockDetailPage({
 }) {
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // 先用地址栏参数兜底（列表页跳转时可能带过来），再尝试请求接口补齐字段
   useEffect(() => {
     const baseFromQuery: AnyObj = {
       num,
@@ -127,22 +177,15 @@ export default function StockDetailPage({
       year: searchParams?.year,
       price: searchParams?.price,
       stock: searchParams?.stock,
-      image: searchParams?.image,
-      // 把所有 query 也存一下，后面提取图片会一起扫描
       __rawFromQuery: searchParams,
     };
-
-    // 如果信息已足够，也先渲染；随后再请求接口补充图片等信息
     setDetail(baseFromQuery);
 
     (async () => {
       try {
-        // 一次取 500 条（当前数据量是 500），本页查找匹配 num
         const url = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0';
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json().catch(() => ({} as AnyObj));
-
-        // 兼容不同包裹层
         const list: any[] =
           data?.data?.list ??
           data?.data?.records ??
@@ -152,23 +195,47 @@ export default function StockDetailPage({
           [];
 
         const found = findByNum(list, num);
+        const merged = found ? { ...(baseFromQuery || {}), ...found } : baseFromQuery;
+        setDetail(merged);
 
-        if (found) {
-          // 合并：接口数据优先，其次 query
-          setDetail((prev) => ({
-            ...(prev || {}),
-            ...(found || {}),
-          }));
+        // —— 图片候选收集 —— //
+        const candidates = new Set<string>();
+
+        // 1) 从 merged 的所有字段递归收集
+        collectCandidateUrls(merged).forEach((u) => candidates.add(u));
+
+        // 2) 从 JSON 文本里再扫一遍
+        const fullText = JSON.stringify(merged);
+        extractUrlsFromText(fullText).forEach((u) => candidates.add(u));
+
+        // 3) 从 query 里收集
+        if (searchParams) {
+          const qsText = JSON.stringify(searchParams);
+          extractUrlsFromText(qsText).forEach((u) => candidates.add(u));
         }
-      } catch (err) {
-        console.error('fetch detail error:', err);
+
+        // 4) 最后“大胆猜测”一波常见相对目录（防止后端只给了相对路径或没扩展名）
+        const guessBases = ['/upload/', '/uploads/', '/images/', '/img/', '/files/'];
+        const exts = ['.jpg', '.jpeg', '.png', '.webp'];
+        const oe = String(pick(merged, ['oe'], '') || '');
+        const guesses: string[] = [];
+        [num, oe].forEach((seed) => {
+          if (!seed) return;
+          for (const b of guessBases) for (const e of exts) guesses.push(`http://niuniuparts.com${b}${seed}${e}`);
+        });
+        guesses.forEach((u) => candidates.add(u));
+
+        // —— 并发探测，谁能加载就用谁 —— //
+        const rawOk = await probeFirstWorkingImage(Array.from(candidates));
+        setImgUrl(rawOk ? toHttpsImageProxy(rawOk) : null);
+      } catch (e) {
+        // 忽略错误，页面仍可显示文字信息
       } finally {
         setLoading(false);
       }
     })();
   }, [num, searchParams]);
 
-  // 计算展示字段
   const view = useMemo(() => {
     const d = detail || {};
     return {
@@ -180,15 +247,8 @@ export default function StockDetailPage({
       num: pick(d, ['num'], num),
       price: pick(d, ['price'], '-'),
       stock: pick(d, ['stock'], '-'),
-      rawForImage: d, // 提供给图片提取
     };
   }, [detail, num]);
-
-  // 提取图片并通过 https 代理压缩显示
-  const imageUrl = useMemo(() => {
-    const raw = extractFirstImageUrlFromAny(view.rawForImage);
-    return toHttpsImageProxy(raw);
-  }, [view.rawForImage]);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -205,10 +265,7 @@ export default function StockDetailPage({
       </header>
 
       <div className="mb-4">
-        <Link
-          href="/stock"
-          className="inline-flex items-center gap-2 rounded border px-3 py-2 hover:bg-gray-50"
-        >
+        <Link href="/stock" className="inline-flex items-center gap-2 rounded border px-3 py-2 hover:bg-gray-50">
           ← 返回列表
         </Link>
       </div>
@@ -216,9 +273,9 @@ export default function StockDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 左侧图片 */}
         <div className="w-full">
-          {imageUrl ? (
+          {imgUrl ? (
             <img
-              src={imageUrl}
+              src={imgUrl}
               alt={String(view.num)}
               loading="lazy"
               decoding="async"
@@ -302,9 +359,7 @@ export default function StockDetailPage({
         </div>
       </div>
 
-      {loading && (
-        <div className="mt-6 text-gray-500 text-sm">加载中…（首次加载会稍慢）</div>
-      )}
+      {loading && <div className="mt-6 text-gray-500 text-sm">加载中…（首次加载会稍慢）</div>}
     </div>
   );
 }
