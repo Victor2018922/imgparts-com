@@ -1,6 +1,5 @@
-"use client";
+// 服务端组件：不使用 "use client"
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 
 type StockItem = {
@@ -13,63 +12,40 @@ type StockItem = {
   [k: string]: any;
 };
 
-export default function StockPage() {
-  const [data, setData] = useState<StockItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export const revalidate = 0; // 禁用缓存，始终取最新
 
-  useEffect(() => {
-    fetch("https://niuniuparts.com:6001/scm-product/v1/stock2", {
-      cache: "no-store",
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`upstream_${res.status}`);
-        return res.json();
-      })
-      .then((json) => {
-        console.log("API返回内容:", json); // 调试输出
-        if (Array.isArray(json) && json.length > 0) {
-          setData(json);
-        } else if (json?.data && Array.isArray(json.data)) {
-          setData(json.data);
-        } else {
-          setData([]);
-        }
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error("加载错误:", err);
-        setError("数据加载失败，请稍后再试");
-        setData([]);
-        setLoading(false);
-      });
-  }, []);
-
-  const handleDownload = () => {
-    location.href =
-      "https://niuniuparts.com:6001/scm-product/v1/stock2/excel";
-  };
-
-  if (loading) {
-    return <p className="p-4">Loading...</p>;
+async function fetchStock(): Promise<StockItem[]> {
+  try {
+    const res = await fetch(
+      "https://niuniuparts.com:6001/scm-product/v1/stock2",
+      { cache: "no-store" }
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    if (Array.isArray(json)) return json as StockItem[];
+    if (json?.data && Array.isArray(json.data)) return json.data as StockItem[];
+    return [];
+  } catch {
+    return [];
   }
+}
+
+export default async function StockPage() {
+  const data = await fetchStock();
 
   return (
     <div className="p-4">
       <h1 className="text-xl font-bold mb-4">Stock List</h1>
 
-      {error ? (
-        <p className="mb-3 text-red-600">{error}</p>
-      ) : (
-        <p className="mb-3 text-gray-600">共 {data.length} 条数据</p>
-      )}
+      <p className="mb-3 text-gray-600">共 {data.length} 条数据</p>
 
-      <button
-        onClick={handleDownload}
-        className="mb-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+      <a
+        href="https://niuniuparts.com:6001/scm-product/v1/stock2/excel"
+        className="inline-block mb-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+        target="_blank"
       >
         下载库存 Excel
-      </button>
+      </a>
 
       <table className="w-full border border-gray-300 text-sm">
         <thead>
@@ -83,37 +59,35 @@ export default function StockPage() {
           </tr>
         </thead>
         <tbody>
-          {(data || []).map((item, idx) => {
-            const num = item?.num ? String(item.num) : "";
-            return (
-              <tr key={`${num}-${idx}`} className="hover:bg-gray-50">
-                <td className="border px-2 py-1">
-                  {num ? (
-                    <Link
-                      href={`/stock/${encodeURIComponent(num)}`}
-                      className="text-blue-600 hover:underline"
-                    >
-                      {num}
-                    </Link>
-                  ) : (
-                    "-"
-                  )}
-                </td>
-                <td className="border px-2 py-1">{item?.product ?? "-"}</td>
-                <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
-                <td className="border px-2 py-1">{item?.brand ?? "-"}</td>
-                <td className="border px-2 py-1">{item?.model ?? "-"}</td>
-                <td className="border px-2 py-1">{item?.year ?? "-"}</td>
-              </tr>
-            );
-          })}
-          {(!data || data.length === 0) && (
+          {data.length > 0 ? (
+            data.map((item, idx) => {
+              const num = item?.num ? String(item.num) : "";
+              return (
+                <tr key={`${num}-${idx}`} className="hover:bg-gray-50">
+                  <td className="border px-2 py-1">
+                    {num ? (
+                      <Link
+                        href={`/stock/${encodeURIComponent(num)}`}
+                        className="text-blue-600 hover:underline"
+                      >
+                        {num}
+                      </Link>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td className="border px-2 py-1">{item?.product ?? "-"}</td>
+                  <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
+                  <td className="border px-2 py-1">{item?.brand ?? "-"}</td>
+                  <td className="border px-2 py-1">{item?.model ?? "-"}</td>
+                  <td className="border px-2 py-1">{item?.year ?? "-"}</td>
+                </tr>
+              );
+            })
+          ) : (
             <tr>
-              <td
-                colSpan={6}
-                className="border px-2 py-6 text-center text-gray-500"
-              >
-                暂无数据
+              <td colSpan={6} className="border px-2 py-6 text-center text-gray-500">
+                暂无数据（上游接口无返回或暂时不可用）
               </td>
             </tr>
           )}
@@ -126,4 +100,5 @@ export default function StockPage() {
     </div>
   );
 }
+
 
