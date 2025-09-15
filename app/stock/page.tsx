@@ -95,21 +95,45 @@ function pickStock(row: AnyRec) {
   return v === null || v === undefined || v === "" ? "-" : String(v);
 }
 
-/** 递归在任意层级中找第一张图片 URL（适配各种字段名/结构） */
+/** 规范化 URL：支持 //xxx、/xxx、http(s)://xxx、data:image/... */
+function normalizeUrlMaybeImage(s: string): string | null {
+  const str = s.trim();
+  if (!str) return null;
+
+  // data url
+  if (/^data:image\//i.test(str)) return str;
+
+  // protocol-relative
+  if (str.startsWith("//")) return "https:" + str;
+
+  // site relative path
+  if (str.startsWith("/")) return "https://niuniuparts.com" + str;
+
+  // absolute http(s)
+  if (/^https?:\/\//i.test(str)) return str;
+
+  return null;
+}
+
+/** 判断字符串是否“像图片”：有常见后缀，或 URL 中包含 image/img/photo 等词 */
+function looksLikeImageUrl(u: string): boolean {
+  const s = u.toLowerCase();
+  if (/\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/.test(s)) return true;
+  if (/^data:image\//.test(s)) return true;
+  if (s.includes("/image") || s.includes("/img") || s.includes("/photo") || s.includes("/picture") || s.includes("x-oss-process")) return true;
+  return false;
+}
+
+/** 递归在任意层级中找第一张图片 URL（**更宽松**） */
 function findFirstImageUrlDeep(input: any, depth = 0, seen = new Set<any>()): string | null {
-  if (!input || depth > 5 || seen.has(input)) return null;
+  if (!input || depth > 6 || seen.has(input)) return null;
   seen.add(input);
 
-  // 字符串：匹配图片后缀/带 query 的 URL
   if (typeof input === "string") {
-    const s = input.trim();
-    if (/\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(s)) {
-      if (s.startsWith("//")) return "https:" + s;
-      return s;
-    }
+    const u = normalizeUrlMaybeImage(input);
+    if (u && looksLikeImageUrl(u)) return u;
   }
 
-  // 数组
   if (Array.isArray(input)) {
     for (const item of input) {
       const hit = findFirstImageUrlDeep(item, depth + 1, seen);
@@ -118,15 +142,16 @@ function findFirstImageUrlDeep(input: any, depth = 0, seen = new Set<any>()): st
     return null;
   }
 
-  // 对象：优先常见图片 key，再全量扫描
   if (typeof input === "object") {
+    // 1) 先扫常见图片字段
     const prefer = ["imageUrl","image_url","imgUrl","img_url","image","img","photo","picture","thumb","thumbnail","cover","url","images","imgs","photos","pics","gallery","album","pictures"];
     for (const k of prefer) {
       if (k in input) {
-        const hit = findFirstImageUrlDeep(input[k], depth + 1, seen);
+        const hit = findFirstImageUrlDeep((input as AnyRec)[k], depth + 1, seen);
         if (hit) return hit;
       }
     }
+    // 2) 全量扫描
     for (const v of Object.values(input)) {
       const hit = findFirstImageUrlDeep(v, depth + 1, seen);
       if (hit) return hit;
@@ -170,13 +195,13 @@ export default function StockListPage() {
       const price = pickPrice(row);
       const stock = pickStock(row);
 
-      // **关键：深度扫描图片 URL**
-      const image = findFirstImageUrlDeep(row) || "";
+      // 更激进：深度扫描并宽松识别图片
+      const img = findFirstImageUrlDeep(row);
+      const image = img || "";
 
       return { num, title, brand, model, oe, year, price, stock, image, _raw: row };
     });
 
-    // 简单搜索（当前页）
     if (!q.trim()) return mapped;
     const s = q.trim().toLowerCase();
     return mapped.filter((it) =>
@@ -199,27 +224,17 @@ export default function StockListPage() {
           placeholder="搜索 编号 / 标题 / OE / 品牌（仅当前页）"
           className="border px-3 py-2 rounded w-[380px] max-w-full"
         />
-        <button
-          className="px-3 py-2 border rounded"
-          onClick={() => setPage(Math.max(0, page - 1))}
-        >
+        <button className="px-3 py-2 border rounded" onClick={() => setPage(Math.max(0, page - 1))}>
           上一页
         </button>
         <span>第 {page + 1} 页</span>
-        <button
-          className="px-3 py-2 border rounded"
-          onClick={() => setPage(page + 1)}
-        >
+        <button className="px-3 py-2 border rounded" onClick={() => setPage(page + 1)}>
           下一页
         </button>
 
         <div className="flex items-center gap-2">
           <span>每页</span>
-          <select
-            className="border px-2 py-1 rounded"
-            value={size}
-            onChange={(e) => setSize(Number(e.target.value))}
-          >
+          <select className="border px-2 py-1 rounded" value={size} onChange={(e) => setSize(Number(e.target.value))}>
             <option value={20}>20</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
