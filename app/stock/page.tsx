@@ -1,5 +1,6 @@
-// 服务端组件：不使用 "use client"
+"use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 type StockItem = {
@@ -12,93 +13,91 @@ type StockItem = {
   [k: string]: any;
 };
 
-export const revalidate = 0; // 禁用缓存，始终取最新
+const demoData: StockItem[] = [
+  { num: "610474", product: "Wheel Hub Bearing", oe: "OE-610474", brand: "VW", model: "Golf", year: "2018" },
+  { num: "819077", product: "Brake Pad Set", oe: "OE-819077", brand: "Audi", model: "A4", year: "2017" },
+  { num: "JS0260", product: "Oil Filter", oe: "90915-YZZE1", brand: "Toyota", model: "Corolla", year: "2018" },
+  { num: "1K0129620D", product: "Air Filter", oe: "1K0 129 620 D", brand: "VW", model: "Jetta", year: "2012" },
+  { num: "4F0615301", product: "Shock Absorber", oe: "4F0 615 301", brand: "Audi", model: "A6", year: "2010" },
+];
 
-async function fetchStock(): Promise<StockItem[]> {
-  try {
-    const res = await fetch(
-      "https://niuniuparts.com:6001/scm-product/v1/stock2",
-      { cache: "no-store" }
-    );
-    if (!res.ok) return [];
-    const json = await res.json();
-    if (Array.isArray(json)) return json as StockItem[];
-    if (json?.data && Array.isArray(json.data)) return json.data as StockItem[];
-    return [];
-  } catch {
-    return [];
+export default function StockPage() {
+  const [data, setData] = useState<StockItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [usingDemo, setUsingDemo] = useState(false);
+
+  // 尝试更稳健地解析返回体（兼容 text/JSON、BOM、包壳）
+  const parseResponse = async (res: Response) => {
+    try {
+      return await res.json();
+    } catch {
+      const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
+      try {
+        return JSON.parse(txt);
+      } catch {
+        return txt;
+      }
+    }
+  };
+
+  useEffect(() => {
+    const url = "https://niuniuparts.com:6001/scm-product/v1/stock2";
+    fetch(url, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const raw = await parseResponse(res);
+        let arr: StockItem[] = [];
+        if (Array.isArray(raw)) arr = raw;
+        else if (raw && Array.isArray((raw as any).data)) arr = (raw as any).data;
+        // 如果真实数据为空，自动启用演示数据
+        if (!arr || arr.length === 0) {
+          setData(demoData);
+          setUsingDemo(true);
+        } else {
+          setData(arr);
+          setUsingDemo(false);
+        }
+        setLoading(false);
+      })
+      .catch(() => {
+        // 异常也回退到演示数据（页面不中断）
+        setError("数据源暂不可用，已显示演示数据");
+        setData(demoData);
+        setUsingDemo(true);
+        setLoading(false);
+      });
+  }, []);
+
+  const handleDownload = () => {
+    // 仍然用官方 Excel 接口下载
+    location.href = "https://niuniuparts.com:6001/scm-product/v1/stock2/excel";
+  };
+
+  if (loading) {
+    return <p className="p-4">Loading...</p>;
   }
-}
-
-export default async function StockPage() {
-  const data = await fetchStock();
 
   return (
     <div className="p-4">
-      <h1 className="text-xl font-bold mb-4">Stock List</h1>
+      <h1 className="text-xl font-bold mb-1">Stock List</h1>
+      <div className="mb-3 text-sm">
+        {error ? (
+          <span className="text-red-600">{error}</span>
+        ) : (
+          <span className="text-gray-600">共 {data.length} 条数据</span>
+        )}
+        {usingDemo && (
+          <span className="ml-2 px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700 align-middle">
+            正在使用演示数据
+          </span>
+        )}
+      </div>
 
-      <p className="mb-3 text-gray-600">共 {data.length} 条数据</p>
-
-      <a
-        href="https://niuniuparts.com:6001/scm-product/v1/stock2/excel"
-        className="inline-block mb-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        target="_blank"
+      <button
+        onClick={handleDownload}
+        className="mb-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
       >
         下载库存 Excel
-      </a>
-
-      <table className="w-full border border-gray-300 text-sm">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="border px-2 py-1">Num</th>
-            <th className="border px-2 py-1">Product</th>
-            <th className="border px-2 py-1">OE</th>
-            <th className="border px-2 py-1">Brand</th>
-            <th className="border px-2 py-1">Model</th>
-            <th className="border px-2 py-1">Year</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.length > 0 ? (
-            data.map((item, idx) => {
-              const num = item?.num ? String(item.num) : "";
-              return (
-                <tr key={`${num}-${idx}`} className="hover:bg-gray-50">
-                  <td className="border px-2 py-1">
-                    {num ? (
-                      <Link
-                        href={`/stock/${encodeURIComponent(num)}`}
-                        className="text-blue-600 hover:underline"
-                      >
-                        {num}
-                      </Link>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                  <td className="border px-2 py-1">{item?.product ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.brand ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.model ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.year ?? "-"}</td>
-                </tr>
-              );
-            })
-          ) : (
-            <tr>
-              <td colSpan={6} className="border px-2 py-6 text-center text-gray-500">
-                暂无数据（上游接口无返回或暂时不可用）
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      <p className="text-xs text-gray-500 mt-3">
-        数据源：niuniuparts.com（测试预览用途）
-      </p>
-    </div>
-  );
-}
 
 
