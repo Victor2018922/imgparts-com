@@ -10,54 +10,42 @@ type StockItem = {
   brand?: string;
   model?: string;
   year?: string;
+  // 可能还包含图片、价格等任意字段
   [k: string]: any;
 };
 
-// 从记录里尽量识别“图片URL”
+// 从一条记录中“尽量识别”图片 URL
 function pickImageUrl(row: Record<string, any>): string | null {
-  const keys = Object.keys(row || {});
-  // 优先常见 key
+  if (!row) return null;
   const candidates = [
-    "imageUrl",
-    "image_url",
-    "imgUrl",
-    "img_url",
-    "image",
-    "img",
-    "photo",
-    "picture",
-    "thumb",
-    "thumbnail",
+    "imageUrl", "image_url", "imgUrl", "img_url",
+    "image", "img", "photo", "picture", "thumb", "thumbnail",
   ];
   for (const k of candidates) {
     const v = row[k];
     if (typeof v === "string" && v.trim()) return v.trim();
   }
-  // 兜底：在所有 key 中模糊找包含 image/img/photo/pic/thumb
-  const hit = keys.find((k) => /image|img|photo|pic|thumb/i.test(k));
+  // 兜底：模糊匹配含 image/img/photo/pic/thumb 的字段
+  const hit = Object.keys(row).find((k) => /image|img|photo|pic|thumb/i.test(k));
   const v = hit ? row[hit] : null;
-  return typeof v === "string" && v.trim() ? v.trim() : null;
+  return (typeof v === "string" && v.trim()) ? v.trim() : null;
 }
 
-// 从记录里尽量识别“价格”
+// 从一条记录中“尽量识别”价格
 function pickPrice(row: Record<string, any>): string | null {
-  const keys = Object.keys(row || {});
+  if (!row) return null;
   const candidates = [
-    "price",
-    "unit_price",
-    "unitPrice",
-    "salePrice",
-    "sale_price",
-    "amount",
-    "cost",
+    "price", "unit_price", "unitPrice",
+    "salePrice", "sale_price",
+    "amount", "cost"
   ];
   for (const k of candidates) {
     const v = row[k];
     if (v !== null && v !== undefined && v !== "") return String(v);
   }
-  const hit = keys.find((k) => /price|amount|cost/i.test(k));
+  const hit = Object.keys(row).find((k) => /price|amount|cost/i.test(k));
   const v = hit ? row[hit] : null;
-  return v !== null && v !== undefined && v !== "" ? String(v) : null;
+  return (v !== null && v !== undefined && v !== "") ? String(v) : null;
 }
 
 function buildDetailUrl(it: StockItem) {
@@ -68,6 +56,9 @@ function buildDetailUrl(it: StockItem) {
     brand: (it?.brand ?? "-").toString(),
     model: (it?.model ?? "-").toString(),
     year: (it?.year ?? "-").toString(),
+    // 把图片/价格也一并带过去，便于详情页展示（即便缺失也传占位）
+    image: pickImageUrl(it) ?? "",
+    price: pickPrice(it) ?? "",
   }).toString();
   return `/stock/${encodeURIComponent(num)}?${q}`;
 }
@@ -78,32 +69,26 @@ export default function StockPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 搜索与分页（与后端分页对齐）
+  // 搜索与分页（对齐你给的后端分页参数）
   const [q, setQ] = useState("");
-  const [page, setPage] = useState(1); // 显示给用户的页码（从1开始）
-  const [pageSize, setPageSize] = useState(50); // 将映射到 ?size=
-  // 为了简单，这一步只按“当前页”做搜索（下一步再做跨页搜索/总数统计）
+  const [page, setPage] = useState(1);        // 展示给用户的页码（从 1 开始）
+  const [pageSize, setPageSize] = useState(50);
 
-  // 请求：使用你提供的分页接口
+  // 解析（兼容 text/JSON/BOM）
+  const parseResponse = async (res: Response) => {
+    try {
+      return await res.json();
+    } catch {
+      const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
+      try { return JSON.parse(txt); } catch { return txt; }
+    }
+  };
+
+  // 拉取当前页数据
   useEffect(() => {
     const url = `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${pageSize}&page=${page - 1}`;
     setLoading(true);
     setError(null);
-
-    // 兼容 text/JSON/BOM 的解析函数
-    const parseResponse = async (res: Response) => {
-      try {
-        return await res.json();
-      } catch {
-        const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
-        try {
-          return JSON.parse(txt);
-        } catch {
-          return txt;
-        }
-      }
-    };
-
     fetch(url, { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
@@ -116,13 +101,13 @@ export default function StockPage() {
         setData(arr || []);
       })
       .catch(() => {
-        setError("数据加载失败，请稍后再试");
+        setError("数据加载失败，请稍后重试");
         setData([]);
       })
       .finally(() => setLoading(false));
   }, [page, pageSize]);
 
-  // Excel 下载：跟随当前分页参数
+  // Excel 下载（跟随当前分页参数）
   const handleDownload = () => {
     const url = `https://niuniuparts.com:6001/scm-product/v1/stock2/excel?size=${pageSize}&page=${page - 1}`;
     location.href = url;
@@ -143,7 +128,7 @@ export default function StockPage() {
 
   if (loading) return <p className="p-4">Loading...</p>;
 
-  // 分页控件（上一页 / 下一页）
+  // 分页控件（上一页 / 下一页 + 每页条数）
   const Pager = (
     <div className="flex items-center gap-2 flex-wrap mb-3">
       <button
@@ -164,10 +149,7 @@ export default function StockPage() {
       <span className="ml-4 text-sm text-gray-600">每页</span>
       <select
         value={pageSize}
-        onChange={(e) => {
-          setPageSize(Number(e.target.value) || 50);
-          setPage(1); // 切换每页条数时回到第一页
-        }}
+        onChange={(e) => { setPageSize(Number(e.target.value) || 50); setPage(1); }}
         className="px-2 py-1 border rounded"
       >
         <option value={20}>20</option>
@@ -183,11 +165,7 @@ export default function StockPage() {
       <h1 className="text-xl font-bold mb-1">Stock List</h1>
 
       <div className="mb-3 text-sm flex items-center gap-3 flex-wrap">
-        {error ? (
-          <span className="text-red-600">{error}</span>
-        ) : (
-          <span className="text-gray-600">本页 {data.length} 条数据</span>
-        )}
+        <span className="text-gray-600">本页 {data.length} 条数据</span>
         <span className="text-gray-500">当前筛选：{filtered.length} 条</span>
         <button
           onClick={handleDownload}
@@ -203,6 +181,7 @@ export default function StockPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="搜索 Num / Product / OE / Brand（仅当前页）"
+          className="w-80 max-w-full px-3 py-2 border rounded outline-none focus:ring"
         />
         {q && (
           <button onClick={() => setQ("")} className="px-3 py-2 border rounded hover:bg-gray-50">
@@ -233,6 +212,7 @@ export default function StockPage() {
               const num = item?.num ? String(item.num) : "";
               const imgUrl = pickImageUrl(item);
               const price = pickPrice(item);
+
               return (
                 <tr key={`${num || "row"}-${idx}`} className="hover:bg-gray-50">
                   <td className="border px-2 py-1">
@@ -240,10 +220,8 @@ export default function StockPage() {
                       <img
                         src={imgUrl}
                         alt={num}
-                        style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8 }}
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = "none";
-                        }}
+                        style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6 }}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                       />
                     ) : (
                       <span className="text-gray-400">无图</span>
@@ -254,9 +232,7 @@ export default function StockPage() {
                       <Link href={buildDetailUrl(item)} className="text-blue-600 hover:underline">
                         {num}
                       </Link>
-                    ) : (
-                      "-"
-                    )}
+                    ) : "-"}
                   </td>
                   <td className="border px-2 py-1">{item?.product ?? "-"}</td>
                   <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
@@ -284,4 +260,3 @@ export default function StockPage() {
     </div>
   );
 }
-
