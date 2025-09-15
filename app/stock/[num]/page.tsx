@@ -1,38 +1,13 @@
-/** 统一把可能的图片地址规范成可加载的 HTTPS 绝对地址 */
-function normalizeMaybeImageUrl(s: string): string | null {
-  let str = (s || "").trim();
-  if (!str) return null;
-
-  // 内联 data:image
-  if (/^data:image\//i.test(str)) return str;
-
-  // //xx 开头 -> https://xx
-  if (str.startsWith("//")) str = "https:" + str;
-
-  // /xx 开头 -> https://niuniuparts.com/xx
-  if (str.startsWith("/")) str = "https://niuniuparts.com" + str;
-
-  // 强制把 http:// 升级为 https://（避免 https 页面混合内容被浏览器拦截）
-  str = str.replace(/^http:\/\//i, "https://");
-
-  // 简单兜底：像 http(s)://xx 或 data:image/ 才返回
-  if (/^https?:\/\//i.test(str) || /^data:image\//i.test(str)) return str;
-
-  // 如果是一段 HTML，尝试提取 <img src="...">
-  const m = str.match(/<img\b[^>]*src=['"]?([^'">\s]+)['"]?/i);
-  if (m?.[1]) return normalizeMaybeImageUrl(m[1]);
-
-  return null;
-}
-
-/** 在对象任意层级里找第一个可能的图片 URL（不依赖后缀名） */
+/** 从任意字段里扒出第一个可能的图片 URL（支持 <img src="..."> 片段） */
 function pickFirstImageUrlDeep(input: any, depth = 0, seen = new Set<any>()): string | null {
   if (!input || depth > 6 || seen.has(input)) return null;
   seen.add(input);
 
   if (typeof input === "string") {
-    const u = normalizeMaybeImageUrl(input);
-    if (u) return u;
+    // 如果是一段 HTML，尝试提取 <img src="...">
+    const m = input.match(/<img\b[^>]*src=['"]?([^'">\s]+)['"]?/i);
+    if (m?.[1]) return m[1];
+    return input.trim();
   }
 
   if (Array.isArray(input)) {
@@ -44,10 +19,10 @@ function pickFirstImageUrlDeep(input: any, depth = 0, seen = new Set<any>()): st
   }
 
   if (typeof input === "object") {
-    // 常见的图片字段优先
+    // 常见字段优先
     const prefer = [
-      "image","imageUrl","image_url","img","imgUrl","img_url",
-      "thumb","thumbnail","cover","picture","pictures","photo","photos","gallery","album",
+      "image","imageUrl","image_url","img","imgUrl","img_url","thumb","thumbnail",
+      "cover","picture","pictures","photo","photos","gallery","album",
       "url","pic","picUrl","pic_url","fileUrl","file_url","path","filePath","filepath"
     ];
     for (const k of prefer) {
@@ -56,11 +31,32 @@ function pickFirstImageUrlDeep(input: any, depth = 0, seen = new Set<any>()): st
         if (hit) return hit;
       }
     }
-    // 其次全量扫一遍
+    // 全量兜底
     for (const v of Object.values(input)) {
       const hit = pickFirstImageUrlDeep(v, depth + 1, seen);
       if (hit) return hit;
     }
   }
   return null;
+}
+
+/** 用 images.weserv.nl 代理输出 HTTPS 图片，并做轻量压缩/缩放 */
+function toHttpsProxy(raw?: string | null): string | null {
+  if (!raw) return null;
+  let u = raw.trim();
+  if (!u) return null;
+
+  // 支持 //xx 和 /xx
+  if (u.startsWith("//")) u = "http:" + u;
+  if (u.startsWith("/")) u = "http://niuniuparts.com" + u;
+
+  // 如果是 data:image，直接用
+  if (/^data:image\//i.test(u)) return u;
+
+  // images.weserv.nl 需要去掉协议
+  u = u.replace(/^https?:\/\//i, "");
+
+  // 参数说明：
+  // w/h 控制画布；fit=contain 保持比例；we=auto WebP；il 渐进式
+  return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=800&h=600&fit=contain&we&il`;
 }
