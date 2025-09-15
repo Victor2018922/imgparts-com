@@ -5,7 +5,7 @@ import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/* ========== 工具：URL 处理与图片代理（压缩） ========== */
+/* ========== 工具：URL 处理与图片代理（支持自定义尺寸与质量） ========== */
 function absolutize(url: string): string {
   if (!url) return url;
   let u = url.trim();
@@ -13,12 +13,13 @@ function absolutize(url: string): string {
   if (u.startsWith('/')) return 'http://niuniuparts.com' + u;
   return u;
 }
-function toProxy(raw?: string | null, w = 800, h = 600): string | null {
+function toProxy(raw?: string | null, w = 800, h = 600, q = 75): string | null {
   if (!raw) return null;
   let u = absolutize(raw);
-  if (/^data:image\//i.test(u)) return u; // 内联图直出
-  u = u.replace(/^https?:\/\//i, '');     // weserv 需要无协议 host
-  return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=75&il`;
+  if (/^data:image\//i.test(u)) return u;        // 内联图直出
+  u = u.replace(/^https?:\/\//i, '');            // weserv 需要无协议 host
+  // fit=contain 保比例，we=auto 输出 webp，il 渐进
+  return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=${q}&il`;
 }
 
 /* ========== 工具：从文本提取 URL（含相对路径、<img src>） ========== */
@@ -101,11 +102,11 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
     title: ['标题', '名称', '品名', 'title', 'product', 'name'],
     brand: ['品牌', 'brand'],
     model: ['车型', 'model'],
-    year: ['年份', '年款', 'year'],
-    oe:   ['OE', 'oe', '配件号', '编号'],
-    num:  ['num', '编码', '编号', '货号'],
-    price:['价格', '单价', '售价', 'price'],
-    stock:['库存', '库存数量', '数量', '在库', 'stock'],
+    year:  ['年份', '年款', 'year'],
+    oe:    ['OE', 'oe', '配件号', '编号'],
+    num:   ['num', '编码', '编号', '货号'],
+    price: ['价格', '单价', '售价', 'price'],
+    stock: ['库存', '库存数量', '数量', '在库', 'stock'],
   };
   for (const k of keys) {
     if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
@@ -144,11 +145,25 @@ export default function StockDetailPage({
 }) {
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
-  const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<string[]>([]);
+  const [currentRaw, setCurrentRaw] = useState<string | null>(null); // 记录当前选中的“原始URL”
+  const [imgUrl, setImgUrl] = useState<string | null>(null);         // 实际展示（可能是小图或大图）
   const [loading, setLoading] = useState<boolean>(true);
 
   const stripRef = useRef<HTMLDivElement>(null);
+
+  // 统一的“渐进切换”函数：先小图立即显示，再预载大图，完成后自动升级
+  const setMainFromRaw = (raw: string) => {
+    setCurrentRaw(raw);
+    const small = toProxy(raw, 600, 450, 60);   // 小图，快速
+    const big   = toProxy(raw, 1000, 750, 80);  // 大图，清晰
+    setImgUrl(small || null);                   // 先秒出小图
+    if (big) {
+      const pre = new Image();
+      pre.src = big;
+      pre.onload = () => setImgUrl(big);        // 大图加载好后自动替换
+    }
+  };
 
   useEffect(() => {
     const baseFromQuery: AnyObj = {
@@ -190,14 +205,11 @@ export default function StockDetailPage({
         if (searchParams)
           extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
 
-        // 去重 + 过滤不可代理的空值
         const all = Array.from(candidates).filter(Boolean);
-
-        // 设定缩略图数组（全部可滚动，视口约 12 张）
         setThumbs(all);
 
-        // 设定初始大图：用第一个候选（走代理压缩）
-        setImgUrl(all.length ? toProxy(all[0], 800, 600) : null);
+        // 初始主图（渐进加载）
+        if (all.length) setMainFromRaw(all[0]);
       } finally {
         setLoading(false);
       }
@@ -242,7 +254,7 @@ export default function StockDetailPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 左侧：大图 + 缩略图条 */}
+        {/* 左侧：大图 + 缩略图条（渐进切换） */}
         <div className="w-full">
           {/* 大图 */}
           {imgUrl ? (
@@ -311,13 +323,13 @@ export default function StockDetailPage({
                 style={{ scrollBehavior: 'smooth' }}
               >
                 {thumbs.map((raw, idx) => {
-                  const proxy = toProxy(raw, 120, 120);
+                  const proxy = toProxy(raw, 120, 120, 70);
                   if (!proxy) return null;
-                  const active = imgUrl === toProxy(raw, 800, 600);
+                  const active = currentRaw === raw; // 以原始URL判断“选中”状态
                   return (
                     <button
                       key={idx}
-                      onClick={() => setImgUrl(toProxy(raw, 800, 600))}
+                      onClick={() => setMainFromRaw(raw)}
                       className={`flex-shrink-0 border rounded ${active ? 'border-blue-600' : 'border-gray-200'} bg-white`}
                       style={{ width: 96, height: 80 }}
                       title={raw}
