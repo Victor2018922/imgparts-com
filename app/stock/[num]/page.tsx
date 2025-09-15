@@ -5,7 +5,7 @@ import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/* ========== 工具：把相对路径补全为绝对 http ========== */
+/** 将相对/协议相对路径补成 http 绝对地址 */
 function absolutize(url: string): string {
   if (!url) return url;
   let u = url.trim();
@@ -14,19 +14,20 @@ function absolutize(url: string): string {
   return u;
 }
 
-/* ========== 工具：把任意图片地址走 HTTPS 代理并压缩 ========== */
-function toHttpsImageProxy(raw?: string | null): string | null {
+/** 统一通过 HTTPS 图片代理输出（自动压缩，避免混合内容/防盗链） */
+function toProxy(raw?: string | null, w = 800, h = 600): string | null {
   if (!raw) return null;
   let u = absolutize(raw);
   if (/^data:image\//i.test(u)) return u;
+  // weserv 要求 host 不带协议，支持 http 源；自动 webp、q=75
   u = u.replace(/^https?:\/\//i, '');
-  // 800x600, 等比 contain, 自动 webp, q=75, 渐进
-  return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=800&h=600&fit=contain&we=auto&q=75&il`;
+  return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=75&il`;
 }
 
-/* ========== 工具：从任意字符串中尽可能提取 URL ========== */
+/** 从任意字符串中尽可能提取 URL */
 function extractUrlsFromText(text: string): string[] {
   const urls = new Set<string>();
+  if (!text) return [];
 
   // 1) 常见图片后缀
   const reExt = /(https?:\/\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
@@ -41,95 +42,91 @@ function extractUrlsFromText(text: string): string[] {
   const reRel = /(\/(?:upload|uploads|images|img|files)\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
   while ((m = reRel.exec(text))) urls.add('http://niuniuparts.com' + m[1]);
 
-  // 4) 兜底：所有 http(s) 字符串，后续再探测是否真图
-  const reAnyHttp = /(https?:\/\/[^\s"'<>]+)/gi;
-  while ((m = reAnyHttp.exec(text))) urls.add(m[1]);
+  // 4) 兜底所有 http(s)
+  const reAny = /(https?:\/\/[^\s"'<>]+)/gi;
+  while ((m = reAny.exec(text))) urls.add(m[1]);
 
   return Array.from(urls);
 }
 
-/* ========== 工具：深度遍历对象，收集可能的图片候选 URL ========== */
-function collectCandidateUrls(obj: any, max = 2000): string[] {
+/** 深度遍历对象，搜集所有可能的图片字段 */
+function collectCandidateUrls(obj: any, max = 3000): string[] {
   const ret = new Set<string>();
   const seen = new Set<any>();
   const stack: any[] = [obj];
+
+  // 图片相关的 key 词
+  const imgKeys = [
+    'image', 'imageurl', 'image_url', 'imagePath', 'imageList', 'images', 'pics', 'pictures', 'photos',
+    'thumbnail', 'thumb', 'thumburl', 'cover', 'logo', 'banner', 'mainpic', 'main_pic', 'img', 'imgurl',
+    '图片', '图片1', '图片2', '封面', '主图', '相片'
+  ];
+
   while (stack.length && ret.size < max) {
     const cur = stack.pop();
     if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
     seen.add(cur);
+
     for (const k of Object.keys(cur)) {
       const v = (cur as AnyObj)[k];
-      if (v == null) continue;
-      if (typeof v === 'string') {
-        extractUrlsFromText(v).forEach((u) => ret.add(u));
-      } else if (Array.isArray(v) || typeof v === 'object') {
-        stack.push(v);
+
+      // 命中图片相关 key
+      if (imgKeys.some((kw) => k.toLowerCase().includes(kw.toLowerCase()))) {
+        if (typeof v === 'string') {
+          extractUrlsFromText(v).forEach((u) => ret.add(u));
+          if (/\.(jpg|jpeg|png|gif|webp)(\?|#|$)/i.test(v)) ret.add(v);
+        } else if (Array.isArray(v)) {
+          v.forEach((x) => {
+            if (typeof x === 'string') {
+              extractUrlsFromText(x).forEach((u) => ret.add(u));
+              if (/\.(jpg|jpeg|png|gif|webp)(\?|#|$)/i.test(x)) ret.add(x);
+            } else if (x && typeof x === 'object') {
+              // 对象里常见 url 字段
+              ['url', 'src', 'path'].forEach((kk) => {
+                if (typeof x[kk] === 'string') {
+                  ret.add(x[kk]);
+                  extractUrlsFromText(x[kk]).forEach((u) => ret.add(u));
+                }
+              });
+            }
+          });
+        } else if (v && typeof v === 'object') {
+          ['url', 'src', 'path'].forEach((kk) => {
+            if (typeof v[kk] === 'string') {
+              ret.add(v[kk]);
+              extractUrlsFromText(v[kk]).forEach((u) => ret.add(u));
+            }
+          });
+        }
       }
-      // 字段名命中 img/pic/photo/image 也尝试放进去
-      if (/(img|pic|photo|image)/i.test(k) && typeof v === 'string') {
-        ret.add(v);
-      }
+
+      // 任意字符串里也扫
+      if (typeof v === 'string') extractUrlsFromText(v).forEach((u) => ret.add(u));
+      // 继续深入
+      if (Array.isArray(v) || (v && typeof v === 'object')) stack.push(v);
     }
   }
   return Array.from(ret);
 }
 
-/* ========== 工具：并发“探测”候选 URL，哪个能 load 我们就用哪个 ========== */
-function probeFirstWorkingImage(rawUrls: string[], timeoutMs = 5000): Promise<string | null> {
-  const urls = Array.from(new Set(rawUrls.filter(Boolean).map(absolutize)));
-  if (!urls.length) return Promise.resolve(null);
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    urls.slice(0, 30).forEach((u) => {
-      const test = new Image();
-      // 这里用代理地址进行探测，避免 http 混合内容与 Referer 限制
-      test.src = toHttpsImageProxy(u)!;
-      test.onload = () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(u);
-        }
-      };
-      test.onerror = () => {
-        // 忽略错误，等待其它候选
-      };
-    });
-  });
-}
-
-/* ========== 工具：从对象里取值（兼顾中英文 key） ========== */
+/** 简单取值（兼容中英文 key） */
 function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-') {
   if (!obj) return fallback;
-  for (const k of keys) {
-    if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
-    const lo = k.toLowerCase();
-    if (obj[lo] !== undefined && obj[lo] !== null && obj[lo] !== '') return obj[lo];
-    const up = k.toUpperCase();
-    if (obj[up] !== undefined && obj[up] !== null && obj[up] !== '') return obj[up];
-  }
   const alias: Record<string, string[]> = {
-    title: ['标题', '名称', '品名'],
-    brand: ['品牌', '品牌名'],
-    model: ['车型', '车型名称', '车型名'],
-    year: ['年份', '年款'],
-    oe: ['OE', 'OE号', 'OE码', '配件号'],
+    title: ['标题', '名称', '品名', 'title', 'product', 'name'],
+    brand: ['品牌', 'brand'],
+    model: ['车型', 'model'],
+    year: ['年份', '年款', 'year'],
+    oe: ['OE', 'oe', '配件号', '编号'],
     num: ['num', '编码', '编号', '货号'],
-    price: ['价格', '单价', '售价'],
-    stock: ['库存', '库存数量', '数量', '在库'],
+    price: ['价格', '单价', '售价', 'price'],
+    stock: ['库存', '库存数量', '数量', '在库', 'stock'],
   };
   for (const k of keys) {
-    const arr = alias[k];
-    if (arr) {
-      for (const a of arr) {
+    if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+    const group = alias[k];
+    if (group) {
+      for (const a of group) {
         if (obj[a] !== undefined && obj[a] !== null && obj[a] !== '') return obj[a];
       }
     }
@@ -137,7 +134,7 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
   return fallback;
 }
 
-/* ========== 在列表中找到与 num 匹配的记录 ========== */
+/** 在列表中按 num 尽量找到一条记录 */
 function findByNum(list: any[], num: string): AnyObj | null {
   if (!Array.isArray(list)) return null;
   const norm = (v: any) => String(v ?? '').trim();
@@ -154,7 +151,38 @@ function findByNum(list: any[], num: string): AnyObj | null {
   return null;
 }
 
-/* ========== 页面组件 ========== */
+/** 并发探测，哪个能加载就用哪个；同时返回全部候选（用于页面内可视化） */
+async function probeFirstWorkingImage(rawUrls: string[], timeoutMs = 5000) {
+  const urls = Array.from(new Set(rawUrls.filter(Boolean).map(absolutize)));
+  const candidates = urls.slice(0, 40);
+  if (!candidates.length) return { ok: null as string | null, all: candidates };
+
+  const ok = await new Promise<string | null>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, timeoutMs);
+
+    candidates.forEach((u) => {
+      const img = new Image();
+      img.src = toProxy(u, 40, 40)!; // 用代理小图探测
+      img.onload = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(u);
+        }
+      };
+      img.onerror = () => {};
+    });
+  });
+
+  return { ok, all: candidates };
+}
+
 export default function StockDetailPage({
   params,
   searchParams,
@@ -165,6 +193,8 @@ export default function StockDetailPage({
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [allCandidates, setAllCandidates] = useState<string[]>([]);
+  const [showCandidates, setShowCandidates] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -183,8 +213,8 @@ export default function StockDetailPage({
 
     (async () => {
       try {
-        const url = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0';
-        const res = await fetch(url, { cache: 'no-store' });
+        // 拉列表（500 条），在前端匹配到当前 num 的完整对象
+        const res = await fetch('https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0', { cache: 'no-store' });
         const data = await res.json().catch(() => ({} as AnyObj));
         const list: any[] =
           data?.data?.list ??
@@ -198,38 +228,35 @@ export default function StockDetailPage({
         const merged = found ? { ...(baseFromQuery || {}), ...found } : baseFromQuery;
         setDetail(merged);
 
-        // —— 图片候选收集 —— //
+        // 收集候选
         const candidates = new Set<string>();
 
-        // 1) 从 merged 的所有字段递归收集
+        // 1) 深度遍历所有字段
         collectCandidateUrls(merged).forEach((u) => candidates.add(u));
 
-        // 2) 从 JSON 文本里再扫一遍
-        const fullText = JSON.stringify(merged);
-        extractUrlsFromText(fullText).forEach((u) => candidates.add(u));
+        // 2) 原始 JSON 字符串再扫一遍
+        extractUrlsFromText(JSON.stringify(merged)).forEach((u) => candidates.add(u));
 
-        // 3) 从 query 里收集
-        if (searchParams) {
-          const qsText = JSON.stringify(searchParams);
-          extractUrlsFromText(qsText).forEach((u) => candidates.add(u));
-        }
+        // 3) query 里可能带来的图片
+        if (searchParams) extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
 
-        // 4) 最后“大胆猜测”一波常见相对目录（防止后端只给了相对路径或没扩展名）
+        // 4) 再做几组“大胆猜测”（按 num / oe 拼常见目录）
         const guessBases = ['/upload/', '/uploads/', '/images/', '/img/', '/files/'];
-        const exts = ['.jpg', '.jpeg', '.png', '.webp'];
+        const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
         const oe = String(pick(merged, ['oe'], '') || '');
-        const guesses: string[] = [];
         [num, oe].forEach((seed) => {
           if (!seed) return;
-          for (const b of guessBases) for (const e of exts) guesses.push(`http://niuniuparts.com${b}${seed}${e}`);
+          for (const b of guessBases) for (const e of exts) candidates.add(`http://niuniuparts.com${b}${seed}${e}`);
         });
-        guesses.forEach((u) => candidates.add(u));
 
-        // —— 并发探测，谁能加载就用谁 —— //
-        const rawOk = await probeFirstWorkingImage(Array.from(candidates));
-        setImgUrl(rawOk ? toHttpsImageProxy(rawOk) : null);
-      } catch (e) {
-        // 忽略错误，页面仍可显示文字信息
+        const arr = Array.from(candidates);
+        setAllCandidates(arr);
+
+        // 并发探测
+        const { ok } = await probeFirstWorkingImage(arr);
+        setImgUrl(ok ? toProxy(ok) : null);
+      } catch {
+        // ignore
       } finally {
         setLoading(false);
       }
@@ -239,7 +266,7 @@ export default function StockDetailPage({
   const view = useMemo(() => {
     const d = detail || {};
     return {
-      title: pick(d, ['title', 'product', 'name'], '-'),
+      title: pick(d, ['title'], '-'),
       brand: pick(d, ['brand'], '-'),
       model: pick(d, ['model'], '-'),
       year: pick(d, ['year'], '-'),
@@ -264,14 +291,23 @@ export default function StockDetailPage({
         </a>
       </header>
 
-      <div className="mb-4">
+      <div className="mb-4 flex items-center gap-3">
         <Link href="/stock" className="inline-flex items-center gap-2 rounded border px-3 py-2 hover:bg-gray-50">
           ← 返回列表
         </Link>
+
+        {/* 看不到图时，展开候选缩略图（不需要你打开控制台） */}
+        <button
+          onClick={() => setShowCandidates((s) => !s)}
+          className="rounded border px-3 py-2 hover:bg-gray-50 text-sm"
+          title="当主图无法显示时，点击可查看系统自动搜到的候选图片，如有任意缩略图出现，系统会自动使用它作为主图。"
+        >
+          {showCandidates ? '收起图片候选' : '显示图片候选'}
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 左侧图片 */}
+        {/* 左侧：主图 */}
         <div className="w-full">
           {imgUrl ? (
             <img
@@ -311,9 +347,41 @@ export default function StockDetailPage({
               无图
             </div>
           )}
+
+          {/* 候选缩略图（仅视觉辅助，不懂代码也能看） */}
+          {showCandidates && allCandidates.length > 0 && (
+            <div className="mt-4">
+              <div className="mb-2 text-sm text-gray-500">
+                系统自动找到 {allCandidates.length} 个候选图片地址（仅显示前 24 个缩略图）：
+              </div>
+              <div className="grid grid-cols-6 gap-2">
+                {allCandidates.slice(0, 24).map((u, idx) => (
+                  <a
+                    key={idx}
+                    href={toProxy(u, 120, 120) || '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block border border-gray-200 rounded overflow-hidden"
+                    title={u}
+                  >
+                    <img
+                      src={toProxy(u, 120, 120) || ''}
+                      alt={`cand-${idx}`}
+                      referrerPolicy="no-referrer"
+                      style={{ width: '100%', height: 80, objectFit: 'contain', background: '#fafafa' }}
+                      onLoad={() => {
+                        // 一旦有候选能加载出来，就把它设为主图
+                        if (!imgUrl) setImgUrl(toProxy(u, 800, 600));
+                      }}
+                    />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* 右侧信息 */}
+        {/* 右侧：文本信息 */}
         <div className="w-full">
           <div className="rounded border p-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-[15px] leading-7">
