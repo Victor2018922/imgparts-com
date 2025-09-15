@@ -39,9 +39,14 @@ export default function StockPage() {
   const [error, setError] = useState<string | null>(null);
   const [usingDemo, setUsingDemo] = useState(false);
 
+  // 搜索
   const [q, setQ] = useState("");
 
-  // 尽量稳健解析返回体
+  // 分页
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
+  // 稳健解析返回体
   const parseResponse = async (res: Response) => {
     try {
       return await res.json();
@@ -95,7 +100,55 @@ export default function StockPage() {
     });
   }, [q, data]);
 
+  // 搜索/每页条数变化时回到第1页；同时防止页码越界
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filtered.length / pageSize)),
+    [filtered.length, pageSize]
+  );
+  useEffect(() => { setPage(1); }, [q, pageSize, data]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [totalPages, page]);
+
+  const start = (page - 1) * pageSize;
+  const pageData = filtered.slice(start, start + pageSize);
+
   if (loading) return <p className="p-4">Loading...</p>;
+
+  // 分页控件（顶部和底部各渲染一次）
+  const Pager = (
+    <div className="flex items-center gap-2 flex-wrap mb-3">
+      <button
+        onClick={() => setPage((p) => Math.max(1, p - 1))}
+        disabled={page <= 1}
+        className={`px-3 py-1 rounded border ${page <= 1 ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"}`}
+      >
+        上一页
+      </button>
+      <span className="text-sm text-gray-600">
+        第 {page} / {totalPages} 页
+      </span>
+      <button
+        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+        disabled={page >= totalPages}
+        className={`px-3 py-1 rounded border ${page >= totalPages ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"}`}
+      >
+        下一页
+      </button>
+
+      <span className="ml-4 text-sm text-gray-600">每页</span>
+      <select
+        value={pageSize}
+        onChange={(e) => setPageSize(Number(e.target.value) || 50)}
+        className="px-2 py-1 border rounded"
+      >
+        <option value={20}>20</option>
+        <option value={50}>50</option>
+        <option value={100}>100</option>
+      </select>
+      <span className="text-sm text-gray-600">条</span>
+    </div>
+  );
 
   return (
     <div className="p-4">
@@ -113,9 +166,16 @@ export default function StockPage() {
           </span>
         )}
         <span className="text-gray-500">当前筛选：{filtered.length} 条</span>
+        <button
+          onClick={handleDownload}
+          className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+        >
+          下载库存 Excel
+        </button>
       </div>
 
-      <div className="mb-4 flex items-center gap-2">
+      {/* 搜索框 */}
+      <div className="mb-3 flex items-center gap-2">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -127,13 +187,10 @@ export default function StockPage() {
             清空
           </button>
         )}
-        <button
-          onClick={handleDownload}
-          className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          下载库存 Excel
-        </button>
       </div>
+
+      {/* 顶部分页控件 */}
+      {Pager}
 
       <table className="w-full border border-gray-300 text-sm">
         <thead>
@@ -147,11 +204,11 @@ export default function StockPage() {
           </tr>
         </thead>
         <tbody>
-          {filtered.length > 0 ? (
-            filtered.map((item, idx) => {
+          {pageData.length > 0 ? (
+            pageData.map((item, idx) => {
               const num = item?.num ? String(item.num) : "";
               return (
-                <tr key={`${num || "row"}-${idx}`} className="hover:bg-gray-50">
+                <tr key={`${num || "row"}-${start + idx}`} className="hover:bg-gray-50">
                   <td className="border px-2 py-1">
                     {num ? (
                       <Link href={buildDetailUrl(item)} className="text-blue-600 hover:underline">
@@ -178,6 +235,9 @@ export default function StockPage() {
           )}
         </tbody>
       </table>
+
+      {/* 底部分页控件 */}
+      <div className="mt-3">{Pager}</div>
 
       <p className="text-xs text-gray-500 mt-3">数据源：niuniuparts.com（测试预览用途）</p>
     </div>
