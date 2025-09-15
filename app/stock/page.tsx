@@ -15,22 +15,41 @@ interface StockItem {
 export default function StockPage() {
   const [data, setData] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("https://niuniuparts.com:6001/scm-product/v1/stock2")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("API 请求失败: " + res.status);
+        }
+        return res.json();
+      })
       .then((result) => {
         setData(result);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Fetch Error:", err);
+        setError("数据加载失败，请稍后重试");
         setLoading(false);
       });
   }, []);
 
   const handleDownload = () => {
-    window.open("https://niuniuparts.com:6001/scm-product/v1/stock2/excel", "_blank");
+    try {
+      window.open("https://niuniuparts.com:6001/scm-product/v1/stock2/excel", "_blank");
+    } catch (err) {
+      console.error("Download Error:", err);
+    }
   };
 
   if (loading) {
     return <p className="p-4">Loading...</p>;
+  }
+
+  if (error) {
+    return <p className="p-4 text-red-600">{error}</p>;
   }
 
   return (
