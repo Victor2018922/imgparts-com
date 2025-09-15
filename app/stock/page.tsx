@@ -3,134 +3,218 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-type StockItem = {
-  num?: string;
-  product?: string;
-  oe?: string;
-  brand?: string;
-  model?: string;
-  year?: string;
-  // 可能还包含图片、价格等任意字段
-  [k: string]: any;
-};
+/** -------- 工具：通用解析 + 字段识别 -------- */
 
-// 从一条记录中“尽量识别”图片 URL
-function pickImageUrl(row: Record<string, any>): string | null {
+type AnyRec = Record<string, any>;
+
+function safeJsonParse(text: string) {
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+async function parseResponse(res: Response) {
+  try {
+    return await res.json();
+  } catch {
+    const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
+    return safeJsonParse(txt);
+  }
+}
+
+/** 在对象树里“找到第一个数组对象列表” */
+function findArrayInObject(input: any): any[] {
+  if (Array.isArray(input)) return input;
+  if (input && typeof input === "object") {
+    // 常见容器字段
+    const candidates = ["data", "records", "list", "content", "items", "rows", "result"];
+    for (const k of candidates) {
+      const v = (input as AnyRec)[k];
+      if (Array.isArray(v)) return v;
+    }
+    // 否则遍历一层 value，找最大的数组
+    let best: any[] = [];
+    for (const v of Object.values(input)) {
+      if (Array.isArray(v) && v.length > best.length) best = v;
+    }
+    if (best.length) return best;
+  }
+  return [];
+}
+
+/** 统一的字段识别器 */
+function pickStr(row: AnyRec, keys: string[], regex?: RegExp): string | null {
   if (!row) return null;
-  const candidates = [
-    "imageUrl", "image_url", "imgUrl", "img_url",
-    "image", "img", "photo", "picture", "thumb", "thumbnail",
-  ];
-  for (const k of candidates) {
+  for (const k of keys) {
     const v = row[k];
     if (typeof v === "string" && v.trim()) return v.trim();
   }
-  // 兜底：模糊匹配含 image/img/photo/pic/thumb 的字段
-  const hit = Object.keys(row).find((k) => /image|img|photo|pic|thumb/i.test(k));
-  const v = hit ? row[hit] : null;
-  return (typeof v === "string" && v.trim()) ? v.trim() : null;
-}
-
-// 从一条记录中“尽量识别”价格
-function pickPrice(row: Record<string, any>): string | null {
-  if (!row) return null;
-  const candidates = [
-    "price", "unit_price", "unitPrice",
-    "salePrice", "sale_price",
-    "amount", "cost"
-  ];
-  for (const k of candidates) {
-    const v = row[k];
-    if (v !== null && v !== undefined && v !== "") return String(v);
+  if (regex) {
+    const hit = Object.keys(row).find((k) => regex.test(k));
+    const v = hit ? row[hit] : null;
+    if (typeof v === "string" && v.trim()) return v.trim();
   }
-  const hit = Object.keys(row).find((k) => /price|amount|cost/i.test(k));
-  const v = hit ? row[hit] : null;
-  return (v !== null && v !== undefined && v !== "") ? String(v) : null;
+  return null;
 }
 
-function buildDetailUrl(it: StockItem) {
-  const num = String(it?.num ?? "").trim();
-  const q = new URLSearchParams({
-    product: (it?.product ?? "-").toString(),
-    oe: (it?.oe ?? "-").toString(),
-    brand: (it?.brand ?? "-").toString(),
-    model: (it?.model ?? "-").toString(),
-    year: (it?.year ?? "-").toString(),
-    // 把图片/价格也一并带过去，便于详情页展示（即便缺失也传占位）
-    image: pickImageUrl(it) ?? "",
-    price: pickPrice(it) ?? "",
-  }).toString();
-  return `/stock/${encodeURIComponent(num)}?${q}`;
+function pickAny(row: AnyRec, keys: string[], regex?: RegExp): any {
+  if (!row) return null;
+  for (const k of keys) {
+    if (k in row) {
+      const v = row[k];
+      if (v !== null && v !== undefined && v !== "") return v;
+    }
+  }
+  if (regex) {
+    const hit = Object.keys(row).find((k) => regex.test(k));
+    if (hit) return row[hit];
+  }
+  return null;
 }
+
+function pickImage(row: AnyRec): string | null {
+  return pickStr(
+    row,
+    ["imageUrl","image_url","imgUrl","img_url","image","img","photo","picture","thumb","thumbnail","cover","pic"],
+    /image|img|photo|pic|thumb|cover/i
+  );
+}
+
+function pickPrice(row: AnyRec): string | null {
+  const v = pickAny(
+    row,
+    ["price","salePrice","sale_price","unit_price","unitPrice","amount","cost"],
+    /price|amount|cost|unit/i
+  );
+  if (v === null || v === undefined || v === "") return null;
+  return String(v);
+}
+
+function pickStock(row: AnyRec): string | null {
+  const v = pickAny(
+    row,
+    ["stock","qty","quantity","inventory","available","库存","数量"],
+    /stock|qty|quantity|inventory|可用|库存|数量/i
+  );
+  if (v === null || v === undefined || v === "") return null;
+  return String(v);
+}
+
+function pickTitle(row: AnyRec): string | null {
+  return (
+    pickStr(row, ["title","name","product","productName","goodsName","spuName","desc","description"]) ||
+    pickStr(row, [], /title|name|product|goods|desc/i)
+  );
+}
+
+function pickNum(row: AnyRec): string | null {
+  return (
+    pickStr(row, ["num","code","partNo","sku","编号","编码"]) ||
+    pickStr(row, [], /num|code|part|sku|编号|编码/i)
+  );
+}
+
+function pickOE(row: AnyRec): string | null {
+  return pickStr(row, ["oe","oeNo","oe_num","oeNumber","OE号","OE码"], /oe/i);
+}
+
+function pickBrand(row: AnyRec): string | null {
+  return pickStr(row, ["brand","brandName","partBrand","品牌"], /brand|品牌/i);
+}
+
+function pickModel(row: AnyRec): string | null {
+  return pickStr(row, ["model","carModel","vehicleModel","车型"], /model|车型/i);
+}
+
+type CardItem = {
+  num: string;
+  title: string;
+  image?: string | null;
+  price?: string | null;
+  stock?: string | null;
+  oe?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  raw: AnyRec; // 备用
+};
+
+function toCard(row: AnyRec): CardItem | null {
+  const num = pickNum(row) || "";
+  const title = pickTitle(row) || "";
+  if (!num && !title) return null;
+  return {
+    num,
+    title,
+    image: pickImage(row),
+    price: pickPrice(row),
+    stock: pickStock(row),
+    oe: pickOE(row),
+    brand: pickBrand(row),
+    model: pickModel(row),
+    raw: row,
+  };
+}
+
+/** -------- 页面组件 -------- */
 
 export default function StockPage() {
-  // 数据与状态
-  const [data, setData] = useState<StockItem[]>([]);
+  const [items, setItems] = useState<CardItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 搜索与分页（对齐你给的后端分页参数）
+  // 翻页（后端分页）
+  const [page, setPage] = useState(1);        // 1-based
+  const [pageSize, setPageSize] = useState(20);
+
+  // 搜索（本页内）
   const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);        // 展示给用户的页码（从 1 开始）
-  const [pageSize, setPageSize] = useState(50);
 
-  // 解析（兼容 text/JSON/BOM）
-  const parseResponse = async (res: Response) => {
-    try {
-      return await res.json();
-    } catch {
-      const txt = (await res.text()).trim().replace(/^\uFEFF/, "");
-      try { return JSON.parse(txt); } catch { return txt; }
-    }
-  };
-
-  // 拉取当前页数据
   useEffect(() => {
     const url = `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${pageSize}&page=${page - 1}`;
     setLoading(true);
     setError(null);
     fetch(url, { cache: "no-store" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        const raw = await parseResponse(res);
-        const arr: StockItem[] = Array.isArray(raw)
-          ? raw
-          : Array.isArray((raw as any)?.data)
-          ? (raw as any).data
-          : [];
-        setData(arr || []);
+      .then(parseResponse)
+      .then((raw) => {
+        const arr = findArrayInObject(raw);
+        const cards = arr
+          .map(toCard)
+          .filter(Boolean) as CardItem[];
+        setItems(cards);
       })
-      .catch(() => {
-        setError("数据加载失败，请稍后重试");
-        setData([]);
-      })
+      .catch(() => setError("数据加载失败"))
       .finally(() => setLoading(false));
   }, [page, pageSize]);
 
-  // Excel 下载（跟随当前分页参数）
+  const filtered = useMemo(() => {
+    const kw = q.trim().toLowerCase();
+    if (!kw) return items;
+    return items.filter((it) => {
+      return (
+        it.num.toLowerCase().includes(kw) ||
+        (it.title || "").toLowerCase().includes(kw) ||
+        (it.oe || "").toLowerCase().includes(kw) ||
+        (it.brand || "").toLowerCase().includes(kw)
+      );
+    });
+  }, [q, items]);
+
   const handleDownload = () => {
     const url = `https://niuniuparts.com:6001/scm-product/v1/stock2/excel?size=${pageSize}&page=${page - 1}`;
     location.href = url;
   };
 
-  // 当前页内搜索（Num / Product / OE / Brand）
-  const filtered = useMemo(() => {
-    const kw = q.trim().toLowerCase();
-    if (!kw) return data;
-    return (data || []).filter((it) => {
-      const num = String(it?.num ?? "").toLowerCase();
-      const product = String(it?.product ?? "").toLowerCase();
-      const oe = String(it?.oe ?? "").toLowerCase();
-      const brand = String(it?.brand ?? "").toLowerCase();
-      return num.includes(kw) || product.includes(kw) || oe.includes(kw) || brand.includes(kw);
-    });
-  }, [q, data]);
-
   if (loading) return <p className="p-4">Loading...</p>;
+  if (error) {
+    return (
+      <div className="p-4">
+        <h1 className="text-xl font-bold mb-3">库存产品列表</h1>
+        <p className="text-red-600 mb-4">{error}</p>
+      </div>
+    );
+  }
 
-  // 分页控件（上一页 / 下一页 + 每页条数）
+  // 翻页控件
   const Pager = (
-    <div className="flex items-center gap-2 flex-wrap mb-3">
+    <div className="flex items-center gap-2 flex-wrap mb-4">
       <button
         onClick={() => setPage((p) => Math.max(1, p - 1))}
         disabled={page <= 1}
@@ -149,39 +233,37 @@ export default function StockPage() {
       <span className="ml-4 text-sm text-gray-600">每页</span>
       <select
         value={pageSize}
-        onChange={(e) => { setPageSize(Number(e.target.value) || 50); setPage(1); }}
+        onChange={(e) => { setPageSize(Number(e.target.value) || 20); setPage(1); }}
         className="px-2 py-1 border rounded"
       >
         <option value={20}>20</option>
+        <option value={30}>30</option>
         <option value={50}>50</option>
-        <option value={100}>100</option>
       </select>
       <span className="text-sm text-gray-600">条</span>
+
+      <button
+        onClick={handleDownload}
+        className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+      >
+        下载库存 Excel
+      </button>
     </div>
   );
 
   return (
     <div className="p-4">
-      <h1 className="text-xl font-bold mb-1">Stock List</h1>
+      <h1 className="text-xl font-bold mb-1">库存产品列表</h1>
 
-      <div className="mb-3 text-sm flex items-center gap-3 flex-wrap">
-        <span className="text-gray-600">本页 {data.length} 条数据</span>
-        <span className="text-gray-500">当前筛选：{filtered.length} 条</span>
-        <button
-          onClick={handleDownload}
-          className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          下载库存 Excel
-        </button>
-      </div>
+      <div className="mb-3 text-sm text-gray-600">共 {items.length} 条（当前页）</div>
 
       {/* 搜索框 */}
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-4 flex items-center gap-2">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="搜索 Num / Product / OE / Brand（仅当前页）"
-          className="w-80 max-w-full px-3 py-2 border rounded outline-none focus:ring"
+          placeholder="搜索 编号 / 标题 / OE / 品牌（仅当前页）"
+          className="w-96 max-w-full px-3 py-2 border rounded outline-none focus:ring"
         />
         {q && (
           <button onClick={() => setQ("")} className="px-3 py-2 border rounded hover:bg-gray-50">
@@ -190,73 +272,57 @@ export default function StockPage() {
         )}
       </div>
 
-      {/* 顶部分页 */}
       {Pager}
 
-      <table className="w-full border border-gray-300 text-sm">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="border px-2 py-1">图片</th>
-            <th className="border px-2 py-1">Num</th>
-            <th className="border px-2 py-1">Product</th>
-            <th className="border px-2 py-1">OE</th>
-            <th className="border px-2 py-1">Brand</th>
-            <th className="border px-2 py-1">价格</th>
-            <th className="border px-2 py-1">Model</th>
-            <th className="border px-2 py-1">Year</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.length > 0 ? (
-            filtered.map((item, idx) => {
-              const num = item?.num ? String(item.num) : "";
-              const imgUrl = pickImageUrl(item);
-              const price = pickPrice(item);
+      {/* 卡片网格 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        {filtered.map((it) => {
+          const href = `/stock/${encodeURIComponent(it.num)}?` + new URLSearchParams({
+            product: it.title || "-",
+            oe: it.oe || "-",
+            brand: it.brand || "-",
+            model: it.model || "-",
+            year: "-",
+            image: it.image || "",
+            price: it.price || "",
+          }).toString();
 
-              return (
-                <tr key={`${num || "row"}-${idx}`} className="hover:bg-gray-50">
-                  <td className="border px-2 py-1">
-                    {imgUrl ? (
-                      <img
-                        src={imgUrl}
-                        alt={num}
-                        style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6 }}
-                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                      />
-                    ) : (
-                      <span className="text-gray-400">无图</span>
-                    )}
-                  </td>
-                  <td className="border px-2 py-1">
-                    {num ? (
-                      <Link href={buildDetailUrl(item)} className="text-blue-600 hover:underline">
-                        {num}
-                      </Link>
-                    ) : "-"}
-                  </td>
-                  <td className="border px-2 py-1">{item?.product ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.oe ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.brand ?? "-"}</td>
-                  <td className="border px-2 py-1">{price ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.model ?? "-"}</td>
-                  <td className="border px-2 py-1">{item?.year ?? "-"}</td>
-                </tr>
-              );
-            })
-          ) : (
-            <tr>
-              <td colSpan={8} className="border px-2 py-6 text-center text-gray-500">
-                没有匹配的结果（当前页）
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+          return (
+            <div key={it.num + (it.oe || "")} className="border rounded-2xl p-3 shadow-sm hover:shadow-md transition">
+              <div className="text-base font-semibold mb-2 line-clamp-2">{it.title || "-"}</div>
+              <div className="text-sm text-gray-600 space-y-1 mb-3">
+                <div>品牌：{it.brand || "-"}</div>
+                <div>车型：{it.model || "-"}</div>
+                <div>OE号：{it.oe || "-"}</div>
+                <div>编号：{it.num || "-"}</div>
+                <div>价格：{it.price || "-"}</div>
+                <div>库存：{it.stock || "-"}</div>
+              </div>
+              <div className="rounded-lg border bg-white flex items-center justify-center" style={{ minHeight: 220 }}>
+                {it.image ? (
+                  <img
+                    src={it.image}
+                    alt={it.num}
+                    style={{ maxWidth: "100%", maxHeight: 220, borderRadius: 8 }}
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                  />
+                ) : (
+                  <div className="text-gray-400">无图</div>
+                )}
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Link href={href} className="px-3 py-2 bg-gray-900 text-white rounded hover:bg-black">
+                  查看详情
+                </Link>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-      {/* 底部分页 */}
-      <div className="mt-3">{Pager}</div>
+      <div className="mt-4">{Pager}</div>
 
-      <p className="text-xs text-gray-500 mt-3">数据源：niuniuparts.com（测试预览用途）</p>
+      <p className="text-xs text-gray-500 mt-6">数据源：niuniuparts.com（测试预览用途）</p>
     </div>
   );
 }
