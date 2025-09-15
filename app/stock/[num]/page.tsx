@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/** 将相对/协议相对路径补成 http 绝对地址 */
+/* ========== 工具：URL 处理与图片代理（压缩） ========== */
 function absolutize(url: string): string {
   if (!url) return url;
   let u = url.trim();
@@ -13,55 +13,41 @@ function absolutize(url: string): string {
   if (u.startsWith('/')) return 'http://niuniuparts.com' + u;
   return u;
 }
-
-/** 统一通过 HTTPS 图片代理输出（自动压缩，避免混合内容/防盗链） */
 function toProxy(raw?: string | null, w = 800, h = 600): string | null {
   if (!raw) return null;
   let u = absolutize(raw);
-  if (/^data:image\//i.test(u)) return u;
-  // weserv 要求 host 不带协议，支持 http 源；自动 webp、q=75
-  u = u.replace(/^https?:\/\//i, '');
+  if (/^data:image\//i.test(u)) return u; // 内联图直出
+  u = u.replace(/^https?:\/\//i, '');     // weserv 需要无协议 host
   return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=75&il`;
 }
 
-/** 从任意字符串中尽可能提取 URL */
+/* ========== 工具：从文本提取 URL（含相对路径、<img src>） ========== */
 function extractUrlsFromText(text: string): string[] {
   const urls = new Set<string>();
   if (!text) return [];
-
-  // 1) 常见图片后缀
   const reExt = /(https?:\/\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
+  const reImg = /<img\b[^>]*src=['"]?([^'">\s]+)['"]?/gi;
+  const reRel = /(\/(?:upload|uploads|images|img|files)\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
+  const reAny = /(https?:\/\/[^\s"'<>]+)/gi;
   let m: RegExpExecArray | null;
   while ((m = reExt.exec(text))) urls.add(m[1]);
-
-  // 2) <img src="...">
-  const reImg = /<img\b[^>]*src=['"]?([^'">\s]+)['"]?/gi;
   while ((m = reImg.exec(text))) urls.add(m[1]);
-
-  // 3) 相对路径（/upload|/uploads|/images|/img|/files）
-  const reRel = /(\/(?:upload|uploads|images|img|files)\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
   while ((m = reRel.exec(text))) urls.add('http://niuniuparts.com' + m[1]);
-
-  // 4) 兜底所有 http(s)
-  const reAny = /(https?:\/\/[^\s"'<>]+)/gi;
   while ((m = reAny.exec(text))) urls.add(m[1]);
-
   return Array.from(urls);
 }
 
-/** 深度遍历对象，搜集所有可能的图片字段 */
+/* ========== 工具：深度收集候选图片 URL ========== */
 function collectCandidateUrls(obj: any, max = 3000): string[] {
   const ret = new Set<string>();
   const seen = new Set<any>();
   const stack: any[] = [obj];
-
-  // 图片相关的 key 词
   const imgKeys = [
-    'image', 'imageurl', 'image_url', 'imagePath', 'imageList', 'images', 'pics', 'pictures', 'photos',
-    'thumbnail', 'thumb', 'thumburl', 'cover', 'logo', 'banner', 'mainpic', 'main_pic', 'img', 'imgurl',
-    '图片', '图片1', '图片2', '封面', '主图', '相片'
+    'image','imageurl','image_url','imagePath','imageList','images',
+    'pics','pictures','photos','thumbnail','thumb','thumburl',
+    'cover','logo','banner','mainpic','main_pic','img','imgurl',
+    '图片','主图'
   ];
-
   while (stack.length && ret.size < max) {
     const cur = stack.pop();
     if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
@@ -70,7 +56,7 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
     for (const k of Object.keys(cur)) {
       const v = (cur as AnyObj)[k];
 
-      // 命中图片相关 key
+      // 图片相关 key 优先
       if (imgKeys.some((kw) => k.toLowerCase().includes(kw.toLowerCase()))) {
         if (typeof v === 'string') {
           extractUrlsFromText(v).forEach((u) => ret.add(u));
@@ -81,8 +67,7 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
               extractUrlsFromText(x).forEach((u) => ret.add(u));
               if (/\.(jpg|jpeg|png|gif|webp)(\?|#|$)/i.test(x)) ret.add(x);
             } else if (x && typeof x === 'object') {
-              // 对象里常见 url 字段
-              ['url', 'src', 'path'].forEach((kk) => {
+              ['url','src','path'].forEach((kk) => {
                 if (typeof x[kk] === 'string') {
                   ret.add(x[kk]);
                   extractUrlsFromText(x[kk]).forEach((u) => ret.add(u));
@@ -91,7 +76,7 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
             }
           });
         } else if (v && typeof v === 'object') {
-          ['url', 'src', 'path'].forEach((kk) => {
+          ['url','src','path'].forEach((kk) => {
             if (typeof v[kk] === 'string') {
               ret.add(v[kk]);
               extractUrlsFromText(v[kk]).forEach((u) => ret.add(u));
@@ -109,7 +94,7 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
   return Array.from(ret);
 }
 
-/** 简单取值（兼容中英文 key） */
+/* ========== 工具：取值（兼容中英文 key） ========== */
 function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-') {
   if (!obj) return fallback;
   const alias: Record<string, string[]> = {
@@ -117,24 +102,22 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
     brand: ['品牌', 'brand'],
     model: ['车型', 'model'],
     year: ['年份', '年款', 'year'],
-    oe: ['OE', 'oe', '配件号', '编号'],
-    num: ['num', '编码', '编号', '货号'],
-    price: ['价格', '单价', '售价', 'price'],
-    stock: ['库存', '库存数量', '数量', '在库', 'stock'],
+    oe:   ['OE', 'oe', '配件号', '编号'],
+    num:  ['num', '编码', '编号', '货号'],
+    price:['价格', '单价', '售价', 'price'],
+    stock:['库存', '库存数量', '数量', '在库', 'stock'],
   };
   for (const k of keys) {
     if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
     const group = alias[k];
-    if (group) {
-      for (const a of group) {
-        if (obj[a] !== undefined && obj[a] !== null && obj[a] !== '') return obj[a];
-      }
+    if (group) for (const a of group) {
+      if (obj[a] !== undefined && obj[a] !== null && obj[a] !== '') return obj[a];
     }
   }
   return fallback;
 }
 
-/** 在列表中按 num 尽量找到一条记录 */
+/* ========== 工具：在列表中按 num 匹配记录 ========== */
 function findByNum(list: any[], num: string): AnyObj | null {
   if (!Array.isArray(list)) return null;
   const norm = (v: any) => String(v ?? '').trim();
@@ -151,38 +134,7 @@ function findByNum(list: any[], num: string): AnyObj | null {
   return null;
 }
 
-/** 并发探测，哪个能加载就用哪个；同时返回全部候选（用于页面内可视化） */
-async function probeFirstWorkingImage(rawUrls: string[], timeoutMs = 5000) {
-  const urls = Array.from(new Set(rawUrls.filter(Boolean).map(absolutize)));
-  const candidates = urls.slice(0, 40);
-  if (!candidates.length) return { ok: null as string | null, all: candidates };
-
-  const ok = await new Promise<string | null>((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    candidates.forEach((u) => {
-      const img = new Image();
-      img.src = toProxy(u, 40, 40)!; // 用代理小图探测
-      img.onload = () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(u);
-        }
-      };
-      img.onerror = () => {};
-    });
-  });
-
-  return { ok, all: candidates };
-}
-
+/* ========== 页面组件 ========== */
 export default function StockDetailPage({
   params,
   searchParams,
@@ -193,18 +145,19 @@ export default function StockDetailPage({
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
-  const [allCandidates, setAllCandidates] = useState<string[]>([]);
-  const [showCandidates, setShowCandidates] = useState<boolean>(false);
+  const [thumbs, setThumbs] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+
+  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const baseFromQuery: AnyObj = {
       num,
       title: searchParams?.title ?? searchParams?.product ?? searchParams?.name,
-      oe: searchParams?.oe,
+      oe:    searchParams?.oe,
       brand: searchParams?.brand,
       model: searchParams?.model,
-      year: searchParams?.year,
+      year:  searchParams?.year,
       price: searchParams?.price,
       stock: searchParams?.stock,
       __rawFromQuery: searchParams,
@@ -213,8 +166,11 @@ export default function StockDetailPage({
 
     (async () => {
       try {
-        // 拉列表（500 条），在前端匹配到当前 num 的完整对象
-        const res = await fetch('https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0', { cache: 'no-store' });
+        // 拉取一页 500 条，在前端匹配 num
+        const res = await fetch(
+          'https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0',
+          { cache: 'no-store' }
+        );
         const data = await res.json().catch(() => ({} as AnyObj));
         const list: any[] =
           data?.data?.list ??
@@ -223,40 +179,25 @@ export default function StockDetailPage({
           data?.records ??
           data?.data ??
           [];
-
         const found = findByNum(list, num);
         const merged = found ? { ...(baseFromQuery || {}), ...found } : baseFromQuery;
         setDetail(merged);
 
-        // 收集候选
+        // 收集候选图片
         const candidates = new Set<string>();
-
-        // 1) 深度遍历所有字段
         collectCandidateUrls(merged).forEach((u) => candidates.add(u));
-
-        // 2) 原始 JSON 字符串再扫一遍
         extractUrlsFromText(JSON.stringify(merged)).forEach((u) => candidates.add(u));
+        if (searchParams)
+          extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
 
-        // 3) query 里可能带来的图片
-        if (searchParams) extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
+        // 去重 + 过滤不可代理的空值
+        const all = Array.from(candidates).filter(Boolean);
 
-        // 4) 再做几组“大胆猜测”（按 num / oe 拼常见目录）
-        const guessBases = ['/upload/', '/uploads/', '/images/', '/img/', '/files/'];
-        const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
-        const oe = String(pick(merged, ['oe'], '') || '');
-        [num, oe].forEach((seed) => {
-          if (!seed) return;
-          for (const b of guessBases) for (const e of exts) candidates.add(`http://niuniuparts.com${b}${seed}${e}`);
-        });
+        // 设定缩略图数组（全部可滚动，视口约 12 张）
+        setThumbs(all);
 
-        const arr = Array.from(candidates);
-        setAllCandidates(arr);
-
-        // 并发探测
-        const { ok } = await probeFirstWorkingImage(arr);
-        setImgUrl(ok ? toProxy(ok) : null);
-      } catch {
-        // ignore
+        // 设定初始大图：用第一个候选（走代理压缩）
+        setImgUrl(all.length ? toProxy(all[0], 800, 600) : null);
       } finally {
         setLoading(false);
       }
@@ -269,13 +210,16 @@ export default function StockDetailPage({
       title: pick(d, ['title'], '-'),
       brand: pick(d, ['brand'], '-'),
       model: pick(d, ['model'], '-'),
-      year: pick(d, ['year'], '-'),
-      oe: pick(d, ['oe'], '-'),
-      num: pick(d, ['num'], num),
+      year:  pick(d, ['year'],  '-'),
+      oe:    pick(d, ['oe'],    '-'),
+      num:   pick(d, ['num'],   num),
       price: pick(d, ['price'], '-'),
       stock: pick(d, ['stock'], '-'),
     };
   }, [detail, num]);
+
+  const scrollLeft = () => stripRef.current?.scrollBy({ left: -600, behavior: 'smooth' });
+  const scrollRight = () => stripRef.current?.scrollBy({ left:  600, behavior: 'smooth' });
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -291,24 +235,16 @@ export default function StockDetailPage({
         </a>
       </header>
 
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4">
         <Link href="/stock" className="inline-flex items-center gap-2 rounded border px-3 py-2 hover:bg-gray-50">
           ← 返回列表
         </Link>
-
-        {/* 看不到图时，展开候选缩略图（不需要你打开控制台） */}
-        <button
-          onClick={() => setShowCandidates((s) => !s)}
-          className="rounded border px-3 py-2 hover:bg-gray-50 text-sm"
-          title="当主图无法显示时，点击可查看系统自动搜到的候选图片，如有任意缩略图出现，系统会自动使用它作为主图。"
-        >
-          {showCandidates ? '收起图片候选' : '显示图片候选'}
-        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 左侧：主图 */}
+        {/* 左侧：大图 + 缩略图条 */}
         <div className="w-full">
+          {/* 大图 */}
           {imgUrl ? (
             <img
               src={imgUrl}
@@ -348,35 +284,56 @@ export default function StockDetailPage({
             </div>
           )}
 
-          {/* 候选缩略图（仅视觉辅助，不懂代码也能看） */}
-          {showCandidates && allCandidates.length > 0 && (
-            <div className="mt-4">
-              <div className="mb-2 text-sm text-gray-500">
-                系统自动找到 {allCandidates.length} 个候选图片地址（仅显示前 24 个缩略图）：
+          {/* 缩略图条（水平滚动，视口约 12 张） */}
+          {thumbs.length > 0 && (
+            <div className="mt-3 relative">
+              {/* 左右按钮 */}
+              <button
+                onClick={scrollLeft}
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white border rounded-full w-8 h-8 flex items-center justify-center"
+                aria-label="向左滚动"
+                title="向左滚动"
+              >
+                ‹
+              </button>
+              <button
+                onClick={scrollRight}
+                className="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white border rounded-full w-8 h-8 flex items-center justify-center"
+                aria-label="向右滚动"
+                title="向右滚动"
+              >
+                ›
+              </button>
+
+              <div
+                ref={stripRef}
+                className="flex gap-2 overflow-x-auto px-10 py-2"
+                style={{ scrollBehavior: 'smooth' }}
+              >
+                {thumbs.map((raw, idx) => {
+                  const proxy = toProxy(raw, 120, 120);
+                  if (!proxy) return null;
+                  const active = imgUrl === toProxy(raw, 800, 600);
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => setImgUrl(toProxy(raw, 800, 600))}
+                      className={`flex-shrink-0 border rounded ${active ? 'border-blue-600' : 'border-gray-200'} bg-white`}
+                      style={{ width: 96, height: 80 }}
+                      title={raw}
+                    >
+                      <img
+                        src={proxy}
+                        alt={`thumb-${idx}`}
+                        referrerPolicy="no-referrer"
+                        style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#fafafa' }}
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
+                      />
+                    </button>
+                  );
+                })}
               </div>
-              <div className="grid grid-cols-6 gap-2">
-                {allCandidates.slice(0, 24).map((u, idx) => (
-                  <a
-                    key={idx}
-                    href={toProxy(u, 120, 120) || '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block border border-gray-200 rounded overflow-hidden"
-                    title={u}
-                  >
-                    <img
-                      src={toProxy(u, 120, 120) || ''}
-                      alt={`cand-${idx}`}
-                      referrerPolicy="no-referrer"
-                      style={{ width: '100%', height: 80, objectFit: 'contain', background: '#fafafa' }}
-                      onLoad={() => {
-                        // 一旦有候选能加载出来，就把它设为主图
-                        if (!imgUrl) setImgUrl(toProxy(u, 800, 600));
-                      }}
-                    />
-                  </a>
-                ))}
-              </div>
+              <div className="px-10 text-xs text-gray-500 mt-1">候选图片：{thumbs.length} 张（横向滚动查看更多）</div>
             </div>
           )}
         </div>
@@ -385,38 +342,14 @@ export default function StockDetailPage({
         <div className="w-full">
           <div className="rounded border p-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-[15px] leading-7">
-              <div>
-                <span className="font-semibold">标题：</span>
-                <span>{String(view.title)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">Num：</span>
-                <span>{String(view.num)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">OE：</span>
-                <span>{String(view.oe)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">Brand：</span>
-                <span>{String(view.brand)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">Model：</span>
-                <span>{String(view.model)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">Year：</span>
-                <span>{String(view.year)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">Price：</span>
-                <span>{String(view.price)}</span>
-              </div>
-              <div>
-                <span className="font-semibold">Stock：</span>
-                <span>{String(view.stock)}</span>
-              </div>
+              <div><span className="font-semibold">标题：</span>{String(view.title)}</div>
+              <div><span className="font-semibold">Num：</span>{String(view.num)}</div>
+              <div><span className="font-semibold">OE：</span>{String(view.oe)}</div>
+              <div><span className="font-semibold">Brand：</span>{String(view.brand)}</div>
+              <div><span className="font-semibold">Model：</span>{String(view.model)}</div>
+              <div><span className="font-semibold">Year：</span>{String(view.year)}</div>
+              <div><span className="font-semibold">Price：</span>{String(view.price)}</div>
+              <div><span className="font-semibold">Stock：</span>{String(view.stock)}</div>
             </div>
           </div>
 
@@ -431,3 +364,4 @@ export default function StockDetailPage({
     </div>
   );
 }
+
