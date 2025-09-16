@@ -5,7 +5,28 @@ import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/* ========== 工具：URL 处理与图片代理（支持自定义尺寸与质量） ========== */
+/* ================== 连接与图片工具 ================== */
+function appendPreconnectOnce() {
+  // 预连接，减少首包与TLS握手延迟
+  if (typeof document === 'undefined') return;
+  const marks = ['__pc_weserv__', '__pc_niuniu__'];
+  if ((window as any)[marks[0]] && (window as any)[marks[1]]) return;
+  const cfg: Array<{ rel: string; href: string }> = [
+    { rel: 'preconnect', href: 'https://images.weserv.nl' },
+    { rel: 'dns-prefetch', href: '//images.weserv.nl' },
+    { rel: 'preconnect', href: 'https://niuniuparts.com' },
+    { rel: 'dns-prefetch', href: '//niuniuparts.com' },
+  ];
+  for (const { rel, href } of cfg) {
+    const link = document.createElement('link');
+    link.rel = rel;
+    link.href = href;
+    document.head.appendChild(link);
+  }
+  (window as any)[marks[0]] = true;
+  (window as any)[marks[1]] = true;
+}
+
 function absolutize(url: string): string {
   if (!url) return url;
   let u = url.trim();
@@ -13,6 +34,8 @@ function absolutize(url: string): string {
   if (u.startsWith('/')) return 'http://niuniuparts.com' + u;
   return u;
 }
+
+/** 通过 HTTPS 代理输出；可调尺寸与质量（更小=更快） */
 function toProxy(raw?: string | null, w = 800, h = 600, q = 75): string | null {
   if (!raw) return null;
   let u = absolutize(raw);
@@ -22,7 +45,7 @@ function toProxy(raw?: string | null, w = 800, h = 600, q = 75): string | null {
   return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=${q}&il`;
 }
 
-/* ========== 工具：从文本提取 URL（含相对路径、<img src>） ========== */
+/* ================== 候选图片收集 ================== */
 function extractUrlsFromText(text: string): string[] {
   const urls = new Set<string>();
   if (!text) return [];
@@ -38,7 +61,6 @@ function extractUrlsFromText(text: string): string[] {
   return Array.from(urls);
 }
 
-/* ========== 工具：深度收集候选图片 URL ========== */
 function collectCandidateUrls(obj: any, max = 3000): string[] {
   const ret = new Set<string>();
   const seen = new Set<any>();
@@ -57,7 +79,6 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
     for (const k of Object.keys(cur)) {
       const v = (cur as AnyObj)[k];
 
-      // 图片相关 key 优先
       if (imgKeys.some((kw) => k.toLowerCase().includes(kw.toLowerCase()))) {
         if (typeof v === 'string') {
           extractUrlsFromText(v).forEach((u) => ret.add(u));
@@ -69,33 +90,33 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
               if (/\.(jpg|jpeg|png|gif|webp)(\?|#|$)/i.test(x)) ret.add(x);
             } else if (x && typeof x === 'object') {
               ['url','src','path'].forEach((kk) => {
-                if (typeof x[kk] === 'string') {
-                  ret.add(x[kk]);
-                  extractUrlsFromText(x[kk]).forEach((u) => ret.add(u));
+                if (typeof (x as any)[kk] === 'string') {
+                  const s = (x as any)[kk] as string;
+                  ret.add(s);
+                  extractUrlsFromText(s).forEach((u) => ret.add(u));
                 }
               });
             }
           });
         } else if (v && typeof v === 'object') {
           ['url','src','path'].forEach((kk) => {
-            if (typeof v[kk] === 'string') {
-              ret.add(v[kk]);
-              extractUrlsFromText(v[kk]).forEach((u) => ret.add(u));
+            if (typeof (v as any)[kk] === 'string') {
+              const s = (v as any)[kk] as string;
+              ret.add(s);
+              extractUrlsFromText(s).forEach((u) => ret.add(u));
             }
           });
         }
       }
 
-      // 任意字符串里也扫
       if (typeof v === 'string') extractUrlsFromText(v).forEach((u) => ret.add(u));
-      // 继续深入
       if (Array.isArray(v) || (v && typeof v === 'object')) stack.push(v);
     }
   }
   return Array.from(ret);
 }
 
-/* ========== 工具：取值（兼容中英文 key） ========== */
+/* ================== 数据取值与定位 ================== */
 function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-') {
   if (!obj) return fallback;
   const alias: Record<string, string[]> = {
@@ -118,7 +139,6 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
   return fallback;
 }
 
-/* ========== 工具：在列表中按 num 匹配记录 ========== */
 function findByNum(list: any[], num: string): AnyObj | null {
   if (!Array.isArray(list)) return null;
   const norm = (v: any) => String(v ?? '').trim();
@@ -135,7 +155,7 @@ function findByNum(list: any[], num: string): AnyObj | null {
   return null;
 }
 
-/* ========== 页面组件 ========== */
+/* ================== 页面组件 ================== */
 export default function StockDetailPage({
   params,
   searchParams,
@@ -146,33 +166,47 @@ export default function StockDetailPage({
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
 
-  // 缩略图 / 大图（渐进切换）
-  const [thumbs, setThumbs] = useState<string[]>([]);
+  // 图片与缩略图
+  const [allThumbs, setAllThumbs] = useState<string[]>([]);
+  const [thumbs, setThumbs] = useState<string[]>([]); // 仅渲染前 N 张，减少首屏压力
   const [currentRaw, setCurrentRaw] = useState<string | null>(null);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
 
   // 上一条 / 下一条
-  const [allList, setAllList] = useState<any[]>([]);
   const [prevHref, setPrevHref] = useState<string | null>(null);
   const [nextHref, setNextHref] = useState<string | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const stripRef = useRef<HTMLDivElement>(null);
 
-  // 统一的“渐进切换”函数：先小图立即显示，再预载大图，完成后自动升级
+  // 预连接图片域名（首屏就做）
+  useEffect(() => {
+    appendPreconnectOnce();
+  }, []);
+
+  // 渐进切换：先极小清晰度快速显示，再升级清晰图
   const setMainFromRaw = (raw: string) => {
     setCurrentRaw(raw);
-    const small = toProxy(raw, 600, 450, 60);   // 小图，快速
-    const big   = toProxy(raw, 1000, 750, 80);  // 大图，清晰
-    setImgUrl(small || null);                   // 先秒出小图
-    if (big) {
-      const pre = new Image();
-      pre.src = big;
-      pre.onload = () => setImgUrl(big);        // 大图加载好后自动替换
+    const tiny  = toProxy(raw, 320, 240, 45);  // 很小很快
+    const small = toProxy(raw, 540, 405, 58);  // 小图：更快出画
+    const big   = toProxy(raw, 960, 720, 76);  // 大图：清晰
+    setImgUrl(tiny || small || big || null);   // 先秒出 tiny
+    // 先预载 small，完成后再预载 big
+    if (small) {
+      const preS = new Image();
+      preS.src = small;
+      preS.onload = () => {
+        setImgUrl(small);
+        if (big) {
+          const preB = new Image();
+          preB.src = big;
+          preB.onload = () => setImgUrl(big);
+        }
+      };
     }
   };
 
-  // 构建详情页跳转链接，带上常用字段兜底
+  // 构建详情页跳转链接
   const makeHref = (item: AnyObj) => {
     const n   = String(pick(item, ['num'], ''));
     const t   = String(pick(item, ['title'], '-'));
@@ -181,9 +215,7 @@ export default function StockDetailPage({
     const md  = String(pick(item, ['model'], '-'));
     const pr  = String(pick(item, ['price'], '-'));
     const st  = String(pick(item, ['stock'], '-'));
-    const q = new URLSearchParams({
-      title: t, oe: oe, brand: br, model: md, price: pr, stock: st,
-    }).toString();
+    const q = new URLSearchParams({ title: t, oe, brand: br, model: md, price: pr, stock: st }).toString();
     return `/stock/${encodeURIComponent(n)}?${q}`;
   };
 
@@ -203,7 +235,6 @@ export default function StockDetailPage({
 
     (async () => {
       try {
-        // 拉取一页 500 条（当前数据量），用于：1) 找当前详情；2) 生成 上/下一条
         const res = await fetch(
           'https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0',
           { cache: 'no-store' }
@@ -217,14 +248,11 @@ export default function StockDetailPage({
           data?.data ??
           [];
 
-        setAllList(list);
-
-        // 1) 找到当前记录（并合并 query 里的兜底字段）
         const found = findByNum(list, num);
         const merged = found ? { ...(baseFromQuery || {}), ...found } : baseFromQuery;
         setDetail(merged);
 
-        // 2) 生成缩略图候选 & 初始大图
+        // 候选图片（全部）
         const candidates = new Set<string>();
         collectCandidateUrls(merged).forEach((u) => candidates.add(u));
         extractUrlsFromText(JSON.stringify(merged)).forEach((u) => candidates.add(u));
@@ -232,21 +260,20 @@ export default function StockDetailPage({
           extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
 
         const all = Array.from(candidates).filter(Boolean);
-        setThumbs(all);
+        setAllThumbs(all);
+
+        // 首屏仅渲染 12 张缩略图（其余仍可按需加载）
+        setThumbs(all.slice(0, 12));
+
+        // 初始主图（三级渐进：tiny -> small -> big）
         if (all.length) setMainFromRaw(all[0]);
 
-        // 3) 计算上/下一条
-        let idx = -1;
-        if (found) {
-          idx = list.indexOf(found);
-        }
-        if (idx < 0) {
-          // 兜底：按 num 再找一次索引
-          idx = list.findIndex((it) => String(pick(it, ['num'], '')) === num);
-        }
+        // 计算上下条
+        const idx = found
+          ? list.indexOf(found)
+          : list.findIndex((it) => String(pick(it, ['num'], '')) === num);
         const prev = idx > 0 ? list[idx - 1] : null;
         const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
-
         setPrevHref(prev ? makeHref(prev) : null);
         setNextHref(next ? makeHref(next) : null);
       } finally {
@@ -254,6 +281,17 @@ export default function StockDetailPage({
       }
     })();
   }, [num, searchParams]);
+
+  // 当用户滚动到缩略图条尾部时，按批次追加更多（避免一次性渲染过多导致慢）
+  const onThumbsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 20) {
+      // 追加下一批（每次 +12）
+      if (thumbs.length < allThumbs.length) {
+        setThumbs(allThumbs.slice(0, Math.min(allThumbs.length, thumbs.length + 12)));
+      }
+    }
+  };
 
   const view = useMemo(() => {
     const d = detail || {};
@@ -268,9 +306,6 @@ export default function StockDetailPage({
       stock: pick(d, ['stock'], '-'),
     };
   }, [detail, num]);
-
-  const scrollLeft = () => stripRef.current?.scrollBy({ left: -600, behavior: 'smooth' });
-  const scrollRight = () => stripRef.current?.scrollBy({ left:  600, behavior: 'smooth' });
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -291,10 +326,10 @@ export default function StockDetailPage({
           ← 返回列表
         </Link>
 
-        {/* 上一条 / 下一条 */}
         <div className="ml-auto flex items-center gap-2">
           <Link
             href={prevHref || '#'}
+            prefetch
             className={`inline-flex items-center rounded border px-3 py-2 ${prevHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
             aria-disabled={!prevHref}
           >
@@ -302,6 +337,7 @@ export default function StockDetailPage({
           </Link>
           <Link
             href={nextHref || '#'}
+            prefetch
             className={`inline-flex items-center rounded border px-3 py-2 ${nextHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
             aria-disabled={!nextHref}
           >
@@ -311,14 +347,14 @@ export default function StockDetailPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 左侧：大图 + 缩略图条（渐进切换） */}
+        {/* 左侧：大图（渐进升级，优先级高） */}
         <div className="w-full">
-          {/* 大图 */}
           {imgUrl ? (
             <img
               src={imgUrl}
               alt={String(view.num)}
-              loading="lazy"
+              loading="eager"
+              fetchpriority="high"
               decoding="async"
               referrerPolicy="no-referrer"
               className="w-full"
@@ -328,6 +364,7 @@ export default function StockDetailPage({
                 background: '#fafafa',
                 border: '1px solid #eee',
                 borderRadius: 8,
+                transition: 'filter 200ms ease',
               }}
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.display = 'none';
@@ -353,47 +390,40 @@ export default function StockDetailPage({
             </div>
           )}
 
-          {/* 缩略图条（水平滚动，视口约 12 张） */}
+          {/* 缩略图条（首屏仅 12 张，滚动追加；更轻质量加速） */}
           {thumbs.length > 0 && (
             <div className="mt-3 relative">
-              {/* 左右按钮 */}
-              <button
-                onClick={scrollLeft}
-                className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white border rounded-full w-8 h-8 flex items-center justify-center"
-                aria-label="向左滚动"
-                title="向左滚动"
-              >
-                ‹
-              </button>
-              <button
-                onClick={scrollRight}
-                className="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white border rounded-full w-8 h-8 flex items-center justify-center"
-                aria-label="向右滚动"
-                title="向右滚动"
-              >
-                ›
-              </button>
-
               <div
-                ref={stripRef}
-                className="flex gap-2 overflow-x-auto px-10 py-2"
+                ref={/* scroll 容器 */ (el) => {
+                  // 兼容 SSR
+                }}
+              />
+              <div
+                ref={(el) => {
+                  // 保留 ref 给滚动控制
+                  if (el) (stripRef as any).current = el;
+                }}
+                onScroll={onThumbsScroll}
+                className="flex gap-2 overflow-x-auto px-2 py-2"
                 style={{ scrollBehavior: 'smooth' }}
               >
                 {thumbs.map((raw, idx) => {
-                  const proxy = toProxy(raw, 120, 120, 70);
-                  if (!proxy) return null;
-                  const active = currentRaw === raw; // 以原始URL判断“选中”状态
+                  const tiny = toProxy(raw, 96, 72, 45);   // 更小更快
+                  if (!tiny) return null;
+                  const active = currentRaw === raw;
                   return (
                     <button
                       key={idx}
                       onClick={() => setMainFromRaw(raw)}
                       className={`flex-shrink-0 border rounded ${active ? 'border-blue-600' : 'border-gray-200'} bg-white`}
-                      style={{ width: 96, height: 80 }}
+                      style={{ width: 96, height: 72 }}
                       title={raw}
                     >
                       <img
-                        src={proxy}
+                        src={tiny}
                         alt={`thumb-${idx}`}
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#fafafa' }}
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
@@ -402,7 +432,9 @@ export default function StockDetailPage({
                   );
                 })}
               </div>
-              <div className="px-10 text-xs text-gray-500 mt-1">候选图片：{thumbs.length} 张（横向滚动查看更多）</div>
+              <div className="px-2 text-xs text-gray-500 mt-1">
+                已载 {thumbs.length}/{allThumbs.length} 张（横向滚动自动加载更多）
+              </div>
             </div>
           )}
         </div>
@@ -431,10 +463,10 @@ export default function StockDetailPage({
 
       {loading && <div className="mt-6 text-gray-500 text-sm">加载中…（首次加载会稍慢）</div>}
 
-      {/* 底部再放一组 上/下一条，方便阅读到末尾时继续浏览 */}
       <div className="mt-8 flex items-center justify-end gap-2">
         <Link
           href={prevHref || '#'}
+          prefetch
           className={`inline-flex items-center rounded border px-3 py-2 ${prevHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
           aria-disabled={!prevHref}
         >
@@ -442,6 +474,7 @@ export default function StockDetailPage({
         </Link>
         <Link
           href={nextHref || '#'}
+          prefetch
           className={`inline-flex items-center rounded border px-3 py-2 ${nextHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
           aria-disabled={!nextHref}
         >
