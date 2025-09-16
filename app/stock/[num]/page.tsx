@@ -5,10 +5,10 @@ import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/* ======== 全局裁切/遮罩策略（避免源图上出现公司字样） ======== */
-const CROP_TOP_PCT = 6;   // 裁掉顶部百分比
-const CROP_BOTTOM_PCT = 16; // 裁掉底部百分比（默认水印在底部，适当加大）
-const MASK_BOTTOM_PX = 24;  // 底部渐变遮罩高度（px），双保险
+/* ======== 全局裁切/遮罩策略（避免源图文字露出） ======== */
+const CROP_TOP_PCT = 6;     // 裁顶部 %
+const CROP_BOTTOM_PCT = 16; // 裁底部 %
+const MASK_BOTTOM_PX = 24;  // 底部渐变遮罩 px
 
 /* ======== 连接优化：预连接图片域名 ======== */
 function preconnectOnce() {
@@ -27,7 +27,7 @@ function preconnectOnce() {
   (window as any).__img_preconnected__ = true;
 }
 
-/* ======== 图片 URL & 代理（统一走 HTTPS + 压缩） ======== */
+/* ======== 图片 URL & 代理（HTTPS + 压缩） ======== */
 function absolutize(url: string): string {
   if (!url) return url;
   let u = url.trim();
@@ -39,8 +39,7 @@ function toProxy(raw?: string | null, w = 800, h = 600, q = 75): string | null {
   if (!raw) return null;
   let u = absolutize(raw);
   if (/^data:image\//i.test(u)) return u;
-  u = u.replace(/^https?:\/\//i, ''); // weserv 要求无协议主机
-  // 说明：使用 contain，前端再裁切；这样能保证不拉伸变形
+  u = u.replace(/^https?:\/\//i, ''); // weserv 需要无协议
   return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=${q}&il`;
 }
 
@@ -148,7 +147,32 @@ function findByNum(list: any[], num: string): AnyObj | null {
   return null;
 }
 
-/* ======== 组件 ======== */
+/* ======== 购物车（本地存储） ======== */
+type CartItem = {
+  num: string;
+  title: string;
+  price: number;
+  qty: number;
+  img: string | null;
+  oe?: string;
+  brand?: string;
+  model?: string;
+};
+const CART_KEY = 'imgparts_cart_v1';
+function loadCart(): CartItem[] {
+  if (typeof window === 'undefined') return [];
+  try { return JSON.parse(localStorage.getItem(CART_KEY) || '[]') as CartItem[]; } catch { return []; }
+}
+function saveCart(items: CartItem[]) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(CART_KEY, JSON.stringify(items));
+}
+function money(v: number) {
+  if (Number.isNaN(v)) return '-';
+  return v.toFixed(2);
+}
+
+/* ======== 页面组件 ======== */
 export default function StockDetailPage({
   params,
   searchParams,
@@ -165,11 +189,6 @@ export default function StockDetailPage({
   // 相邻产品
   const [prevHref, setPrevHref] = useState<string | null>(null);
   const [nextHref, setNextHref] = useState<string | null>(null);
-  const [prevPrefetch, setPrevPrefetch] = useState<string | null>(null);
-  const [nextPrefetch, setNextPrefetch] = useState<string | null>(null);
-
-  const [loading, setLoading] = useState(true);
-  const stripRef = useRef<HTMLDivElement>(null);
 
   // 放大查看
   const [zoomOpen, setZoomOpen] = useState(false);
@@ -179,7 +198,15 @@ export default function StockDetailPage({
   const [zoomTy, setZoomTy] = useState(0);
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
 
+  // 购物车
+  const [cartOpen, setCartOpen] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [qty, setQty] = useState<number>(1);
+
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => preconnectOnce(), []);
+  useEffect(() => { setCart(loadCart()); }, []);
 
   // 渐进切换：tiny -> small -> big
   const setMainFromRaw = (raw: string) => {
@@ -196,7 +223,7 @@ export default function StockDetailPage({
     }
   };
 
-  // 放大：默认裁切后的小清晰图 -> 再升级超清
+  // 放大：先 small，后 xlarge
   const openZoom = (raw: string) => {
     const small = toProxy(raw, 960, 720, 78);
     const xlarge = toProxy(raw, 1600, 1200, 85);
@@ -206,7 +233,7 @@ export default function StockDetailPage({
     if (xlarge) { const img = new Image(); img.src = xlarge; img.onload = () => setZoomSrc(xlarge); }
   };
 
-  // 生成链接（带兜底文本，切页更快）
+  // 生成详情链接（带兜底字段）
   const makeHref = (item: AnyObj) => {
     const q = new URLSearchParams({
       title: String(pick(item, ['title'], '-')),
@@ -219,15 +246,7 @@ export default function StockDetailPage({
     return `/stock/${encodeURIComponent(String(pick(item, ['num'], '')))}?${q}`;
   };
 
-  // 预热：预取相邻产品的 small 图
-  const prefetchSmall = (raw?: string | null) => {
-    if (!raw) return null;
-    const u = toProxy(raw, 560, 420, 58);
-    if (!u) return null;
-    const i = new Image(); i.src = u;
-    return u;
-  };
-
+  // 加载详情 + 候选图片 + 上/下一条
   useEffect(() => {
     const baseFromQuery: AnyObj = {
       num,
@@ -259,29 +278,19 @@ export default function StockDetailPage({
         setThumbs(all.slice(0, 12));
         if (all.length) setMainFromRaw(all[0]);
 
-        // 上/下一条 + 预热
+        // 上/下一条
         const idx = found ? list.indexOf(found) : list.findIndex((it) => String(pick(it, ['num'], '')) === num);
         const prev = idx > 0 ? list[idx - 1] : null;
         const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
         setPrevHref(prev ? makeHref(prev) : null);
         setNextHref(next ? makeHref(next) : null);
-
-        // 预热图
-        const firstOf = (it: AnyObj | null) => {
-          if (!it) return null;
-          const s = new Set<string>();
-          collectCandidateUrls(it).forEach((u) => s.add(u));
-          return Array.from(s)[0] || null;
-        };
-        setPrevPrefetch(prefetchSmall(firstOf(prev)));
-        setNextPrefetch(prefetchSmall(firstOf(next)));
       } finally {
         setLoading(false);
       }
     })();
   }, [num, searchParams]);
 
-  // 缩略图滚动：每次追加12张，避免一次性绘制太多
+  // 缩略图滚动追加
   const onThumbsScroll: React.UIEventHandler<HTMLDivElement> = (e) => {
     const el = e.currentTarget;
     if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 12) {
@@ -302,6 +311,40 @@ export default function StockDetailPage({
       stock: pick(d, ['stock'], '-'),
     };
   }, [detail, num]);
+
+  /* ======== 购物车操作 ======== */
+  const addToCart = () => {
+    const priceNum = parseFloat(String(view.price).toString().replace(/[^\d.]+/g, '')) || 0;
+    const item: CartItem = {
+      num: String(view.num),
+      title: String(view.title),
+      price: priceNum,
+      qty: Math.max(1, Math.floor(qty)),
+      img: currentRaw ? toProxy(currentRaw, 160, 120, 60) : null,
+      oe: String(view.oe),
+      brand: String(view.brand),
+      model: String(view.model),
+    };
+    const copy = [...cart];
+    const idx = copy.findIndex((x) => x.num === item.num);
+    if (idx >= 0) copy[idx].qty += item.qty;
+    else copy.push(item);
+    setCart(copy);
+    saveCart(copy);
+    setCartOpen(true);
+  };
+
+  const updateQty = (numKey: string, newQty: number) => {
+    const copy = cart.map((x) => (x.num === numKey ? { ...x, qty: Math.max(1, Math.floor(newQty)) } : x));
+    setCart(copy); saveCart(copy);
+  };
+  const removeItem = (numKey: string) => {
+    const copy = cart.filter((x) => x.num !== numKey);
+    setCart(copy); saveCart(copy);
+  };
+  const clearCart = () => { setCart([]); saveCart([]); };
+  const total = cart.reduce((s, x) => s + x.price * x.qty, 0);
+  const cartCount = cart.reduce((s, x) => s + x.qty, 0);
 
   /* ======== 放大交互（缩放/拖动） ======== */
   const onWheelZoom: React.WheelEventHandler<HTMLDivElement> = (e) => {
@@ -350,17 +393,11 @@ export default function StockDetailPage({
 
       {/* 主体 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 左：大图（裁切+遮罩，避免水印） */}
+        {/* 左：大图（裁切+遮罩） */}
         <div className="w-full">
           <div
             className="relative w-full"
-            style={{
-              height: 360,
-              borderRadius: 8,
-              border: '1px solid #eee',
-              background: '#fafafa',
-              overflow: 'hidden',
-            }}
+            style={{ height: 360, borderRadius: 8, border: '1px solid #eee', background: '#fafafa', overflow: 'hidden' }}
           >
             {imgUrl ? (
               <img
@@ -372,7 +409,6 @@ export default function StockDetailPage({
                 className="absolute inset-0 w-full h-full"
                 style={{
                   objectFit: 'contain',
-                  // 关键：统一裁切顶部/底部，彻底不让底部字样进入画面
                   clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)`,
                   objectPosition: 'center 48%',
                   cursor: 'zoom-in',
@@ -382,22 +418,16 @@ export default function StockDetailPage({
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-gray-400">无图</div>
             )}
-            {/* 底部渐变遮罩（双保险） */}
             <div
               className="absolute left-0 right-0 bottom-0 pointer-events-none"
               style={{ height: MASK_BOTTOM_PX, background: 'linear-gradient(to bottom, rgba(250,250,250,0), rgba(250,250,250,1))' }}
             />
           </div>
 
-          {/* 缩略图条（同样裁切） */}
+          {/* 缩略图条 */}
           {thumbs.length > 0 && (
             <div className="mt-3 relative">
-              <div
-                ref={(el) => { if (el) (stripRef as any).current = el; }}
-                onScroll={onThumbsScroll}
-                className="flex gap-2 overflow-x-auto px-2 py-2"
-                style={{ scrollBehavior: 'smooth' }}
-              >
+              <div onScroll={onThumbsScroll} className="flex gap-2 overflow-x-auto px-2 py-2" style={{ scrollBehavior: 'smooth' }}>
                 {thumbs.map((raw, idx) => {
                   const tiny = toProxy(raw, 96, 72, 42);
                   if (!tiny) return null;
@@ -416,24 +446,18 @@ export default function StockDetailPage({
                         loading="lazy"
                         decoding="async"
                         referrerPolicy="no-referrer"
-                        style={{
-                          width: '100%', height: '100%', objectFit: 'contain',
-                          clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)`,
-                          background: '#fafafa'
-                        }}
+                        style={{ width: '100%', height: '100%', objectFit: 'contain', clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)`, background: '#fafafa' }}
                       />
                     </button>
                   );
                 })}
               </div>
-              <div className="px-2 text-xs text-gray-500 mt-1">
-                已载 {thumbs.length}/{allThumbs.length} 张（横向滚动自动加载更多）
-              </div>
+              <div className="px-2 text-xs text-gray-500 mt-1">已载 {thumbs.length}/{allThumbs.length} 张（横向滚动自动加载更多）</div>
             </div>
           )}
         </div>
 
-        {/* 右：信息区（已无“数据源”字样） */}
+        {/* 右：信息 + 加入购物车 */}
         <div className="w-full">
           <div className="rounded border p-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-[15px] leading-7">
@@ -446,30 +470,53 @@ export default function StockDetailPage({
               <div><span className="font-semibold">Price：</span>{String(view.price)}</div>
               <div><span className="font-semibold">Stock：</span>{String(view.stock)}</div>
             </div>
+
+            {/* 购买区域 */}
+            <div className="mt-6 flex items-center gap-3">
+              <div className="flex items-center border rounded overflow-hidden">
+                <button
+                  className="px-3 py-2 hover:bg-gray-50"
+                  onClick={() => setQty((q) => Math.max(1, q - 1))}
+                  aria-label="减少数量"
+                >-</button>
+                <input
+                  value={qty}
+                  onChange={(e) => setQty(Math.max(1, parseInt(e.target.value || '1', 10)))}
+                  className="w-16 text-center outline-none py-2"
+                />
+                <button
+                  className="px-3 py-2 hover:bg-gray-50"
+                  onClick={() => setQty((q) => q + 1)}
+                  aria-label="增加数量"
+                >+</button>
+              </div>
+              <button
+                onClick={addToCart}
+                className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5"
+              >
+                加入购物车
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       {loading && <div className="mt-6 text-gray-500 text-sm">加载中…</div>}
 
-      {/* 底部 上/下一条（已预热 small 图） */}
+      {/* 底部 上/下一条 */}
       <div className="mt-8 flex items-center justify-end gap-2">
         <Link href={prevHref || '#'} prefetch className={`inline-flex items-center rounded border px-3 py-2 ${prevHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`} aria-disabled={!prevHref}>上一条</Link>
         <Link href={nextHref || '#'} prefetch className={`inline-flex items-center rounded border px-3 py-2 ${nextHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`} aria-disabled={!nextHref}>下一条</Link>
       </div>
 
-      {/* 放大查看（同样裁切，彻底不露出底部字样） */}
+      {/* 放大查看（同样裁切） */}
       {zoomOpen && (
         <div
-          onWheel={(e) => { e.preventDefault(); const d = -e.deltaY; setZoomScale((s) => Math.min(4, Math.max(1, s + (d > 0 ? 0.12 : -0.12)))); }}
-          onMouseDown={(e) => (drag.current = { x: e.clientX, y: e.clientY, tx: zoomTx, ty: zoomTy })}
-          onMouseMove={(e) => {
-            if (!drag.current) return;
-            const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y;
-            setZoomTx(drag.current.tx + dx); setZoomTy(drag.current.ty + dy);
-          }}
-          onMouseUp={() => (drag.current = null)}
-          onMouseLeave={() => (drag.current = null)}
+          onWheel={onWheelZoom}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onMouseLeave={onMouseUp}
           className="fixed inset-0 z-50 bg-black/80 cursor-grab"
           onClick={() => setZoomOpen(false)}
           role="dialog" aria-modal="true" title="点击任意处关闭"
@@ -491,17 +538,103 @@ export default function StockDetailPage({
                   maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain',
                   transform: `translate(${zoomTx}px, ${zoomTy}px) scale(${zoomScale})`,
                   transition: 'transform 80ms ease-out',
-                  // 放大图同样做顶部/底部裁切，避免露字
                   clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)`,
                   pointerEvents: 'none',
                 }}
               />
             )}
-            {/* 底部遮罩双保险 */}
             <div
               className="absolute left-0 right-0 bottom-0 pointer-events-none"
               style={{ height: MASK_BOTTOM_PX, background: 'linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,0.8))' }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* 右下角悬浮购物车按钮 + 购物车弹窗 */}
+      <button
+        onClick={() => setCartOpen(true)}
+        className="fixed right-4 bottom-4 z-40 rounded-full shadow-lg bg-gray-900 text-white px-4 py-3"
+        aria-label="打开购物车"
+        title="打开购物车"
+      >
+        购物车 {cartCount > 0 ? `(${cartCount})` : ''}
+      </button>
+
+      {cartOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setCartOpen(false)}>
+          <div
+            className="absolute right-0 top-0 h-full w-full sm:w-[420px] bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div className="font-semibold">购物车</div>
+              <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => setCartOpen(false)}>关闭</button>
+            </div>
+
+            <div className="p-4 space-y-3 max-h-[70vh] overflow-auto">
+              {cart.length === 0 ? (
+                <div className="text-gray-500">购物车是空的</div>
+              ) : (
+                cart.map((it) => (
+                  <div key={it.num} className="flex items-center gap-3 border rounded p-2">
+                    <div className="w-20 h-16 flex items-center justify-center bg-gray-50 overflow-hidden">
+                      {it.img ? (
+                        <img
+                          src={it.img}
+                          alt={it.title}
+                          referrerPolicy="no-referrer"
+                          style={{ width: '100%', height: '100%', objectFit: 'contain', clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)` }}
+                        />
+                      ) : (
+                        <div className="text-gray-400">无图</div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate" title={it.title}>{it.title}</div>
+                      <div className="text-sm text-gray-500">Num: {it.num}</div>
+                      {it.oe && <div className="text-sm text-gray-500">OE: {it.oe}</div>}
+                      <div className="mt-1 text-emerald-700 font-semibold">¥ {money(it.price)}</div>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <div className="flex items-center border rounded overflow-hidden">
+                        <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty - 1)}>-</button>
+                        <input
+                          className="w-12 text-center"
+                          value={it.qty}
+                          onChange={(e) => updateQty(it.num, parseInt(e.target.value || '1', 10))}
+                        />
+                        <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty + 1)}>+</button>
+                      </div>
+                      <button className="text-red-600 text-sm hover:underline" onClick={() => removeItem(it.num)}>删除</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-2 px-4 py-3 border-t">
+              <div className="flex items-center justify-between">
+                <div className="text-gray-600">合计</div>
+                <div className="text-xl font-bold text-gray-900">¥ {money(total)}</div>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  onClick={clearCart}
+                  className="rounded border px-4 py-2 hover:bg-gray-50"
+                  disabled={cart.length === 0}
+                >
+                  清空
+                </button>
+                <button
+                  onClick={() => alert('暂未接入结算流程（下一步将增加独立购物车/结算页面）')}
+                  className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 flex-1"
+                  disabled={cart.length === 0}
+                >
+                  去结算
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
