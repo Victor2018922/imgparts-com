@@ -37,17 +37,17 @@ const pick = <T extends object, K extends keyof any>(
   }
 };
 
-// —— 工具：把任意 URL 走 weserv 加速（裁切/压缩，去水印条带） ——
+// —— 工具：把任意 URL 走 weserv 加速（裁切/压缩，弱化条带水印） ——
 const viaProxy = (raw?: string, w = 900, h = 900) => {
   if (!raw) return '';
   let clean = raw.trim();
 
-  // 尽量规避明显水印域名（根据你们后端的字段情况，这里仅做常见替换）
+  // 根据需要做域名清洗（按你们真实域名调整/增减）
   clean = clean.replace('img-nnparts.oss-cn-hangzhou.aliyuncs.com', '');
 
-  // weserv 只接受不带协议域名或 http(s) 域名；为了稳定去掉 https://
+  // 去协议，便于 weserv 识别
   const noProto = clean.replace(/^https?:\/\//, '');
-  // 使用 fit=inside，质量 q=60；裁边 t=1 可以自动去黑边，效果比强制裁切更稳
+  // fit=inside 不裁掉主体；t=1/2 尝试弱化四周条带；q=60 控制体积
   return `https://images.weserv.nl/?url=${encodeURIComponent(noProto)}&w=${w}&h=${h}&fit=inside&we&output=webp&q=60&t=1`;
 };
 
@@ -80,8 +80,10 @@ const normalizeItem = (x: any): StockItem => {
 };
 
 export default function StockDetailPage() {
-  // ✅ 使用强类型，不再是可能为 null 的 params
-  const { num } = useParams<{ num: string }>();
+  // ✅ 兼容不同 Next 版本的类型（有的版本 useParams 可能返回 null）
+  const params = useParams() as Record<string, string> | null;
+  const num = (params?.num ?? '').toString();
+
   const search = useSearchParams();
   const router = useRouter();
 
@@ -109,7 +111,7 @@ export default function StockDetailPage() {
       .filter(Boolean),
   };
 
-  // 拉取一页较大的列表（便于“上一条/下一条”与兜底）
+  // 拉取一页较大的列表（便于“上一条/下一条”和兜底）
   useEffect(() => {
     let abort = false;
     (async () => {
@@ -118,7 +120,8 @@ export default function StockDetailPage() {
         const url = `${API}?size=500&page=0`;
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
-        // 兼容不同结构
+
+        // 兼容不同返回结构
         const records =
           pick(data, ['data', 'records'], null) ??
           pick(data, ['data', 'list'], null) ??
@@ -221,13 +224,11 @@ export default function StockDetailPage() {
               {loading ? (
                 <div className="animate-pulse w-full h-full bg-gray-100" />
               ) : activeImage ? (
-                // 使用 weserv 加速与压缩
                 <img
                   src={viaProxy(activeImage, 900, 900)}
                   alt={current?.title || current?.product || current?.num || ''}
                   className="w-full h-full object-contain cursor-zoom-in"
                   onClick={() => {
-                    // 点击再次放大查看细节：简单打开新窗口原图（也经过代理）
                     window.open(viaProxy(activeImage, 1600, 1600), '_blank');
                   }}
                 />
