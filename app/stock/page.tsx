@@ -144,6 +144,10 @@ type CartItem = {
   model?: string;
 };
 const CART_KEY = 'imgparts_cart_v1';
+const CUSTOMER_KEY = 'imgparts_customer_v1';
+const ORDER_LAST_KEY = 'imgparts_last_order_v1';
+const ORDERS_KEY = 'imgparts_orders_v1';
+
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
   try { return JSON.parse(localStorage.getItem(CART_KEY) || '[]') as CartItem[]; } catch { return []; }
@@ -165,10 +169,41 @@ export default function StockListPage() {
   // 购物车
   const [cartOpen, setCartOpen] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
+  type Step = 'cart' | 'checkout' | 'success';
+  const [drawerStep, setDrawerStep] = useState<Step>('cart');
+
+  // 结算表单
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [country, setCountry] = useState('');
+  const [city, setCity] = useState('');
+  const [address, setAddress] = useState('');
+  const [postcode, setPostcode] = useState('');
+  const [note, setNote] = useState('');
+  const [shipping, setShipping] = useState<'standard' | 'express'>('standard');
+
+  // 提交成功信息
+  const [orderId, setOrderId] = useState<string | null>(null);
 
   useEffect(() => {
     preconnectOnce();
     setCart(loadCart());
+
+    // 载入客户缓存
+    try {
+      const saved = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || 'null');
+      if (saved) {
+        setName(saved.name || '');
+        setPhone(saved.phone || '');
+        setEmail(saved.email || '');
+        setCountry(saved.country || '');
+        setCity(saved.city || '');
+        setAddress(saved.address || '');
+        setPostcode(saved.postcode || '');
+      }
+    } catch {}
+
     (async () => {
       try {
         const res = await fetch('https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0', { cache: 'no-store' });
@@ -186,6 +221,11 @@ export default function StockListPage() {
       }
     })();
   }, []);
+
+  // 打开/关闭抽屉时重置到购物车视图
+  useEffect(() => {
+    if (cartOpen) setDrawerStep('cart');
+  }, [cartOpen]);
 
   const cartCount = useMemo(() => cart.reduce((s, x) => s + x.qty, 0), [cart]);
   const cartTotal = useMemo(() => cart.reduce((s, x) => s + x.price * x.qty, 0), [cart]);
@@ -246,6 +286,42 @@ export default function StockListPage() {
   };
   const removeItem = (numKey: string) => { const copy = cart.filter((x) => x.num !== numKey); setCart(copy); saveCart(copy); };
   const clearCart = () => { setCart([]); saveCart([]); };
+
+  /* ======== 结算表单与订单提交 ======== */
+  const saveCustomer = () => {
+    try {
+      localStorage.setItem(CUSTOMER_KEY, JSON.stringify({ name, phone, email, country, city, address, postcode }));
+    } catch {}
+  };
+
+  const submitOrder = () => {
+    // 简单校验
+    if (!name.trim()) return alert('请填写姓名');
+    if (!phone.trim()) return alert('请填写手机');
+    if (!address.trim()) return alert('请填写地址');
+    if (cart.length === 0) return alert('购物车为空');
+
+    const id = 'IP' + Date.now();
+    const order = {
+      id,
+      items: cart,
+      total: cartTotal,
+      customer: { name, phone, email, country, city, address, postcode, note, shipping },
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(ORDER_LAST_KEY, JSON.stringify(order));
+      const list = JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
+      list.unshift(order);
+      localStorage.setItem(ORDERS_KEY, JSON.stringify(list));
+    } catch {}
+
+    // 清空购物车并进入成功页
+    clearCart();
+    saveCustomer();
+    setOrderId(id);
+    setDrawerStep('success');
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
@@ -338,84 +414,207 @@ export default function StockListPage() {
         购物车 {cartCount > 0 ? `(${cartCount})` : ''}
       </button>
 
-      {/* 购物车抽屉 */}
+      {/* 购物车/结算/成功 抽屉 */}
       {cartOpen && (
         <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setCartOpen(false)}>
           <div
-            className="absolute right-0 top-0 h-full w-full sm:w-[420px] bg-white shadow-xl"
+            className="absolute right-0 top-0 h-full w-full sm:w-[460px] bg-white shadow-xl flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
+            {/* 顶部 */}
             <div className="flex items-center justify-between px-4 py-3 border-b">
-              <div className="font-semibold">购物车</div>
+              <div className="font-semibold">
+                {drawerStep === 'cart' && '购物车'}
+                {drawerStep === 'checkout' && '填写收件信息'}
+                {drawerStep === 'success' && '下单成功'}
+              </div>
               <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => setCartOpen(false)}>关闭</button>
             </div>
 
-            <div className="p-4 space-y-3 max-h-[70vh] overflow-auto">
-              {cart.length === 0 ? (
-                <div className="text-gray-500">购物车是空的</div>
-              ) : (
-                cart.map((it) => (
-                  <div key={it.num} className="flex items-center gap-3 border rounded p-2">
-                    <div className="w-20 h-16 flex items-center justify-center bg-gray-50 overflow-hidden">
-                      {it.img ? (
-                        <img
-                          src={it.img}
-                          alt={it.title}
-                          referrerPolicy="no-referrer"
-                          style={{
-                            width: '100%', height: '100%', objectFit: 'contain',
-                            clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)`,
-                          }}
-                        />
-                      ) : (
-                        <div className="text-gray-400">无图</div>
-                      )}
+            {/* 内容 */}
+            <div className="p-4 overflow-auto flex-1">
+              {drawerStep === 'cart' && (
+                <>
+                  {cart.length === 0 ? (
+                    <div className="text-gray-500">购物车是空的</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {cart.map((it) => (
+                        <div key={it.num} className="flex items-center gap-3 border rounded p-2">
+                          <div className="w-20 h-16 flex items-center justify-center bg-gray-50 overflow-hidden">
+                            {it.img ? (
+                              <img
+                                src={it.img}
+                                alt={it.title}
+                                referrerPolicy="no-referrer"
+                                style={{
+                                  width: '100%', height: '100%', objectFit: 'contain',
+                                  clipPath: `inset(${CROP_TOP_PCT}% 0% ${CROP_BOTTOM_PCT}% 0%)`,
+                                }}
+                              />
+                            ) : (
+                              <div className="text-gray-400">无图</div>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate" title={it.title}>{it.title}</div>
+                            <div className="text-sm text-gray-500">Num: {it.num}</div>
+                            {it.oe && <div className="text-sm text-gray-500">OE: {it.oe}</div>}
+                            <div className="mt-1 text-emerald-700 font-semibold">¥ {money(it.price)}</div>
+                          </div>
+                          <div className="flex flex-col items-end gap-2">
+                            <div className="flex items-center border rounded overflow-hidden">
+                              <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty - 1)}>-</button>
+                              <input
+                                className="w-12 text-center"
+                                value={it.qty}
+                                onChange={(e) => updateQty(it.num, parseInt(e.target.value || '1', 10))}
+                              />
+                              <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty + 1)}>+</button>
+                            </div>
+                            <button className="text-red-600 text-sm hover:underline" onClick={() => removeItem(it.num)}>删除</button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate" title={it.title}>{it.title}</div>
-                      <div className="text-sm text-gray-500">Num: {it.num}</div>
-                      {it.oe && <div className="text-sm text-gray-500">OE: {it.oe}</div>}
-                      <div className="mt-1 text-emerald-700 font-semibold">¥ {money(it.price)}</div>
+                  )}
+                </>
+              )}
+
+              {drawerStep === 'checkout' && (
+                <form
+                  className="space-y-3"
+                  onSubmit={(e) => { e.preventDefault(); submitOrder(); }}
+                >
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">姓名*</label>
+                      <input className="flex-1 border rounded px-3 py-2" value={name} onChange={(e) => setName(e.target.value)} required />
                     </div>
-                    <div className="flex flex-col items-end gap-2">
-                      <div className="flex items-center border rounded overflow-hidden">
-                        <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty - 1)}>-</button>
-                        <input
-                          className="w-12 text-center"
-                          value={it.qty}
-                          onChange={(e) => updateQty(it.num, parseInt(e.target.value || '1', 10))}
-                        />
-                        <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty + 1)}>+</button>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">手机*</label>
+                      <input className="flex-1 border rounded px-3 py-2" value={phone} onChange={(e) => setPhone(e.target.value)} required />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">邮箱</label>
+                      <input type="email" className="flex-1 border rounded px-3 py-2" value={email} onChange={(e) => setEmail(e.target.value)} />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">国家/地区</label>
+                      <input className="flex-1 border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)} />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">城市</label>
+                      <input className="flex-1 border rounded px-3 py-2" value={city} onChange={(e) => setCity(e.target.value)} />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">地址*</label>
+                      <input className="flex-1 border rounded px-3 py-2" value={address} onChange={(e) => setAddress(e.target.value)} required />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">邮编</label>
+                      <input className="flex-1 border rounded px-3 py-2" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
+                    </div>
+                    <div className="flex gap-2">
+                      <label className="w-24 text-gray-600 py-2">备注</label>
+                      <textarea className="flex-1 border rounded px-3 py-2" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
+                    </div>
+
+                    <div className="flex gap-2 items-center">
+                      <label className="w-24 text-gray-600">配送方式</label>
+                      <div className="flex-1 flex gap-4">
+                        <label className="flex items-center gap-2">
+                          <input type="radio" name="shipping" checked={shipping === 'standard'} onChange={() => setShipping('standard')} />
+                          标准运输
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input type="radio" name="shipping" checked={shipping === 'express'} onChange={() => setShipping('express')} />
+                          加急运输
+                        </label>
                       </div>
-                      <button className="text-red-600 text-sm hover:underline" onClick={() => removeItem(it.num)}>删除</button>
                     </div>
                   </div>
-                ))
+
+                  <div className="mt-4 border-t pt-3">
+                    <div className="flex items-center justify-between text-lg">
+                      <span>应付合计</span>
+                      <strong>¥ {money(cartTotal)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { saveCustomer(); setDrawerStep('cart'); }}
+                      className="rounded border px-4 py-2 hover:bg-gray-50"
+                    >
+                      返回购物车
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 flex-1"
+                      disabled={cart.length === 0}
+                    >
+                      提交订单
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {drawerStep === 'success' && (
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-600">下单成功</div>
+                  <div className="mt-2 text-gray-600">订单号：{orderId}</div>
+                  <div className="mt-2 text-gray-600">应付合计：¥ {money(cartTotal)}</div>
+                  <div className="mt-6 flex items-center gap-2 justify-center">
+                    <button
+                      className="rounded bg-gray-900 hover:bg-black text-white px-4 py-2"
+                      onClick={() => { setCartOpen(false); setDrawerStep('cart'); }}
+                    >
+                      继续购物
+                    </button>
+                    <button
+                      className="rounded border px-4 py-2 hover:bg-gray-50"
+                      onClick={() => {
+                        try {
+                          const last = localStorage.getItem(ORDER_LAST_KEY) || '';
+                          navigator.clipboard?.writeText(last);
+                          alert('订单信息已复制');
+                        } catch { alert('复制失败'); }
+                      }}
+                    >
+                      复制订单信息
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
 
-            <div className="mt-2 px-4 py-3 border-t">
-              <div className="flex items-center justify-between">
-                <div className="text-gray-600">合计</div>
-                <div className="text-xl font-bold text-gray-900">¥ {money(cartTotal)}</div>
+            {/* 底部（仅购物车视图显示） */}
+            {drawerStep === 'cart' && (
+              <div className="mt-2 px-4 py-3 border-t">
+                <div className="flex items-center justify-between">
+                  <div className="text-gray-600">合计</div>
+                  <div className="text-xl font-bold text-gray-900">¥ {money(cartTotal)}</div>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    onClick={clearCart}
+                    className="rounded border px-4 py-2 hover:bg-gray-50"
+                    disabled={cart.length === 0}
+                  >
+                    清空
+                  </button>
+                  <button
+                    onClick={() => setDrawerStep('checkout')}
+                    className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 flex-1"
+                    disabled={cart.length === 0}
+                  >
+                    去结算
+                  </button>
+                </div>
               </div>
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  onClick={clearCart}
-                  className="rounded border px-4 py-2 hover:bg-gray-50"
-                  disabled={cart.length === 0}
-                >
-                  清空
-                </button>
-                <button
-                  onClick={() => alert('暂未接入结算流程（下一步将增加独立结算页）')}
-                  className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 flex-1"
-                  disabled={cart.length === 0}
-                >
-                  去结算
-                </button>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       )}
