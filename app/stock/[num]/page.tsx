@@ -145,11 +145,18 @@ export default function StockDetailPage({
 }) {
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
-  const [thumbs, setThumbs] = useState<string[]>([]);
-  const [currentRaw, setCurrentRaw] = useState<string | null>(null); // 记录当前选中的“原始URL”
-  const [imgUrl, setImgUrl] = useState<string | null>(null);         // 实际展示（可能是小图或大图）
-  const [loading, setLoading] = useState<boolean>(true);
 
+  // 缩略图 / 大图（渐进切换）
+  const [thumbs, setThumbs] = useState<string[]>([]);
+  const [currentRaw, setCurrentRaw] = useState<string | null>(null);
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+
+  // 上一条 / 下一条
+  const [allList, setAllList] = useState<any[]>([]);
+  const [prevHref, setPrevHref] = useState<string | null>(null);
+  const [nextHref, setNextHref] = useState<string | null>(null);
+
+  const [loading, setLoading] = useState<boolean>(true);
   const stripRef = useRef<HTMLDivElement>(null);
 
   // 统一的“渐进切换”函数：先小图立即显示，再预载大图，完成后自动升级
@@ -163,6 +170,21 @@ export default function StockDetailPage({
       pre.src = big;
       pre.onload = () => setImgUrl(big);        // 大图加载好后自动替换
     }
+  };
+
+  // 构建详情页跳转链接，带上常用字段兜底
+  const makeHref = (item: AnyObj) => {
+    const n   = String(pick(item, ['num'], ''));
+    const t   = String(pick(item, ['title'], '-'));
+    const oe  = String(pick(item, ['oe'], ''));
+    const br  = String(pick(item, ['brand'], '-'));
+    const md  = String(pick(item, ['model'], '-'));
+    const pr  = String(pick(item, ['price'], '-'));
+    const st  = String(pick(item, ['stock'], '-'));
+    const q = new URLSearchParams({
+      title: t, oe: oe, brand: br, model: md, price: pr, stock: st,
+    }).toString();
+    return `/stock/${encodeURIComponent(n)}?${q}`;
   };
 
   useEffect(() => {
@@ -181,7 +203,7 @@ export default function StockDetailPage({
 
     (async () => {
       try {
-        // 拉取一页 500 条，在前端匹配 num
+        // 拉取一页 500 条（当前数据量），用于：1) 找当前详情；2) 生成 上/下一条
         const res = await fetch(
           'https://niuniuparts.com:6001/scm-product/v1/stock2?size=500&page=0',
           { cache: 'no-store' }
@@ -194,11 +216,15 @@ export default function StockDetailPage({
           data?.records ??
           data?.data ??
           [];
+
+        setAllList(list);
+
+        // 1) 找到当前记录（并合并 query 里的兜底字段）
         const found = findByNum(list, num);
         const merged = found ? { ...(baseFromQuery || {}), ...found } : baseFromQuery;
         setDetail(merged);
 
-        // 收集候选图片
+        // 2) 生成缩略图候选 & 初始大图
         const candidates = new Set<string>();
         collectCandidateUrls(merged).forEach((u) => candidates.add(u));
         extractUrlsFromText(JSON.stringify(merged)).forEach((u) => candidates.add(u));
@@ -207,9 +233,22 @@ export default function StockDetailPage({
 
         const all = Array.from(candidates).filter(Boolean);
         setThumbs(all);
-
-        // 初始主图（渐进加载）
         if (all.length) setMainFromRaw(all[0]);
+
+        // 3) 计算上/下一条
+        let idx = -1;
+        if (found) {
+          idx = list.indexOf(found);
+        }
+        if (idx < 0) {
+          // 兜底：按 num 再找一次索引
+          idx = list.findIndex((it) => String(pick(it, ['num'], '')) === num);
+        }
+        const prev = idx > 0 ? list[idx - 1] : null;
+        const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
+
+        setPrevHref(prev ? makeHref(prev) : null);
+        setNextHref(next ? makeHref(next) : null);
       } finally {
         setLoading(false);
       }
@@ -247,10 +286,28 @@ export default function StockDetailPage({
         </a>
       </header>
 
-      <div className="mb-4">
+      <div className="mb-4 flex items-center gap-3">
         <Link href="/stock" className="inline-flex items-center gap-2 rounded border px-3 py-2 hover:bg-gray-50">
           ← 返回列表
         </Link>
+
+        {/* 上一条 / 下一条 */}
+        <div className="ml-auto flex items-center gap-2">
+          <Link
+            href={prevHref || '#'}
+            className={`inline-flex items-center rounded border px-3 py-2 ${prevHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
+            aria-disabled={!prevHref}
+          >
+            上一条
+          </Link>
+          <Link
+            href={nextHref || '#'}
+            className={`inline-flex items-center rounded border px-3 py-2 ${nextHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
+            aria-disabled={!nextHref}
+          >
+            下一条
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -373,6 +430,24 @@ export default function StockDetailPage({
       </div>
 
       {loading && <div className="mt-6 text-gray-500 text-sm">加载中…（首次加载会稍慢）</div>}
+
+      {/* 底部再放一组 上/下一条，方便阅读到末尾时继续浏览 */}
+      <div className="mt-8 flex items-center justify-end gap-2">
+        <Link
+          href={prevHref || '#'}
+          className={`inline-flex items-center rounded border px-3 py-2 ${prevHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
+          aria-disabled={!prevHref}
+        >
+          上一条
+        </Link>
+        <Link
+          href={nextHref || '#'}
+          className={`inline-flex items-center rounded border px-3 py-2 ${nextHref ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
+          aria-disabled={!nextHref}
+        >
+          下一条
+        </Link>
+      </div>
     </div>
   );
 }
