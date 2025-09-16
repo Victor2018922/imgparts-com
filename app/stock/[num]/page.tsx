@@ -5,12 +5,10 @@ import Link from 'next/link';
 
 type AnyObj = Record<string, any>;
 
-/* ================== 连接与图片工具 ================== */
+/* ============ 连接优化：预连接图片域名，降低握手延迟 ============ */
 function appendPreconnectOnce() {
-  // 预连接，减少首包与TLS握手延迟
   if (typeof document === 'undefined') return;
-  const marks = ['__pc_weserv__', '__pc_niuniu__'];
-  if ((window as any)[marks[0]] && (window as any)[marks[1]]) return;
+  if ((window as any).__img_preconnected__) return;
   const cfg: Array<{ rel: string; href: string }> = [
     { rel: 'preconnect', href: 'https://images.weserv.nl' },
     { rel: 'dns-prefetch', href: '//images.weserv.nl' },
@@ -23,10 +21,10 @@ function appendPreconnectOnce() {
     link.href = href;
     document.head.appendChild(link);
   }
-  (window as any)[marks[0]] = true;
-  (window as any)[marks[1]] = true;
+  (window as any).__img_preconnected__ = true;
 }
 
+/* ============ 图片 URL & 代理（统一走 HTTPS + 压缩） ============ */
 function absolutize(url: string): string {
   if (!url) return url;
   let u = url.trim();
@@ -34,18 +32,17 @@ function absolutize(url: string): string {
   if (u.startsWith('/')) return 'http://niuniuparts.com' + u;
   return u;
 }
-
-/** 通过 HTTPS 代理输出；可调尺寸与质量（更小=更快） */
+/** 通过 weserv 代理，等比 contain；q 越小越快；可指定目标尺寸 */
 function toProxy(raw?: string | null, w = 800, h = 600, q = 75): string | null {
   if (!raw) return null;
   let u = absolutize(raw);
-  if (/^data:image\//i.test(u)) return u;        // 内联图直出
-  u = u.replace(/^https?:\/\//i, '');            // weserv 需要无协议 host
-  // fit=contain 保比例，we=auto 输出 webp，il 渐进
+  if (/^data:image\//i.test(u)) return u;
+  u = u.replace(/^https?:\/\//i, '');
+  // 说明：object-fit 已做“contain”，并在容器上轻微裁切底部，尽量遮住源图底部水印文字
   return `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${h}&fit=contain&we=auto&q=${q}&il`;
 }
 
-/* ================== 候选图片收集 ================== */
+/* ============ 候选图片收集（从任意字段、HTML、相对路径中提取） ============ */
 function extractUrlsFromText(text: string): string[] {
   const urls = new Set<string>();
   if (!text) return [];
@@ -60,7 +57,6 @@ function extractUrlsFromText(text: string): string[] {
   while ((m = reAny.exec(text))) urls.add(m[1]);
   return Array.from(urls);
 }
-
 function collectCandidateUrls(obj: any, max = 3000): string[] {
   const ret = new Set<string>();
   const seen = new Set<any>();
@@ -116,7 +112,7 @@ function collectCandidateUrls(obj: any, max = 3000): string[] {
   return Array.from(ret);
 }
 
-/* ================== 数据取值与定位 ================== */
+/* ============ 取值/定位 ============ */
 function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-') {
   if (!obj) return fallback;
   const alias: Record<string, string[]> = {
@@ -138,7 +134,6 @@ function pick(obj: AnyObj | null | undefined, keys: string[], fallback: any = '-
   }
   return fallback;
 }
-
 function findByNum(list: any[], num: string): AnyObj | null {
   if (!Array.isArray(list)) return null;
   const norm = (v: any) => String(v ?? '').trim();
@@ -155,7 +150,7 @@ function findByNum(list: any[], num: string): AnyObj | null {
   return null;
 }
 
-/* ================== 页面组件 ================== */
+/* ============ 组件 ============ */
 export default function StockDetailPage({
   params,
   searchParams,
@@ -166,32 +161,39 @@ export default function StockDetailPage({
   const num = decodeURI(params.num || '').trim();
   const [detail, setDetail] = useState<AnyObj | null>(null);
 
-  // 图片与缩略图
+  // 缩略图与主图（渐进：tiny→small→big）
   const [allThumbs, setAllThumbs] = useState<string[]>([]);
-  const [thumbs, setThumbs] = useState<string[]>([]); // 仅渲染前 N 张，减少首屏压力
+  const [thumbs, setThumbs] = useState<string[]>([]); // 首屏 12 张，滚动再加
   const [currentRaw, setCurrentRaw] = useState<string | null>(null);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
 
-  // 上一条 / 下一条
+  // 上 / 下一条
   const [prevHref, setPrevHref] = useState<string | null>(null);
   const [nextHref, setNextHref] = useState<string | null>(null);
 
-  const [loading, setLoading] = useState<boolean>(true);
+  // 放大查看（弹窗）
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const [zoomSrc, setZoomSrc] = useState<string | null>(null);
+  const [zoomScale, setZoomScale] = useState(1);
+  const [zoomTx, setZoomTx] = useState(0);
+  const [zoomTy, setZoomTy] = useState(0);
+  const zoomWrapRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
 
-  // 预连接图片域名（首屏就做）
+  const [loading, setLoading] = useState(true);
+
+  // 预连接
   useEffect(() => {
     appendPreconnectOnce();
   }, []);
 
-  // 渐进切换：先极小清晰度快速显示，再升级清晰图
+  // 渐进切换主图：tiny 立即显示 → small 预载完成替换 → big 再升级
   const setMainFromRaw = (raw: string) => {
     setCurrentRaw(raw);
-    const tiny  = toProxy(raw, 320, 240, 45);  // 很小很快
-    const small = toProxy(raw, 540, 405, 58);  // 小图：更快出画
-    const big   = toProxy(raw, 960, 720, 76);  // 大图：清晰
-    setImgUrl(tiny || small || big || null);   // 先秒出 tiny
-    // 先预载 small，完成后再预载 big
+    const tiny  = toProxy(raw, 320, 240, 42);
+    const small = toProxy(raw, 560, 420, 58);
+    const big   = toProxy(raw, 960, 720, 78);
+    setImgUrl(tiny || small || big || null);
     if (small) {
       const preS = new Image();
       preS.src = small;
@@ -206,7 +208,23 @@ export default function StockDetailPage({
     }
   };
 
-  // 构建详情页跳转链接
+  // 进入放大弹窗：先 small，随后升级到 xlarge
+  const openZoom = (raw: string) => {
+    const small = toProxy(raw, 960, 720, 78);
+    const xlarge = toProxy(raw, 1600, 1200, 85);
+    setZoomScale(1);
+    setZoomTx(0);
+    setZoomTy(0);
+    setZoomSrc(small || xlarge || null);
+    setZoomOpen(true);
+    if (xlarge) {
+      const preX = new Image();
+      preX.src = xlarge;
+      preX.onload = () => setZoomSrc(xlarge);
+    }
+  };
+
+  // 构建详情跳转链接（带兜底字段，切页更快）
   const makeHref = (item: AnyObj) => {
     const n   = String(pick(item, ['num'], ''));
     const t   = String(pick(item, ['title'], '-'));
@@ -219,6 +237,7 @@ export default function StockDetailPage({
     return `/stock/${encodeURIComponent(n)}?${q}`;
   };
 
+  // 加载详情 + 候选图片 + 上/下一条
   useEffect(() => {
     const baseFromQuery: AnyObj = {
       num,
@@ -252,26 +271,19 @@ export default function StockDetailPage({
         const merged = found ? { ...(baseFromQuery || {}), ...found } : baseFromQuery;
         setDetail(merged);
 
-        // 候选图片（全部）
+        // 候选图片（全部），去重
         const candidates = new Set<string>();
         collectCandidateUrls(merged).forEach((u) => candidates.add(u));
         extractUrlsFromText(JSON.stringify(merged)).forEach((u) => candidates.add(u));
-        if (searchParams)
-          extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
-
+        if (searchParams) extractUrlsFromText(JSON.stringify(searchParams)).forEach((u) => candidates.add(u));
         const all = Array.from(candidates).filter(Boolean);
+
         setAllThumbs(all);
-
-        // 首屏仅渲染 12 张缩略图（其余仍可按需加载）
-        setThumbs(all.slice(0, 12));
-
-        // 初始主图（三级渐进：tiny -> small -> big）
+        setThumbs(all.slice(0, 12)); // 首屏只渲染 12 张
         if (all.length) setMainFromRaw(all[0]);
 
-        // 计算上下条
-        const idx = found
-          ? list.indexOf(found)
-          : list.findIndex((it) => String(pick(it, ['num'], '')) === num);
+        // 上/下一条
+        const idx = found ? list.indexOf(found) : list.findIndex((it) => String(pick(it, ['num'], '')) === num);
         const prev = idx > 0 ? list[idx - 1] : null;
         const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
         setPrevHref(prev ? makeHref(prev) : null);
@@ -282,11 +294,10 @@ export default function StockDetailPage({
     })();
   }, [num, searchParams]);
 
-  // 当用户滚动到缩略图条尾部时，按批次追加更多（避免一次性渲染过多导致慢）
+  // 滚动到缩略图尾部时，批量追加（每次 +12），避免一次性渲染过多
   const onThumbsScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
-    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 20) {
-      // 追加下一批（每次 +12）
+    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 12) {
       if (thumbs.length < allThumbs.length) {
         setThumbs(allThumbs.slice(0, Math.min(allThumbs.length, thumbs.length + 12)));
       }
@@ -307,8 +318,31 @@ export default function StockDetailPage({
     };
   }, [detail, num]);
 
+  /* ============ 放大弹窗交互（缩放/拖动） ============ */
+  const onWheelZoom: React.WheelEventHandler<HTMLDivElement> = (e) => {
+    if (!zoomOpen) return;
+    e.preventDefault();
+    const delta = -e.deltaY;
+    const next = Math.min(4, Math.max(1, zoomScale + (delta > 0 ? 0.1 : -0.1)));
+    setZoomScale(next);
+  };
+  const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
+  const onMouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
+    if (!zoomOpen) return;
+    drag.current = { x: e.clientX, y: e.clientY, tx: zoomTx, ty: zoomTy };
+  };
+  const onMouseMove: React.MouseEventHandler<HTMLDivElement> = (e) => {
+    if (!drag.current) return;
+    const dx = e.clientX - drag.current.x;
+    const dy = e.clientY - drag.current.y;
+    setZoomTx(drag.current.tx + dx);
+    setZoomTy(drag.current.ty + dy);
+  };
+  const onMouseUp = () => (drag.current = null);
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
+      {/* 顶部：标题与导出 */}
       <header className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">产品详情</h1>
         <a
@@ -321,11 +355,11 @@ export default function StockDetailPage({
         </a>
       </header>
 
+      {/* 返回 + 上/下一条 */}
       <div className="mb-4 flex items-center gap-3">
         <Link href="/stock" className="inline-flex items-center gap-2 rounded border px-3 py-2 hover:bg-gray-50">
           ← 返回列表
         </Link>
-
         <div className="ml-auto flex items-center gap-2">
           <Link
             href={prevHref || '#'}
@@ -346,69 +380,61 @@ export default function StockDetailPage({
         </div>
       </div>
 
+      {/* 主体：左图右文 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 左侧：大图（渐进升级，优先级高） */}
+        {/* 左侧：大图（容器轻微裁切底部 20px，尽量遮住源图底部水印） */}
         <div className="w-full">
-          {imgUrl ? (
-            <img
-              src={imgUrl}
-              alt={String(view.num)}
-              loading="eager"
-              fetchpriority="high"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              className="w-full"
+          <div
+            className="relative w-full"
+            style={{
+              height: 360,
+              borderRadius: 8,
+              border: '1px solid #eee',
+              background: '#fafafa',
+              overflow: 'hidden',            // 轻微裁切
+              paddingBottom: 20,             // 预留遮罩高度
+            }}
+          >
+            {imgUrl ? (
+              <img
+                src={imgUrl}
+                alt={String(view.num)}
+                loading="eager"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="absolute inset-0 w-full h-full"
+                style={{
+                  objectFit: 'contain',
+                  objectPosition: 'center 48%', // 轻微上移焦点，尽量避开底部水印
+                  cursor: 'zoom-in',
+                }}
+                onClick={() => currentRaw && openZoom(currentRaw)}
+                onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+              />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-gray-400">无图</div>
+            )}
+            {/* 底部遮罩（避免源图底部水印露出） */}
+            <div
+              className="absolute left-0 right-0 bottom-0"
               style={{
-                height: 360,
-                objectFit: 'contain',
-                background: '#fafafa',
-                border: '1px solid #eee',
-                borderRadius: 8,
-                transition: 'filter 200ms ease',
-              }}
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-                const holder = document.createElement('div');
-                holder.innerText = '无图';
-                holder.style.cssText =
-                  'width:100%;height:360px;display:flex;align-items:center;justify-content:center;background:#fafafa;border:1px solid #eee;border-radius:8px;color:#999;';
-                e.currentTarget.parentElement?.appendChild(holder);
+                height: 20,
+                background: 'linear-gradient(to bottom, rgba(250,250,250,0), rgba(250,250,250,1))',
               }}
             />
-          ) : (
-            <div
-              className="flex items-center justify-center text-gray-400"
-              style={{
-                width: '100%',
-                height: 360,
-                background: '#fafafa',
-                border: '1px solid #eee',
-                borderRadius: 8,
-              }}
-            >
-              无图
-            </div>
-          )}
+          </div>
 
-          {/* 缩略图条（首屏仅 12 张，滚动追加；更轻质量加速） */}
+          {/* 缩略图条：首屏 12 张，横向滚动追加；点击秒切（渐进升级） */}
           {thumbs.length > 0 && (
             <div className="mt-3 relative">
               <div
-                ref={/* scroll 容器 */ (el) => {
-                  // 兼容 SSR
-                }}
-              />
-              <div
-                ref={(el) => {
-                  // 保留 ref 给滚动控制
-                  if (el) (stripRef as any).current = el;
-                }}
+                ref={(el) => { if (el) (stripRef as any).current = el; }}
                 onScroll={onThumbsScroll}
                 className="flex gap-2 overflow-x-auto px-2 py-2"
                 style={{ scrollBehavior: 'smooth' }}
               >
                 {thumbs.map((raw, idx) => {
-                  const tiny = toProxy(raw, 96, 72, 45);   // 更小更快
+                  const tiny = toProxy(raw, 96, 72, 42);
                   if (!tiny) return null;
                   const active = currentRaw === raw;
                   return (
@@ -439,7 +465,7 @@ export default function StockDetailPage({
           )}
         </div>
 
-        {/* 右侧：文本信息 */}
+        {/* 右侧：信息区（已移除“数据源”行） */}
         <div className="w-full">
           <div className="rounded border p-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-[15px] leading-7">
@@ -453,16 +479,12 @@ export default function StockDetailPage({
               <div><span className="font-semibold">Stock：</span>{String(view.stock)}</div>
             </div>
           </div>
-
-          <div className="text-sm text-gray-500 mt-6 space-y-1">
-            <div>数据源：niuniuparts.com（测试预览用途）</div>
-            <div>数据源：niuniuparts.com（测试预览用途）</div>
-          </div>
         </div>
       </div>
 
       {loading && <div className="mt-6 text-gray-500 text-sm">加载中…（首次加载会稍慢）</div>}
 
+      {/* 底部 上/下一条 */}
       <div className="mt-8 flex items-center justify-end gap-2">
         <Link
           href={prevHref || '#'}
@@ -481,6 +503,66 @@ export default function StockDetailPage({
           下一条
         </Link>
       </div>
+
+      {/* 放大查看弹窗（点击主图开启） */}
+      {zoomOpen && (
+        <div
+          ref={zoomWrapRef}
+          onWheel={onWheelZoom}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onMouseLeave={onMouseUp}
+          className="fixed inset-0 z-50 bg-black/80 cursor-grab"
+          onClick={() => setZoomOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          title="点击任意处关闭"
+        >
+          <div className="absolute top-3 right-3 flex gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); setZoomScale((s) => Math.min(4, s + 0.2)); }}
+              className="px-3 py-1 rounded bg-white/90 hover:bg-white"
+            >放大</button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setZoomScale((s) => Math.max(1, s - 0.2)); }}
+              className="px-3 py-1 rounded bg-white/90 hover:bg-white"
+            >缩小</button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setZoomScale(1); setZoomTx(0); setZoomTy(0); }}
+              className="px-3 py-1 rounded bg-white/90 hover:bg-white"
+            >还原</button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setZoomOpen(false); }}
+              className="px-3 py-1 rounded bg-white/90 hover:bg-white"
+            >关闭</button>
+          </div>
+
+          <div
+            className="absolute inset-0 flex items-center justify-center"
+            style={{ overflow: 'hidden' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {zoomSrc && (
+              <img
+                src={zoomSrc}
+                alt="zoom"
+                referrerPolicy="no-referrer"
+                style={{
+                  transform: `translate(${zoomTx}px, ${zoomTy}px) scale(${zoomScale})`,
+                  transition: 'transform 80ms ease-out',
+                  maxWidth: '90vw',
+                  maxHeight: '90vh',
+                  objectFit: 'contain',
+                  userSelect: 'none',
+                  pointerEvents: 'none',
+                }}
+                draggable={false}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
