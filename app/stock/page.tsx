@@ -1,81 +1,135 @@
-
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
-type RawItem = {
-  num?: string;
-  title?: string; // 标题/品名
-  model?: string; // 车型
-  brand?: string; // 品牌
-  oe?: string;    // OE号
-  price?: number | string;
-  stock?: number | string;
-  images?: string[]; // 图片数组（可能没有）
-};
-
-type PageResp = {
-  content?: RawItem[];
-  totalElements?: number;
-};
+type AnyObj = Record<string, any>;
 
 const API = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 
-function safeNum(x: unknown) { return (x ?? '').toString(); }
-function safeStr(x: unknown, d = '-') {
-  const s = (x ?? '').toString().trim();
-  return s ? s : d;
+/* ---------- 工具：安全取值 & 解析图片 ---------- */
+function firstNonEmpty(obj: AnyObj | null | undefined, keys: string[], fallback: any = '') {
+  if (!obj) return fallback;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+  }
+  return fallback;
 }
 
+// 从字符串中尽量提取 URL
+function extractUrlsFromText(text: string): string[] {
+  if (!text) return [];
+  const ret = new Set<string>();
+  const reExt = /(https?:\/\/[^\s"'<>]+?\.(?:jpg|jpeg|png|gif|webp))(?:[?#][^\s"'<>]*)?/gi;
+  const reImg = /<img\b[^>]*src=['"]?([^'">\s]+)['"]?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = reExt.exec(text))) ret.add(m[1]);
+  while ((m = reImg.exec(text))) ret.add(m[1]);
+  return Array.from(ret);
+}
+
+// 归一化一条数据
+function normalizeItem(x: AnyObj) {
+  const num = String(
+    firstNonEmpty(x, ['num', 'Num', '编号', '编码', '货号', 'id', 'sku'], '')
+  ).trim();
+
+  const title =
+    String(firstNonEmpty(x, ['title', 'product', 'name', '标题', '品名'], '-')).trim() || '-';
+
+  const brand = String(firstNonEmpty(x, ['brand', '品牌'], '-')) || '-';
+  const model = String(firstNonEmpty(x, ['model', '车型'], '-')) || '-';
+  const oe = String(firstNonEmpty(x, ['oe', 'OE', '配件号', '编号'], '')) || '';
+  const price = firstNonEmpty(x, ['price', '价格', '单价', '售价'], '');
+  const stock = firstNonEmpty(x, ['stock', '库存', '库存数量', 'qty', '数量'], '');
+
+  // 图片：优先数组字段，其次单图字符串，再尝试从描述文本里捞
+  let images: string[] = [];
+  const imgArray = firstNonEmpty(x, ['images', 'imageList', 'pics', 'pictures', 'photos'], null);
+  if (Array.isArray(imgArray)) {
+    images = imgArray.filter(Boolean);
+  } else {
+    const single = firstNonEmpty(
+      x,
+      ['image', 'img', 'imageurl', 'image_url', 'thumb', 'thumbnail', '主图'],
+      ''
+    );
+    if (single) {
+      const parts = String(single).split(/[|,]/).map((s) => s.trim()).filter(Boolean);
+      images = parts.length ? parts : extractUrlsFromText(String(single));
+    }
+    if (!images.length) {
+      const desc = firstNonEmpty(x, ['desc', 'description', '详情', '内容', 'remark'], '');
+      images = extractUrlsFromText(String(desc));
+    }
+  }
+
+  return { num, title, brand, model, oe, price, stock, images };
+}
+
+/* ---------- 组件 ---------- */
 export default function StockListPage() {
-  const [list, setList] = useState<RawItem[]>([]);
+  const [list, setList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
-  const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
 
   useEffect(() => {
     let stop = false;
-    async function load() {
+    (async () => {
       setLoading(true);
       try {
         const url = `${API}?size=${pageSize}&page=${page}`;
         const res = await fetch(url, { cache: 'no-store' });
-        const data: PageResp = await res.json();
+        const data = await res.json().catch(() => ({} as AnyObj));
 
-        const content = (data?.content ?? []).map((x) => ({
-          num: safeNum(x.num),
-          title: safeStr((x as any).title || (x as any).product || (x as any).name),
-          model: safeStr((x as any).model),
-          brand: safeStr((x as any).brand),
-          oe: safeStr((x as any).oe),
-          price: (x as any).price ?? '',
-          stock: (x as any).stock ?? '',
-          images: Array.isArray((x as any).images) ? (x as any).images : [],
-        })) as RawItem[];
+        // 兼容多种返回结构
+        const rows: any[] =
+          data?.data?.list ??
+          data?.data?.records ??
+          data?.list ??
+          data?.records ??
+          data?.content ??
+          data?.data ??
+          [];
+
+        const normalized = rows.map(normalizeItem).filter((x: any) => x.num);
 
         if (!stop) {
-          setList(content);
-          setTotal(data?.totalElements ?? 0);
+          setList(normalized);
+          // 尝试多种 total 字段
+          const t =
+            data?.data?.total ??
+            data?.total ??
+            data?.totalElements ??
+            (Array.isArray(rows) ? rows.length : 0);
+          setTotal(Number(t) || normalized.length);
 
-          // 缓存列表用于详情页“上一条/下一条”与直达兜底
-          localStorage.setItem('stock:lastPage', JSON.stringify({
-            page, pageSize, total: data?.totalElements ?? 0, list: content,
-          }));
+          // 写入本地缓存（供详情页上一条/下一条与直达兜底）
+          try {
+            localStorage.setItem('stock:lastPage', JSON.stringify({
+              page, pageSize, total: Number(t) || normalized.length, list: normalized
+            }));
+            localStorage.setItem('stock:list', JSON.stringify(normalized));
+          } catch {}
         }
       } catch (e) {
         console.error('load stock list failed', e);
+        if (!stop) {
+          setList([]);
+          setTotal(0);
+        }
       } finally {
         if (!stop) setLoading(false);
       }
-    }
-    load();
+    })();
     return () => { stop = true; };
   }, [page, pageSize]);
 
   const totalPages = useMemo(() => {
-    return total > 0 ? Math.ceil(total / pageSize) : 0;
+    return total > 0 ? Math.ceil(total / pageSize) : 1;
   }, [total, pageSize]);
 
   return (
@@ -93,7 +147,7 @@ export default function StockListPage() {
         <span>第 {page + 1} / {Math.max(1, totalPages)} 页</span>
         <button
           className="px-3 py-1 rounded border disabled:opacity-50"
-          disabled={totalPages === 0 || page >= totalPages - 1}
+          disabled={page >= totalPages - 1}
           onClick={() => setPage((p) => p + 1)}
         >
           下一页
@@ -119,9 +173,8 @@ export default function StockListPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {list.map((item, idx) => {
           const firstImg = item.images?.[0] ?? '';
-
-          // 将必要字段塞进 URL，确保详情页可兜底渲染
-          const href = `/stock/${encodeURIComponent(item.num ?? '')}`
+          const href =
+            `/stock/${encodeURIComponent(item.num ?? '')}`
             + `?title=${encodeURIComponent(item.title ?? '-')}`
             + `&oe=${encodeURIComponent(item.oe ?? '-')}`
             + `&brand=${encodeURIComponent(item.brand ?? '-')}`
@@ -132,36 +185,40 @@ export default function StockListPage() {
             + `&images=${encodeURIComponent((item.images ?? []).join('|'))}`
             + `&idx=${idx}`;
 
-        return (
-          <Link
-            key={item.num + '_' + idx}
-            href={href}
-            className="block border rounded-lg p-4 hover:shadow-md transition"
-          >
-            <div className="aspect-[4/3] bg-gray-100 mb-3 flex items-center justify-center overflow-hidden">
-              {firstImg ? (
-                <img
-                  src={firstImg}
-                  alt={item.title ?? ''}
-                  className="object-contain w-full h-full"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <span className="text-gray-400">无图</span>
-              )}
-            </div>
-            <div className="space-y-1 text-sm">
-              <div className="line-clamp-2 font-medium">{item.title ?? '-'}</div>
-              <div>Num：{item.num ?? '-'}</div>
-              <div>OE：{item.oe ?? '-'}</div>
-              <div>Brand：{item.brand ?? '-'}</div>
-              <div>Price：{item.price ?? '-'}</div>
-              <div>Stock：{item.stock ?? '-'}</div>
-            </div>
-          </Link>
-        );
+          return (
+            <Link
+              key={item.num + '_' + idx}
+              href={href}
+              className="block border rounded-lg p-4 hover:shadow-md transition bg-white"
+            >
+              <div className="aspect-[4/3] bg-gray-100 mb-3 flex items-center justify-center overflow-hidden">
+                {firstImg ? (
+                  <img
+                    src={firstImg}
+                    alt={item.title ?? ''}
+                    className="object-contain w-full h-full"
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                ) : (
+                  <span className="text-gray-400">无图</span>
+                )}
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="line-clamp-2 font-medium" title={item.title}>{item.title ?? '-'}</div>
+                <div>Num：{item.num ?? '-'}</div>
+                {item.oe ? <div>OE：{item.oe}</div> : null}
+                <div>Brand：{item.brand ?? '-'}</div>
+                <div>Model：{item.model ?? '-'}</div>
+                <div>Price：{item.price ?? '-'}</div>
+                <div>Stock：{item.stock ?? '-'}</div>
+              </div>
+            </Link>
+          );
         })}
       </div>
     </main>
   );
 }
+
