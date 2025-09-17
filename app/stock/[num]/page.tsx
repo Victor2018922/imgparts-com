@@ -15,17 +15,6 @@ type RawItem = {
   images?: string[];
 };
 
-function pick<T extends object, K extends keyof any>(
-  obj: T | null | undefined,
-  keys: K[],
-  df?: any
-): any {
-  if (!obj) return df;
-  const first = keys[0] as keyof T;
-  const v = obj[first];
-  return (v ?? df) as any;
-}
-
 // 读取浏览器 localStorage（SSR 安全）
 function safeLoad<T>(key: string, df: T): T {
   try {
@@ -37,7 +26,7 @@ function safeLoad<T>(key: string, df: T): T {
   }
 }
 
-// 读取 URLSearchParams（兼容某些环境下的 null）
+// 读取 URLSearchParams（兼容部分环境可能返回 null）
 function useSearchGetter() {
   const sp = useSearchParams() as unknown as ReadonlyURLSearchParams | null;
   return (key: string): string | null => {
@@ -97,15 +86,16 @@ export default function StockDetailPage() {
     const list = safeLoad<RawItem[]>('stock:list', []);
     setPageList(list);
 
-    // 2) 尝试从列表里找到当前 num
+    // 2) 尝试从列表里找到当前 num（鲁棒：不依赖泛型 pick）
     const found =
-      list.find((x) => String(pick(x, ['num'], '')).toLowerCase() === String(num).toLowerCase()) ||
-      null;
+      list.find(
+        (x) => String(((x as any)?.num ?? '')).toLowerCase() === String(num).toLowerCase()
+      ) || null;
 
     // 3) 确定 navIdx（优先 URL，其次列表中位置，最后 -1）
     if (navIdx === -1) {
       const idx = list.findIndex(
-        (x) => String(pick(x, ['num'], '')).toLowerCase() === String(num).toLowerCase()
+        (x) => String(((x as any)?.num ?? '')).toLowerCase() === String(num).toLowerCase()
       );
       setNavIdx(idx >= 0 ? idx : -1);
     }
@@ -158,8 +148,6 @@ export default function StockDetailPage() {
         <div>
           <div className="w-full aspect-[4/3] bg-gray-50 border rounded flex items-center justify-center overflow-hidden">
             {images.length ? (
-              // 用原图地址，避免服务端变更；浏览器会自动缓存
-              // 若后续接入压缩代理，只换这里的 src 即可
               <img
                 src={images[curIdx]}
                 alt={meta?.title ?? meta?.num ?? ''}
