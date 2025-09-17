@@ -132,6 +132,9 @@ export default function StockDetailPage() {
   const [note, setNote] = useState('');
   const [orderId, setOrderId] = useState<string | null>(null);
 
+  // ✅ 新增：下单成功页展示的应付合计（下单前锁定，避免清空购物车后显示 0）
+  const [paidTotal, setPaidTotal] = useState<number>(0);
+
   useEffect(() => {
     // 缓存的列表
     setPageList(loadPageList());
@@ -267,11 +270,15 @@ export default function StockDetailPage() {
     if (!address.trim()) return alert('请填写地址');
     if (cart.length === 0) return alert('购物车为空');
 
+    // ✅ 先锁定应付合计，随后再清空购物车，避免成功页显示 0
+    const payable = cartTotal;
+    setPaidTotal(payable);
+
     const id = 'IP' + Date.now();
     const order = {
       id,
       items: cart,
-      total: cartTotal,
+      total: payable, // 保存的是锁定后的金额
       customer: { name, phone, email, country, city, address, postcode, note },
       createdAt: new Date().toISOString(),
     };
@@ -519,7 +526,8 @@ export default function StockDetailPage() {
                 <div className="text-center">
                   <div className="text-2xl font-bold text-emerald-600">下单成功</div>
                   <div className="mt-2 text-gray-600">订单号：{orderId}</div>
-                  <div className="mt-2 text-gray-600">应付合计：¥ {money(cartTotal)}</div>
+                  {/* ✅ 成功页显示锁定后的金额 */}
+                  <div className="mt-2 text-gray-600">应付合计：¥ {money(paidTotal)}</div>
                   <div className="mt-6 flex items-center gap-2 justify-center">
                     <button className="rounded bg-gray-900 hover:bg-black text-white px-4 py-2" onClick={() => { setCartOpen(false); setStep('cart'); }}>
                       继续购物
