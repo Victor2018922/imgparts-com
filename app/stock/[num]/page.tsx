@@ -26,12 +26,22 @@ function safeLoad<T>(key: string, df: T): T {
   }
 }
 
-// 读取 URLSearchParams（兼容 useSearchParams 可能为 null 的环境）
+// 同时兼容两种历史键名：'stock:lastPage' 与 'stock:list'
+function loadPageList(): RawItem[] {
+  const a = safeLoad<{ list?: RawItem[] }>('stock:lastPage', {} as any);
+  if (Array.isArray(a?.list)) return a.list!;
+  const b = safeLoad<RawItem[]>('stock:list', []);
+  return Array.isArray(b) ? b : [];
+}
+
+// 读取 URLSearchParams（兼容某些环境下 useSearchParams 可能异常）
 function useSearchGetter() {
-  const sp = useSearchParams(); // 不引用 ReadonlyURLSearchParams 类型，避免编译报错
+  const sp = useSearchParams();
   return (key: string): string | null => {
-    const v = sp?.get?.(key);
-    if (v != null) return v;
+    try {
+      const v = (sp as any)?.get?.(key);
+      if (v != null) return v;
+    } catch {}
     if (typeof window !== 'undefined') {
       return new URLSearchParams(window.location.search).get(key);
     }
@@ -39,8 +49,19 @@ function useSearchGetter() {
   };
 }
 
+// 把 "a|b,c" 这类分隔字符串拆成数组（兼容 | 或 ,）
+function splitImages(s: string): string[] {
+  return s
+    .split(/[|,]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
 export default function StockDetailPage() {
-  const { num } = useParams<{ num: string }>();
+  // ✅ 不解构，避免 TS 对 “可能为 null” 的报错；用 any 宽松获取
+  const params = useParams() as any;
+  const num: string = String(params?.num ?? '');
+
   const getQuery = useSearchGetter();
   const router = useRouter();
 
@@ -59,22 +80,16 @@ export default function StockDetailPage() {
   // 初始兜底：从 URL 参数拼一个对象
   const urlFallback = useMemo<RawItem>(() => {
     const imgsParam = getQuery('images') ?? getQuery('image') ?? '';
-    const images = imgsParam
-      ? imgsParam
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : [];
+    const images = imgsParam ? splitImages(imgsParam) : [];
     const priceRaw = getQuery('price');
-
     return {
-      num: num!,
+      num,
       title: getQuery('title') ?? '',
       oe: getQuery('oe') ?? '',
       brand: getQuery('brand') ?? '',
       model: getQuery('model') ?? '',
       year: getQuery('year') ?? '',
-      price: priceRaw ? Number(priceRaw) : undefined,
+      price: priceRaw ?? '',
       stock: getQuery('stock') ?? '',
       images,
     };
@@ -83,19 +98,19 @@ export default function StockDetailPage() {
 
   useEffect(() => {
     // 1) 取本地缓存的当页列表（由列表页写入）
-    const list = safeLoad<RawItem[]>('stock:list', []);
+    const list = loadPageList();
     setPageList(list);
 
-    // 2) 尝试从列表里找到当前 num
+    // 2) 尝试从列表里找到当前 num（大小写无关）
     const found =
       list.find(
-        (x) => String(((x as any)?.num ?? '')).toLowerCase() === String(num).toLowerCase()
+        (x: any) => String(x?.num ?? '').toLowerCase() === String(num).toLowerCase()
       ) || null;
 
     // 3) 确定 navIdx（优先 URL，其次列表中位置，最后 -1）
     if (navIdx === -1) {
       const idx = list.findIndex(
-        (x) => String(((x as any)?.num ?? '')).toLowerCase() === String(num).toLowerCase()
+        (x: any) => String(x?.num ?? '').toLowerCase() === String(num).toLowerCase()
       );
       setNavIdx(idx >= 0 ? idx : -1);
     }
@@ -130,7 +145,7 @@ export default function StockDetailPage() {
     if (it.year) params.set('year', String(it.year));
     if (it.price != null) params.set('price', String(it.price));
     if (it.stock != null) params.set('stock', String(it.stock));
-    if (it.images?.length) params.set('images', it.images.join(','));
+    if (it.images?.length) params.set('images', it.images.join('|')); // 我们用 | 作为首选分隔符
     router.push(`/stock/${encodeURIComponent(it.num)}?${params.toString()}`);
   };
 
@@ -160,7 +175,7 @@ export default function StockDetailPage() {
             )}
           </div>
 
-          {/* 缩略图 */}
+          {/* 缩略图（最多 12 张） */}
           {images.length > 0 && (
             <div className="mt-4 flex gap-2 overflow-x-auto">
               {images.map((src, i) => (
@@ -233,3 +248,4 @@ export default function StockDetailPage() {
     </div>
   );
 }
+
