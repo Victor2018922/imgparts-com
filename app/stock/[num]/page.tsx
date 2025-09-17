@@ -1,191 +1,249 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 
 type RawItem = {
-  num?: string;
+  num: string;
   title?: string;
-  model?: string;
-  brand?: string;
   oe?: string;
+  brand?: string;
+  model?: string;
+  year?: string;
   price?: number | string;
   stock?: number | string;
   images?: string[];
 };
 
-function pickURL(search: URLSearchParams, key: string, d = '-') {
-  const v = search.get(key);
-  return v && v.trim() ? v : d;
+function pick<T extends object, K extends keyof any>(
+  obj: T | null | undefined,
+  keys: K[],
+  df?: any
+): any {
+  if (!obj) return df;
+  const first = keys[0] as keyof T;
+  const v = obj[first];
+  return (v ?? df) as any;
 }
-function pickURLStrList(search: URLSearchParams, key: string) {
-  const s = search.get(key);
-  if (!s) return [];
-  return s.split('|').map(x => x.trim()).filter(Boolean);
+
+// 读取浏览器 localStorage（SSR 安全）
+function safeLoad<T>(key: string, df: T): T {
+  try {
+    if (typeof window === 'undefined') return df;
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : df;
+  } catch {
+    return df;
+  }
+}
+
+// 读取 URLSearchParams（兼容某些环境下的 null）
+function useSearchGetter() {
+  const sp = useSearchParams() as unknown as ReadonlyURLSearchParams | null;
+  return (key: string): string | null => {
+    const v = sp?.get(key);
+    if (v != null) return v;
+    if (typeof window !== 'undefined') {
+      return new URLSearchParams(window.location.search).get(key);
+    }
+    return null;
+  };
 }
 
 export default function StockDetailPage() {
+  const { num } = useParams<{ num: string }>();
+  const getQuery = useSearchGetter();
   const router = useRouter();
-  const params = useParams<{ num?: string }>();
-  const search = useSearchParams();
 
-  const num = (params?.num ?? '').toString();
-
-  const [imgs, setImgs] = useState<string[]>([]);
-  const [curIdx, setCurIdx] = useState(0);
+  // 图片当前索引
+  const [curIdx, setCurIdx] = useState<number>(0);
+  // 当前详情对象
   const [meta, setMeta] = useState<RawItem | null>(null);
-  const [navIdx, setNavIdx] = useState<number>(Number(search.get('idx') ?? -1));
+  // 同页导航索引（来自列表点击时带过来的 idx；直达则为 -1）
+  const [navIdx, setNavIdx] = useState<number>(() => {
+    const v = Number(getQuery('idx') ?? -1);
+    return Number.isFinite(v) ? v : -1;
+  });
+  // 当前页的列表（供“上一条/下一条”使用）
   const [pageList, setPageList] = useState<RawItem[]>([]);
 
-  // 读取 URL 参数兜底
-  const urlMeta = useMemo<RawItem>(() => ({
-    num,
-    title: pickURL(search, 'title'),
-    oe: pickURL(search, 'oe'),
-    brand: pickURL(search, 'brand'),
-    model: pickURL(search, 'model'),
-    price: pickURL(search, 'price', ''),
-    stock: pickURL(search, 'stock', ''),
-  }), [search, num]);
+  // 初始兜底：从 URL 参数拼一个对象
+  const urlFallback = useMemo<RawItem>(() => {
+    const imgsParam = getQuery('images') ?? getQuery('image') ?? '';
+    const images = imgsParam
+      ? imgsParam
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    const priceRaw = getQuery('price');
+
+    return {
+      num: num!,
+      title: getQuery('title') ?? '',
+      oe: getQuery('oe') ?? '',
+      brand: getQuery('brand') ?? '',
+      model: getQuery('model') ?? '',
+      year: getQuery('year') ?? '',
+      price: priceRaw ? Number(priceRaw) : undefined,
+      stock: getQuery('stock') ?? '',
+      images,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [num]);
 
   useEffect(() => {
-    // 尝试从上次的列表缓存恢复，用于上一条/下一条
-    try {
-      const saved = JSON.parse(localStorage.getItem('stock:lastPage') ?? '{}');
-      if (Array.isArray(saved?.list)) {
-        setPageList(saved.list);
-      }
-    } catch {}
-  }, []);
+    // 1) 取本地缓存的当页列表（由列表页写入）
+    const list = safeLoad<RawItem[]>('stock:list', []);
+    setPageList(list);
 
-  useEffect(() => {
-    // 以 URL 的 images 为主；其次用列表缓存里对应项；最后保底空
-    const fromUrl = pickURLStrList(search, 'images');
-    if (fromUrl.length > 0) {
-      setImgs(fromUrl);
-      setMeta(urlMeta);
-      return;
+    // 2) 尝试从列表里找到当前 num
+    const found =
+      list.find((x) => String(pick(x, ['num'], '')).toLowerCase() === String(num).toLowerCase()) ||
+      null;
+
+    // 3) 确定 navIdx（优先 URL，其次列表中位置，最后 -1）
+    if (navIdx === -1) {
+      const idx = list.findIndex(
+        (x) => String(pick(x, ['num'], '')).toLowerCase() === String(num).toLowerCase()
+      );
+      setNavIdx(idx >= 0 ? idx : -1);
     }
 
-    // 列表缓存兜底（用于直接访问 /stock/:num）
-    const found = pageList.find(x => (x.num ?? '').toLowerCase() === num.toLowerCase());
-    if (found) {
-      setMeta({
-        num: found.num,
-        title: found.title ?? urlMeta.title,
-        oe: found.oe ?? urlMeta.oe,
-        brand: found.brand ?? urlMeta.brand,
-        model: found.model ?? urlMeta.model,
-        price: found.price ?? urlMeta.price,
-        stock: found.stock ?? urlMeta.stock,
-      });
-      setImgs(found.images ?? []);
-    } else {
-      // 最后兜底：仅用 URL 文本渲染
-      setMeta(urlMeta);
-      setImgs([]);
-    }
-  }, [search, pageList, num, urlMeta]);
+    // 4) 元数据：列表命中优先，否则用 URL 兜底
+    setMeta(found ?? urlFallback);
 
-  const curImg = imgs[curIdx] ?? '';
-
-  const canPrev = navIdx > 0;
-  const canNext = navIdx >= 0 && navIdx < pageList.length - 1;
-
-  const gotoByOffset = (off: number) => {
-    if (navIdx < 0) return; // 没有导航索引时忽略
-    const nextIdx = navIdx + off;
-    if (nextIdx < 0 || nextIdx >= pageList.length) return;
-    const it = pageList[nextIdx];
-    const href =
-      `/stock/${encodeURIComponent(it.num ?? '')}`
-      + `?title=${encodeURIComponent(it.title ?? '-')}`
-      + `&oe=${encodeURIComponent(it.oe ?? '-')}`
-      + `&brand=${encodeURIComponent(it.brand ?? '-')}`
-      + `&model=${encodeURIComponent(it.model ?? '-')}`
-      + `&year=${encodeURIComponent('-')}`
-      + `&price=${encodeURIComponent(String(it.price ?? ''))}`
-      + `&stock=${encodeURIComponent(String(it.stock ?? ''))}`
-      + `&images=${encodeURIComponent((it.images ?? []).join('|'))}`
-      + `&idx=${nextIdx}`;
-    router.push(href);
-    setNavIdx(nextIdx);
+    // 5) 如果有图片，默认第一张
     setCurIdx(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [num]);
+
+  // 取图片数组（限制 12 张）
+  const images = useMemo<string[]>(() => {
+    const arr = meta?.images ?? [];
+    return Array.isArray(arr) ? arr.slice(0, 12) : [];
+  }, [meta]);
+
+  // 上一条 / 下一条
+  const goto = (dir: -1 | 1) => {
+    if (!pageList.length) return;
+    const cur = navIdx >= 0 ? navIdx : pageList.findIndex((x) => x.num === num);
+    const next = cur + dir;
+    if (next < 0 || next >= pageList.length) return;
+    const it = pageList[next];
+    const params = new URLSearchParams();
+    params.set('idx', String(next));
+    if (it.title) params.set('title', String(it.title));
+    if (it.oe) params.set('oe', String(it.oe));
+    if (it.brand) params.set('brand', String(it.brand));
+    if (it.model) params.set('model', String(it.model));
+    if (it.year) params.set('year', String(it.year));
+    if (it.price != null) params.set('price', String(it.price));
+    if (it.stock != null) params.set('stock', String(it.stock));
+    if (it.images?.length) params.set('images', it.images.join(','));
+    router.push(`/stock/${encodeURIComponent(it.num)}?${params.toString()}`);
   };
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-8">
+    <div className="p-6">
       <button
+        className="px-3 py-2 rounded bg-gray-100 hover:bg-gray-200 text-gray-800"
         onClick={() => router.push('/stock')}
-        className="border rounded px-3 py-1 mb-6"
       >
         ← 返回列表
       </button>
 
-      <div className="flex flex-col lg:flex-row gap-8">
-        {/* 左侧大图与缩略图 */}
-        <div className="flex-1">
-          <div className="aspect-[4/3] bg-gray-100 flex items-center justify-center overflow-hidden rounded">
-            {curImg ? (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+        {/* 左侧：大图 + 缩略图 */}
+        <div>
+          <div className="w-full aspect-[4/3] bg-gray-50 border rounded flex items-center justify-center overflow-hidden">
+            {images.length ? (
+              // 用原图地址，避免服务端变更；浏览器会自动缓存
+              // 若后续接入压缩代理，只换这里的 src 即可
               <img
-                src={curImg}
-                alt={meta?.title ?? ''}
-                className="object-contain w-full h-full"
-                referrerPolicy="no-referrer"
+                src={images[curIdx]}
+                alt={meta?.title ?? meta?.num ?? ''}
+                className="max-w-full max-h-full object-contain"
+                loading="eager"
+                decoding="async"
               />
             ) : (
               <span className="text-gray-400">无图</span>
             )}
           </div>
 
-          {imgs.length > 0 && (
-            <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1">
-              {imgs.slice(0, 12).map((u, i) => (
+          {/* 缩略图 */}
+          {images.length > 0 && (
+            <div className="mt-4 flex gap-2 overflow-x-auto">
+              {images.map((src, i) => (
                 <button
-                  key={u + i}
+                  key={`${src}-${i}`}
                   onClick={() => setCurIdx(i)}
-                  className={`flex-none w-20 h-16 rounded border overflow-hidden ${i === curIdx ? 'ring-2 ring-blue-500' : ''}`}
+                  className={`shrink-0 w-20 h-16 border rounded overflow-hidden ${
+                    i === curIdx ? 'ring-2 ring-blue-500' : ''
+                  }`}
                   title={`预览 ${i + 1}`}
                 >
-                  <img src={u} alt={`thumb ${i + 1}`} className="object-cover w-full h-full" referrerPolicy="no-referrer" />
+                  <img
+                    src={src}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                    alt={`thumb-${i + 1}`}
+                  />
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* 右侧信息 */}
-        <div className="w-full lg:w-[420px] space-y-2">
-          <h2 className="text-2xl font-bold">产品详情</h2>
+        {/* 右侧：详情 + 导航 */}
+        <div>
+          <h2 className="text-xl font-semibold mb-4">产品详情</h2>
+          <ul className="space-y-3 text-gray-700">
+            <li>
+              <span className="inline-block w-20 text-gray-500">Num:</span> {meta?.num ?? '-'}
+            </li>
+            <li>
+              <span className="inline-block w-20 text-gray-500">OE:</span> {meta?.oe ?? '-'}
+            </li>
+            <li>
+              <span className="inline-block w-20 text-gray-500">Brand:</span> {meta?.brand ?? '-'}
+            </li>
+            <li>
+              <span className="inline-block w-20 text-gray-500">Model:</span> {meta?.model ?? '-'}
+            </li>
+            <li>
+              <span className="inline-block w-20 text-gray-500">Year:</span> {meta?.year ?? '-'}
+            </li>
+            <li>
+              <span className="inline-block w-20 text-gray-500">Price:</span>{' '}
+              {meta?.price ?? '-'}
+            </li>
+            <li>
+              <span className="inline-block w-20 text-gray-500">Stock:</span>{' '}
+              {meta?.stock ?? '-'}
+            </li>
+          </ul>
 
-          <div className="grid grid-cols-[80px_1fr] gap-x-4 gap-y-2 text-sm">
-            <div className="text-gray-500">Num：</div><div>{meta?.num ?? '-'}</div>
-            <div className="text-gray-500">OE：</div><div>{meta?.oe ?? '-'}</div>
-            <div className="text-gray-500">Brand：</div><div>{meta?.brand ?? '-'}</div>
-            <div className="text-gray-500">Model：</div><div>{meta?.model ?? '-'}</div>
-            <div className="text-gray-500">Year：</div><div>-</div>
-            <div className="text-gray-500">Price：</div><div>{meta?.price ?? '-'}</div>
-            <div className="text-gray-500">Stock：</div><div>{meta?.stock ?? '-'}</div>
-          </div>
-
-          <div className="mt-6 flex gap-3">
+          <div className="flex gap-3 mt-6">
             <button
-              className="px-3 py-1 rounded border disabled:opacity-50"
-              disabled={!canPrev}
-              onClick={() => gotoByOffset(-1)}
+              className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-40"
+              onClick={() => goto(-1)}
+              disabled={!pageList.length || (navIdx <= 0 && navIdx !== -1)}
             >
               上一条
             </button>
             <button
-              className="px-3 py-1 rounded border disabled:opacity-50"
-              disabled={!canNext}
-              onClick={() => gotoByOffset(1)}
+              className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-40"
+              onClick={() => goto(1)}
+              disabled={!pageList.length || (navIdx >= pageList.length - 1 && navIdx !== -1)}
             >
               下一条
             </button>
           </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 }
