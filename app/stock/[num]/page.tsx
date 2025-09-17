@@ -26,11 +26,11 @@ function safeLoad<T>(key: string, df: T): T {
   }
 }
 
-// 读取 URLSearchParams（兼容部分环境可能返回 null）
+// 读取 URLSearchParams（兼容 useSearchParams 可能为 null 的环境）
 function useSearchGetter() {
-  const sp = useSearchParams() as unknown as ReadonlyURLSearchParams | null;
+  const sp = useSearchParams(); // 不引用 ReadonlyURLSearchParams 类型，避免编译报错
   return (key: string): string | null => {
-    const v = sp?.get(key);
+    const v = sp?.get?.(key);
     if (v != null) return v;
     if (typeof window !== 'undefined') {
       return new URLSearchParams(window.location.search).get(key);
@@ -86,7 +86,7 @@ export default function StockDetailPage() {
     const list = safeLoad<RawItem[]>('stock:list', []);
     setPageList(list);
 
-    // 2) 尝试从列表里找到当前 num（鲁棒：不依赖泛型 pick）
+    // 2) 尝试从列表里找到当前 num
     const found =
       list.find(
         (x) => String(((x as any)?.num ?? '')).toLowerCase() === String(num).toLowerCase()
@@ -205,12 +205,10 @@ export default function StockDetailPage() {
               <span className="inline-block w-20 text-gray-500">Year:</span> {meta?.year ?? '-'}
             </li>
             <li>
-              <span className="inline-block w-20 text-gray-500">Price:</span>{' '}
-              {meta?.price ?? '-'}
+              <span className="inline-block w-20 text-gray-500">Price:</span> {meta?.price ?? '-'}
             </li>
             <li>
-              <span className="inline-block w-20 text-gray-500">Stock:</span>{' '}
-              {meta?.stock ?? '-'}
+              <span className="inline-block w-20 text-gray-500">Stock:</span> {meta?.stock ?? '-'}
             </li>
           </ul>
 
