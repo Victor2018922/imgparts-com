@@ -169,7 +169,10 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
 
 /** ---------- 详情页主体 ---------- */
 export default function StockDetailPage() {
-  const { num: numParam } = useParams<{ num: string }>();
+  // ✅ 兼容性读取 useParams，避免被推断为 {num:string}|null
+  const p = useParams() as { num?: string } | null;
+  const numParam = typeof p?.num === 'string' ? p!.num : '';
+
   const search = useSearchParams();
   const router = useRouter();
   const cart = useCart();
@@ -182,19 +185,20 @@ export default function StockDetailPage() {
   const image0 = decodeURIComponent(search?.get('image') || '');
   const idx = num(search?.get('idx') || -1, -1);
 
-  // 这里仍按“最多 12 张缩略图”的策略组图（保留你当前图片来源）
+  // 仍按“最多 12 张缩略图”的策略
   const [images, setImages] = useState<string[]>(image0 ? [image0] : []);
   useEffect(() => {
-    // 若后端有 images 列表，可在此补齐；现在仅保证不报错
     setImages((prev) => prev.slice(0, 12));
   }, [image0]);
 
   const [cur, setCur] = useState(0);
 
-  const goto = (offset: number) => {
-    router.push(`/stock/${encodeURIComponent(numNo)}?title=${encodeURIComponent(title)}&oe=${encodeURIComponent(
-      oe
-    )}&brand=${encodeURIComponent(brand)}&price=${price}&image=${encodeURIComponent(image0)}&idx=${idx}`);
+  const goto = () => {
+    router.push(
+      `/stock/${encodeURIComponent(numNo)}?title=${encodeURIComponent(title)}&oe=${encodeURIComponent(
+        oe
+      )}&brand=${encodeURIComponent(brand)}&price=${price}&image=${encodeURIComponent(image0)}&idx=${idx}`
+    );
   };
 
   return (
@@ -250,10 +254,10 @@ export default function StockDetailPage() {
           </div>
 
           <div className="mt-6 flex gap-2">
-            <button className="px-4 py-2 border rounded" onClick={() => goto(-1)}>
+            <button className="px-4 py-2 border rounded" onClick={() => goto()}>
               上一条
             </button>
-            <button className="px-4 py-2 border rounded" onClick={() => goto(1)}>
+            <button className="px-4 py-2 border rounded" onClick={() => goto()}>
               下一条
             </button>
           </div>
