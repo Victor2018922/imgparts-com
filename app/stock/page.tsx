@@ -1,576 +1,234 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
-/* ===================== 类型定义 ===================== */
-type ApiItem = {
-  num: string;
-  title?: string;
-  oe?: string;
-  brand?: string;
-  model?: string;
-  year?: string;
-  price?: number | string;
-  stock?: number | string;
-  images?: string[];
-};
-
-type ApiResp = {
-  content?: any[];
-  data?: any[];
-  items?: any[];
-  totalElements?: number;
-  total?: number;
-  page?: { totalElements?: number };
-};
-
-/* ===================== 工具函数 ===================== */
-function money(n: number) {
-  if (!isFinite(n)) return '-';
-  return n.toFixed(2);
-}
-function parsePrice(v: any): number {
-  const s = String(v ?? '').replace(/[^\d.]/g, '');
-  const n = parseFloat(s);
-  return isFinite(n) ? n : 0;
-}
-function splitImages(s: string | string[] | undefined | null): string[] {
-  if (!s) return [];
-  if (Array.isArray(s)) return s.filter(Boolean);
-  return s
-    .split(/[|,]/)
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
-function safeGet<T>(key: string, def: T): T {
+// —— 公共图片代理（不新增文件，直接用 wsrv.nl 压缩/跨域）
+// 文档: https://images.weserv.nl/
+function imgProxy(raw?: string, w: number = 640, q: number = 70) {
+  if (!raw || typeof raw !== 'string') return '';
   try {
-    if (typeof window === 'undefined') return def;
-    const raw = window.localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : def;
+    const u = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    // wsrv.nl 要求不带协议（或用 ssl=1 指示 https）
+    const hostAndPath = `${u.host}${u.pathname}${u.search || ''}`;
+    const isHttps = u.protocol === 'https:';
+    const base = 'https://wsrv.nl/?';
+    // output=webp: 提升加载速度；加 q 和 w 控制质量与宽度
+    return `${base}url=${encodeURIComponent(hostAndPath)}${isHttps ? '&ssl=1' : ''}&w=${w}&q=${q}&output=webp`;
   } catch {
-    return def;
+    return raw; // 兜底直接返回原图（万一 URL 解析失败）
   }
 }
-function safeSet<T>(key: string, val: T) {
-  try {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(key, JSON.stringify(val));
+
+// —— 从任意对象提取图片数组（字段名适配：img、image、pic、thumb、gallery 等）
+function extractImages(rec: any): string[] {
+  if (!rec || typeof rec !== 'object') return [];
+  const keys = Object.keys(rec);
+  const candidates = keys.filter((k) => /img|image|pic|thumb|gallery|photos/i.test(k));
+  const out: string[] = [];
+  for (const k of candidates) {
+    const v = rec[k];
+    if (!v) continue;
+    if (Array.isArray(v)) {
+      v.forEach((x) => typeof x === 'string' && x.trim() && out.push(x.trim()));
+    } else if (typeof v === 'string') {
+      v
+        .split(/[,;\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((s) => out.push(s));
     }
-  } catch {}
+  }
+  return [...new Set(out)];
 }
 
-/* ===================== 购物车（与详情页共用键） ===================== */
-type CartItem = {
-  num: string;
-  title: string;
-  price: number;
-  qty: number;
-  img?: string | null;
-  oe?: string;
-  brand?: string;
-  model?: string;
-};
+// —— 列表卡片图片组件（带回退“无图”）
+function CardImg({ url, alt }: { url?: string; alt: string }) {
+  const [err, setErr] = useState(false);
+  if (!url || err) {
+    return (
+      <div
+        style={{
+          width: '100%',
+          aspectRatio: '4/3',
+          background: '#f3f4f6',
+          color: '#9ca3af',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 18,
+          borderRadius: 8,
+          border: '1px dashed #e5e7eb',
+        }}
+      >
+        无图
+      </div>
+    );
+  }
+  const src = imgProxy(url, 640, 68);
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setErr(true)}
+      style={{
+        width: '100%',
+        aspectRatio: '4/3',
+        objectFit: 'cover',
+        borderRadius: 8,
+        background: '#fafafa',
+        display: 'block',
+      }}
+      loading="lazy"
+    />
+  );
+}
 
-const CART_KEY = 'imgparts_cart_v1';
-const CUSTOMER_KEY = 'imgparts_customer_v1';
-const ORDER_LAST_KEY = 'imgparts_last_order_v1';
-const ORDERS_KEY = 'imgparts_orders_v1';
+type Row = Record<string, any>;
 
-/* ===================== 列表页 ===================== */
 export default function StockListPage() {
-  // 分页 & 列表
+  const [list, setList] = useState<Row[]>([]);
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(20);
-  const [loading, setLoading] = useState(false);
-  const [list, setList] = useState<ApiItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  // 购物车 & 结算
-  const [cartOpen, setCartOpen] = useState(false);
-  const [cart, setCart] = useState<CartItem[]>(safeGet<CartItem[]>(CART_KEY, []));
-  const cartCount = useMemo(() => cart.reduce((s, x) => s + x.qty, 0), [cart]);
-  const cartTotal = useMemo(() => cart.reduce((s, x) => s + x.price * x.qty, 0), [cart]);
-
-  type Step = 'cart' | 'checkout' | 'success';
-  const [step, setStep] = useState<Step>('cart');
-
-  const savedCustomer = safeGet<any>(CUSTOMER_KEY, null);
-  const [name, setName] = useState(savedCustomer?.name || '');
-  const [phone, setPhone] = useState(savedCustomer?.phone || '');
-  const [email, setEmail] = useState(savedCustomer?.email || '');
-  const [country, setCountry] = useState(savedCustomer?.country || '');
-  const [city, setCity] = useState(savedCustomer?.city || '');
-  const [address, setAddress] = useState(savedCustomer?.address || '');
-  const [postcode, setPostcode] = useState(savedCustomer?.postcode || '');
-  const [note, setNote] = useState('');
-  const [orderId, setOrderId] = useState<string | null>(null);
-  const [paidTotal, setPaidTotal] = useState<number>(0);
-
-  /* --------------- 请求兜底：直连 → http → CORS 代理(https/http) --------------- */
-  async function fetchJSONWithFallback(urlHttps: string) {
-    setErrMsg(null);
-    const urlHttp = urlHttps.replace('https://', 'http://');
-
-    // CORS 只读代理（把目标响应当作文本返回，允许跨域）
-    const proxyHttps = 'https://r.jina.ai/' + urlHttps;
-    const proxyHttp = 'https://r.jina.ai/' + urlHttp;
-
-    const candidates = [
-      { url: urlHttps, mode: 'json' as const },
-      { url: urlHttp, mode: 'json' as const },
-      { url: proxyHttps, mode: 'text' as const },
-      { url: proxyHttp, mode: 'text' as const },
-    ];
-
-    let lastErr: any = null;
-
-    for (const c of candidates) {
-      try {
-        const res = await fetch(c.url, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-        if (c.mode === 'json') {
-          return await res.json();
-        } else {
-          const text = await res.text();
-          // r.jina.ai 返回纯文本，这里需要手动 parse
-          return JSON.parse(text);
-        }
-      } catch (e: any) {
-        lastErr = e;
-      }
-    }
-    throw lastErr;
-  }
-
-  // 加载列表
+  // 拉数
   useEffect(() => {
-    const run = async () => {
-      setLoading(true);
-      try {
-        const base = `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${size}&page=${page}`;
-        const data: ApiResp = await fetchJSONWithFallback(base);
+    let stop = false;
+    (async () => {
+      const url = `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${size}&page=${page}`;
+      const r = await fetch(url, { cache: 'no-store' });
+      const j = await r.json();
+      if (stop) return;
 
-        const rawArr =
-          (Array.isArray(data?.content) && data!.content) ||
-          (Array.isArray(data?.data) && data!.data) ||
-          (Array.isArray((data as any)) && (data as any)) ||
-          (Array.isArray(data?.items) && data!.items) ||
-          [];
-
-        const mapped: ApiItem[] = rawArr.map((it: any) => {
-          const images = splitImages(it.images ?? it.image);
-          const price = it.price ?? it.unitPrice ?? it.unit_price ?? it.amount;
-          return {
-            num: String(it.num ?? it.code ?? it.id ?? ''),
-            title: String(it.title ?? it.name ?? '').trim(),
-            oe: it.oe ?? it.oeNo ?? it.oe_num ?? '',
-            brand: it.brand ?? it.brandName ?? '',
-            model: it.model ?? '',
-            year: it.year ?? '',
-            price,
-            stock: it.stock ?? it.qty ?? '',
-            images,
-          };
-        });
-
-        setList(mapped);
-
-        const t =
-          typeof data?.totalElements === 'number'
-            ? data.totalElements
-            : typeof data?.page?.totalElements === 'number'
-            ? data.page.totalElements
-            : typeof data?.total === 'number'
-            ? data.total
-            : 500; // 兜底
-        setTotal(t);
-
-        // 提供给详情页做“同页上下条导航”的缓存
-        safeSet('stock:list', mapped);
-        safeSet('stock:lastPage', { list: mapped, page, size });
-      } catch (e: any) {
-        console.error('列表加载失败：', e);
-        setErrMsg(String(e?.message || e));
-        setList([]);
-        setTotal(0);
-      } finally {
-        setLoading(false);
-      }
+      const rows: Row[] = Array.isArray(j?.content) ? j.content : Array.isArray(j?.data) ? j.data : [];
+      setList(rows);
+      setTotal(Number(j?.totalElements ?? j?.total ?? rows.length));
+    })();
+    return () => {
+      stop = true;
     };
-    run();
   }, [page, size]);
 
-  /* --------------- 购物车 CRUD --------------- */
-  const saveCart = (items: CartItem[]) => {
-    setCart(items);
-    safeSet(CART_KEY, items);
-  };
-  const addToCart = (it: ApiItem) => {
-    const priceNum = parsePrice(it.price);
-    const img = (it.images && it.images[0]) || null;
-    const item: CartItem = {
-      num: it.num,
-      title: it.title || it.num,
-      price: priceNum,
-      qty: 1,
-      img,
-      oe: it.oe,
-      brand: it.brand,
-      model: it.model,
-    };
-    const copy = [...cart];
-    const idx = copy.findIndex((x) => x.num === item.num);
-    if (idx >= 0) copy[idx].qty += 1;
-    else copy.push(item);
-    saveCart(copy);
-    setCartOpen(true);
-    setStep('cart');
-  };
-  const updateQty = (numKey: string, newQty: number) => {
-    const copy = cart.map((x) => (x.num === numKey ? { ...x, qty: Math.max(1, Math.floor(newQty)) } : x));
-    saveCart(copy);
-  };
-  const removeItem = (numKey: string) => {
-    const copy = cart.filter((x) => x.num !== numKey);
-    saveCart(copy);
-  };
-  const clearCart = () => saveCart([]);
-
-  /* --------------- 下单 --------------- */
-  const submitOrder = () => {
-    if (!name.trim()) return alert('请填写姓名');
-    if (!phone.trim()) return alert('请填写手机');
-    if (!address.trim()) return alert('请填写地址');
-    if (cart.length === 0) return alert('购物车为空');
-
-    const payable = cartTotal;
-    setPaidTotal(payable);
-
-    const id = 'IP' + Date.now();
-    const order = {
-      id,
-      items: cart,
-      total: payable,
-      customer: { name, phone, email, country, city, address, postcode, note },
-      createdAt: new Date().toISOString(),
-    };
-
-    safeSet(ORDER_LAST_KEY, order);
-    const all = safeGet<any[]>(ORDERS_KEY, []);
-    all.unshift(order);
-    safeSet(ORDERS_KEY, all);
-
-    safeSet(CUSTOMER_KEY, { name, phone, email, country, city, address, postcode });
-    clearCart();
-    setOrderId(id);
-    setStep('success');
-  };
-
-  /* --------------- 视图 --------------- */
-  const pageCount = Math.max(1, Math.ceil(total / size));
-  const canPrev = page > 0;
-  const canNext = page < pageCount - 1;
+  const pages = useMemo(() => Math.max(1, Math.ceil(total / size)), [total, size]);
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">库存预览</h1>
+    <div style={{ maxWidth: 1260, margin: '32px auto', padding: '0 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ fontSize: 28, fontWeight: 700 }}>库存预览</div>
         <a
-          className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white"
           href={`https://niuniuparts.com:6001/scm-product/v1/stock2/excel?size=${size}&page=${page}`}
           target="_blank"
           rel="noreferrer"
+          style={{
+            background: '#2563eb',
+            color: '#fff',
+            borderRadius: 8,
+            padding: '10px 14px',
+            textDecoration: 'none',
+          }}
         >
           下载库存 Excel
         </a>
       </div>
 
-      {/* 分页 */}
-      <div className="mt-4 flex items-center gap-3">
-        <button disabled={!canPrev} onClick={() => setPage((p) => Math.max(0, p - 1))} className="px-3 py-2 rounded border disabled:opacity-40">
+      {/* 分页条 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <button
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={page <= 0}
+          style={{ padding: '6px 10px' }}
+        >
           上一页
         </button>
-        <div>
-          第 <b>{page + 1}</b> / {pageCount} 页
-        </div>
-        <button disabled={!canNext} onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} className="px-3 py-2 rounded border disabled:opacity-40">
+        <div>第 {page + 1} / {pages} 页</div>
+        <button
+          onClick={() => setPage((p) => Math.min(pages - 1, p + 1))}
+          disabled={page >= pages - 1}
+          style={{ padding: '6px 10px' }}
+        >
           下一页
         </button>
 
-        <span className="ml-4">每页</span>
-        <select
-          value={size}
-          onChange={(e) => {
-            setPage(0);
-            setSize(parseInt(e.target.value, 10));
-          }}
-          className="border rounded px-2 py-1"
-        >
+        <div style={{ marginLeft: 12 }}>每页</div>
+        <select value={size} onChange={(e) => { setPage(0); setSize(Number(e.target.value)); }}>
           {[20, 30, 40, 50].map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
+            <option key={n} value={n}>{n}</option>
           ))}
         </select>
-        <span>条</span>
+        <div>条</div>
       </div>
 
       {/* 列表 */}
-      <div className="mt-6">
-        {loading ? (
-          <div className="text-gray-500">加载中…</div>
-        ) : errMsg ? (
-          <div className="text-red-600">
-            加载失败：{errMsg}
-          </div>
-        ) : list.length === 0 ? (
-          <div className="text-gray-500">暂无数据</div>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {list.map((it, idx) => {
-              const img = (it.images && it.images[0]) || '';
-              const priceNum = parsePrice(it.price);
-
-              const params = new URLSearchParams();
-              params.set('idx', String(idx));
-              if (it.title) params.set('title', String(it.title));
-              if (it.oe) params.set('oe', String(it.oe));
-              if (it.brand) params.set('brand', String(it.brand));
-              if (it.model) params.set('model', String(it.model));
-              if (it.year) params.set('year', String(it.year));
-              if (it.price != null) params.set('price', String(it.price));
-              if (it.stock != null) params.set('stock', String(it.stock));
-              if (it.images?.length) params.set('images', it.images.join('|'));
-
-              return (
-                <div key={it.num} className="border rounded p-3 flex flex-col">
-                  <div className="aspect-[4/3] bg-gray-50 rounded flex items-center justify-center overflow-hidden">
-                    {img ? (
-                      <img src={img} alt={it.title || it.num} className="max-w-full max-h-full object-contain" loading="lazy" />
-                    ) : (
-                      <span className="text-gray-400">无图</span>
-                    )}
-                  </div>
-
-                  <div className="mt-3 flex-1">
-                    <div className="font-medium line-clamp-2" title={it.title || it.num}>
-                      {it.title || it.num}
-                    </div>
-                    <div className="mt-1 text-sm text-gray-600">Brand: {it.brand || '-'}</div>
-                    <div className="text-sm text-gray-600">OE: {it.oe || '-'}</div>
-                    <div className="text-sm text-gray-600">Num: {it.num}</div>
-                    <div className="mt-1 text-emerald-700 font-semibold">¥ {money(priceNum)}</div>
-                  </div>
-
-                  <div className="mt-3 flex items-center gap-2">
-                    <button onClick={() => addToCart(it)} className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2">
-                      加入购物车
-                    </button>
-                    <Link
-                      href={`/stock/${encodeURIComponent(it.num)}?${params.toString()}`}
-                      className="rounded border px-3 py-2 hover:bg-gray-50"
-                    >
-                      查看详情
-                    </Link>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* 悬浮购物车入口 */}
-      <button
-        onClick={() => {
-          setCartOpen(true);
-          setStep('cart');
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 16,
         }}
-        className="fixed right-4 bottom-4 z-40 rounded-full shadow-lg bg-gray-900 text-white px-4 py-3"
       >
-        购物车 {cartCount > 0 ? `(${cartCount})` : ''}
-      </button>
+        {list.map((it: Row) => {
+          const imgs = extractImages(it);
+          const img = imgs[0];
+          const title =
+            it?.title ||
+            it?.product ||
+            it?.name ||
+            it?.desc ||
+            `${it?.brand ?? ''} ${it?.model ?? ''}`.trim() ||
+            '产品';
 
-      {/* 抽屉：购物车 → 结算 → 成功 */}
-      {cartOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setCartOpen(false)}>
-          <div
-            className="absolute right-0 top-0 h-full w-full sm:w-[460px] bg-white shadow-xl flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b">
-              <div className="font-semibold">{step === 'cart' ? '购物车' : step === 'checkout' ? '填写收件信息' : '下单成功'}</div>
-              <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => setCartOpen(false)}>
-                关闭
-              </button>
-            </div>
+          const num = it?.num ?? it?.Num ?? it?.id ?? it?.ID ?? '';
+          const oe =
+            it?.oe || it?.OE || it?.oeNo || it?.oe_code || it?.oeCode || it?.OECode || it?.OE_NO || '';
+          const brand = it?.brand || it?.Brand || '';
+          const price = Number(it?.price ?? it?.Price ?? 0);
 
-            <div className="p-4 overflow-auto flex-1">
-              {step === 'cart' && (
-                <>
-                  {cart.length === 0 ? (
-                    <div className="text-gray-500">购物车是空的</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {cart.map((it) => (
-                        <div key={it.num} className="flex items-center gap-3 border rounded p-2">
-                          <div className="w-20 h-16 flex items-center justify-center bg-gray-50 overflow-hidden">
-                            {it.img ? <img src={it.img} alt={it.title} className="w-full h-full object-contain" /> : <div className="text-gray-400">无图</div>}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium truncate" title={it.title}>
-                              {it.title}
-                            </div>
-                            <div className="text-sm text-gray-500">Num: {it.num}</div>
-                            {it.oe && <div className="text-sm text-gray-500">OE: {it.oe}</div>}
-                            <div className="mt-1 text-emerald-700 font-semibold">¥ {money(it.price)}</div>
-                          </div>
-                          <div className="flex flex-col items-end gap-2">
-                            <div className="flex items-center border rounded overflow-hidden">
-                              <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty - 1)}>
-                                -
-                              </button>
-                              <input className="w-12 text-center" value={it.qty} onChange={(e) => updateQty(it.num, parseInt(e.target.value || '1', 10))} />
-                              <button className="px-2 py-1 hover:bg-gray-50" onClick={() => updateQty(it.num, it.qty + 1)}>
-                                +
-                              </button>
-                            </div>
-                            <button className="text-red-600 text-sm hover:underline" onClick={() => removeItem(it.num)}>
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
+          return (
+            <div key={`${num}-${oe}-${brand}-${img ?? 'x'}`} style={{ border: '1px solid #eee', borderRadius: 10, padding: 12 }}>
+              <CardImg url={img} alt={title} />
+              <div style={{ marginTop: 10, fontWeight: 600 }}>{title}</div>
+              <div style={{ color: '#4b5563', marginTop: 4 }}>Brand: {brand || '-'}</div>
+              <div style={{ color: '#4b5563' }}>OE: {oe || '-'}</div>
+              <div style={{ color: '#4b5563' }}>Num: {String(num || '-')}</div>
+              <div style={{ marginTop: 6, color: '#065f46', fontWeight: 700 }}>
+                ￥ {price.toFixed(2)}
+              </div>
 
-              {step === 'checkout' && (
-                <form
-                  className="space-y-3"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    submitOrder();
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <Link
+                  href={{
+                    pathname: `/stock/${encodeURIComponent(num)}`,
+                    query: {
+                      product: title,
+                      brand,
+                      oe,
+                      price,
+                      image: img ?? '',
+                    },
+                  }}
+                  style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: '8px 0',
+                    textDecoration: 'none',
+                    color: '#111827',
+                    background: '#fff',
                   }}
                 >
-                  <div className="grid grid-cols-1 gap-3">
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">姓名*</label>
-                      <input className="flex-1 border rounded px-3 py-2" value={name} onChange={(e) => setName(e.target.value)} required />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">手机*</label>
-                      <input className="flex-1 border rounded px-3 py-2" value={phone} onChange={(e) => setPhone(e.target.value)} required />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">邮箱</label>
-                      <input type="email" className="flex-1 border rounded px-3 py-2" value={email} onChange={(e) => setEmail(e.target.value)} />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">国家/地区</label>
-                      <input className="flex-1 border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)} />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">城市</label>
-                      <input className="flex-1 border rounded px-3 py-2" value={city} onChange={(e) => setCity(e.target.value)} />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">地址*</label>
-                      <input className="flex-1 border rounded px-3 py-2" value={address} onChange={(e) => setAddress(e.target.value)} required />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">邮编</label>
-                      <input className="flex-1 border rounded px-3 py-2" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="w-24 text-gray-600 py-2">备注</label>
-                      <textarea className="flex-1 border rounded px-3 py-2" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
-                    </div>
-                  </div>
-
-                  <div className="mt-4 border-t pt-3">
-                    <div className="flex items-center justify-between text-lg">
-                      <span>应付合计</span>
-                      <strong>¥ {money(cartTotal)}</strong>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        safeSet(CUSTOMER_KEY, { name, phone, email, country, city, address, postcode });
-                        setStep('cart');
-                      }}
-                      className="rounded border px-4 py-2 hover:bg-gray-50"
-                    >
-                      返回购物车
-                    </button>
-                    <button type="submit" className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 flex-1" disabled={cart.length === 0}>
-                      提交订单
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {step === 'success' && (
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-emerald-600">下单成功</div>
-                  <div className="mt-2 text-gray-600">订单号：{orderId}</div>
-                  <div className="mt-2 text-gray-600">应付合计：¥ {money(paidTotal)}</div>
-                  <div className="mt-6 flex items-center gap-2 justify-center">
-                    <button
-                      className="rounded bg-gray-900 hover:bg-black text-white px-4 py-2"
-                      onClick={() => {
-                        setCartOpen(false);
-                        setStep('cart');
-                      }}
-                    >
-                      继续购物
-                    </button>
-                    <button
-                      className="rounded border px-4 py-2 hover:bg-gray-50"
-                      onClick={() => {
-                        try {
-                          const last = localStorage.getItem(ORDER_LAST_KEY) || '';
-                          (navigator.clipboard && (navigator as any).clipboard?.writeText)
-                            ? navigator.clipboard.writeText(last)
-                            : null;
-                          alert('订单信息已复制');
-                        } catch {
-                          alert('复制失败');
-                        }
-                      }}
-                    >
-                      复制订单信息
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 抽屉底部：合计 & 去结算 */}
-            {step === 'cart' && (
-              <div className="mt-2 px-4 py-3 border-t">
-                <div className="flex items-center justify-between">
-                  <div className="text-gray-600">合计</div>
-                  <div className="text-xl font-bold text-gray-900">¥ {money(cartTotal)}</div>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <button onClick={clearCart} className="rounded border px-4 py-2 hover:bg-gray-50" disabled={cart.length === 0}>
-                    清空
-                  </button>
-                  <button onClick={() => setStep('checkout')} className="rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 flex-1" disabled={cart.length === 0}>
-                    去结算
-                  </button>
-                </div>
+                  查看详情
+                </Link>
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 无数据 */}
+      {list.length === 0 && (
+        <div style={{ color: '#6b7280', marginTop: 32 }}>暂无数据</div>
       )}
     </div>
   );
