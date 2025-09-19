@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
-/** ---------- 工具 ---------- */
-function cdn(url: string, w = 1024) {
+/* ----------------- 小工具 ----------------- */
+type AnyObj = Record<string, any>;
+
+function cdn(url: string, w = 1280) {
+  // 用 wsrv.nl 压缩，保证加载快
   if (!url) return '';
   try {
     const u = new URL(url);
@@ -15,19 +18,62 @@ function cdn(url: string, w = 1024) {
     return url;
   }
 }
-function pick<T extends Record<string, any>>(obj: T | null | undefined, keys: string[], dft: any = '') {
+
+function pick<T extends AnyObj>(obj: T | null | undefined, keys: string[], dft: any = '') {
   for (const k of keys) {
     const v = (obj as any)?.[k];
     if (v !== undefined && v !== null && v !== '') return v;
   }
   return dft;
 }
-function num(v: any, dft = 0) {
+
+function toNum(v: any, dft = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : dft;
 }
 
-/** ---------- 购物车（与列表页一致，保证共享） ---------- */
+/** 从对象与 URL 参数中尽可能提取图片（去重、最多 12 张） */
+function extractImages(fromObj: AnyObj | null, urlImage?: string): string[] {
+  const out: string[] = [];
+
+  const push = (s?: string) => {
+    if (!s) return;
+    if (typeof s !== 'string') return;
+    // 去掉 "null"/"undefined"
+    const t = s.trim();
+    if (!t || t === 'null' || t === 'undefined') return;
+    out.push(t);
+  };
+
+  // 1) URL 参数带过来的 image
+  push(urlImage);
+
+  if (fromObj) {
+    // 2) 常见字段：数组或用分隔符的字符串
+    const direct = pick(fromObj, ['images', 'imageList', 'imgs'], null);
+    if (Array.isArray(direct)) {
+      direct.forEach((x: any) => push(String(x || '')));
+    } else if (typeof direct === 'string') {
+      direct.split(/[|,;\s]+/g).forEach((x) => push(x));
+    }
+
+    // 3) 遍历对象里所有可能字段：pic1..pic12 / image1..image12 / photo*
+    Object.keys(fromObj).forEach((k) => {
+      if (/^(img|image|pic|photo)\d*$/i.test(k)) {
+        push(String(fromObj[k] || ''));
+      }
+    });
+
+    // 4) 兜底：单一字段
+    push(pick(fromObj, ['image', 'img', 'cover', 'pic', 'picUrl', 'imageUrl', 'url'], ''));
+  }
+
+  // 去重 + 只要 http(s)
+  const uniq = Array.from(new Set(out.filter((x) => /^https?:\/\//i.test(x))));
+  return uniq.slice(0, 12);
+}
+
+/* ----------------- 购物车（与列表页一致，localStorage 共享） ----------------- */
 type CartItem = { num: string; title: string; price: number; image?: string; qty: number };
 function useCart() {
   const KEY = 'imgparts_cart_v2';
@@ -46,8 +92,8 @@ function useCart() {
   }, [items]);
 
   const add = useCallback((it: Omit<CartItem, 'qty'>, qty = 1) => {
-    setItems(prev => {
-      const i = prev.findIndex(x => x.num === it.num);
+    setItems((prev) => {
+      const i = prev.findIndex((x) => x.num === it.num);
       if (i > -1) {
         const next = [...prev];
         next[i] = { ...next[i], qty: Math.min(999, next[i].qty + qty) };
@@ -58,13 +104,25 @@ function useCart() {
     setOpen(true);
   }, []);
   const setQty = useCallback((numNo: string, qty: number) => {
-    setItems(prev => prev.map(x => (x.num === numNo ? { ...x, qty: Math.max(1, qty) } : x)));
+    setItems((prev) => prev.map((x) => (x.num === numNo ? { ...x, qty: Math.max(1, qty) } : x)));
   }, []);
-  const remove = useCallback((numNo: string) => setItems(prev => prev.filter(x => x.num !== numNo)), []);
+  const remove = useCallback((numNo: string) => setItems((prev) => prev.filter((x) => x.num !== numNo)), []);
   const clear = useCallback(() => setItems([]), []);
   const total = useMemo(() => items.reduce((s, x) => s + x.price * x.qty, 0), [items]);
   return { open, setOpen, items, add, setQty, remove, clear, total };
 }
+
+function CartButton({ cart }: { cart: ReturnType<typeof useCart> }) {
+  return (
+    <button
+      onClick={() => cart.setOpen(true)}
+      className="fixed z-40 right-6 bottom-6 rounded-full bg-emerald-600 text-white px-4 py-3 shadow-lg hover:bg-emerald-500"
+    >
+      🛒 购物车（{cart.items.reduce((s, x) => s + x.qty, 0)}）
+    </button>
+  );
+}
+
 function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
   const [done, setDone] = useState<{ id: string; total: number } | null>(null);
   const checkout = () => {
@@ -75,13 +133,6 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
   };
   return (
     <>
-      <button
-        onClick={() => cart.setOpen(true)}
-        className="fixed z-40 right-6 bottom-6 rounded-full bg-emerald-600 text-white px-4 py-3 shadow-lg hover:bg-emerald-500"
-      >
-        🛒 购物车（{cart.items.reduce((s, x) => s + x.qty, 0)}）
-      </button>
-
       <div
         className={`fixed z-50 top-0 right-0 h-full w-[360px] bg-white shadow-2xl transition-transform duration-200 ${
           cart.open ? 'translate-x-0' : 'translate-x-full'
@@ -89,9 +140,7 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
       >
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <div className="font-semibold">购物车</div>
-          <button onClick={() => cart.setOpen(false)} className="text-slate-500 hover:text-slate-700">
-            ✕
-          </button>
+          <button onClick={() => cart.setOpen(false)} className="text-slate-500 hover:text-slate-700">✕</button>
         </div>
         <div className="p-4 space-y-3 overflow-auto h-[calc(100%-170px)]">
           {cart.items.length === 0 ? (
@@ -104,22 +153,13 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
                   <div className="truncate text-sm">{it.title}</div>
                   <div className="text-emerald-600 font-semibold">￥{it.price.toFixed(2)}</div>
                   <div className="mt-1 flex items-center gap-2">
-                    <button className="px-2 border rounded" onClick={() => cart.setQty(it.num, it.qty - 1)}>
-                      -
-                    </button>
-                    <input
-                      className="w-12 text-center border rounded py-0.5"
-                      value={it.qty}
-                      onChange={(e) => cart.setQty(it.num, Number(e.target.value || 1))}
-                    />
-                    <button className="px-2 border rounded" onClick={() => cart.setQty(it.num, it.qty + 1)}>
-                      +
-                    </button>
+                    <button className="px-2 border rounded" onClick={() => cart.setQty(it.num, it.qty - 1)}>-</button>
+                    <input className="w-12 text-center border rounded py-0.5" value={it.qty}
+                      onChange={(e) => cart.setQty(it.num, Number(e.target.value || 1))}/>
+                    <button className="px-2 border rounded" onClick={() => cart.setQty(it.num, it.qty + 1)}>+</button>
                   </div>
                 </div>
-                <button className="text-slate-400 hover:text-rose-600" onClick={() => cart.remove(it.num)}>
-                  删除
-                </button>
+                <button className="text-slate-400 hover:text-rose-600" onClick={() => cart.remove(it.num)}>删除</button>
               </div>
             ))
           )}
@@ -130,12 +170,8 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
             <span className="text-lg font-bold text-emerald-600">￥{cart.total.toFixed(2)}</span>
           </div>
           <div className="flex gap-2">
-            <button className="flex-1 border rounded px-3 py-2" onClick={cart.clear}>
-              清空
-            </button>
-            <button className="flex-1 bg-emerald-600 text-white rounded px-3 py-2 hover:bg-emerald-500" onClick={checkout}>
-              去结算
-            </button>
+            <button className="flex-1 border rounded px-3 py-2" onClick={cart.clear}>清空</button>
+            <button className="flex-1 bg-emerald-600 text-white rounded px-3 py-2 hover:bg-emerald-500" onClick={checkout}>去结算</button>
           </div>
         </div>
       </div>
@@ -147,16 +183,9 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
             <div className="text-center text-slate-600 mb-4">订单号：{done.id}</div>
             <div className="text-center text-slate-700 mb-6">应付合计：￥{done.total.toFixed(2)}</div>
             <div className="flex gap-2">
-              <button className="flex-1 border rounded px-3 py-2" onClick={() => setDone(null)}>
-                继续购物
-              </button>
-              <button
-                className="flex-1 bg-slate-900 text-white rounded px-3 py-2"
-                onClick={() => {
-                  navigator.clipboard?.writeText(`订单号：${done.id}，合计：￥${done.total.toFixed(2)}`);
-                  setDone(null);
-                }}
-              >
+              <button className="flex-1 border rounded px-3 py-2" onClick={() => setDone(null)}>继续购物</button>
+              <button className="flex-1 bg-slate-900 text-white rounded px-3 py-2"
+                onClick={() => { navigator.clipboard?.writeText(`订单号：${done.id}，合计：￥${done.total.toFixed(2)}`); setDone(null); }}>
                 复制订单信息
               </button>
             </div>
@@ -167,129 +196,164 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
   );
 }
 
-/** ---------- 详情页主体 ---------- */
+/* ----------------- 详情页 ----------------- */
 export default function StockDetailPage() {
-  // ✅ 兼容性读取 useParams，避免被推断为 {num:string}|null
-  const p = useParams() as { num?: string } | null;
-  const numParam = typeof p?.num === 'string' ? p!.num : '';
-
+  const params = useParams() as { num?: string } | null;
+  const numParam = decodeURIComponent(params?.num ?? '');
   const search = useSearchParams();
   const router = useRouter();
   const cart = useCart();
 
-  const numNo = String(numParam || '');
-  const title = decodeURIComponent(search?.get('title') || '') || '-';
-  const oe = decodeURIComponent(search?.get('oe') || '') || '-';
-  const brand = decodeURIComponent(search?.get('brand') || '') || '-';
-  const price = num(search?.get('price') || 0, 0);
-  const image0 = decodeURIComponent(search?.get('image') || '');
-  const idx = num(search?.get('idx') || -1, -1);
+  // 从 URL 读来的基础信息
+  const titleQ = decodeURIComponent(search?.get('title') ?? '');
+  const oeQ    = decodeURIComponent(search?.get('oe') ?? '');
+  const brandQ = decodeURIComponent(search?.get('brand') ?? '');
+  const priceQ = toNum(search?.get('price') ?? '', 0);
+  const imageQ = decodeURIComponent(search?.get('image') ?? '');
+  const idxQ   = toNum(search?.get('idx') ?? '', -1);
 
-  // 仍按“最多 12 张缩略图”的策略
-  const [images, setImages] = useState<string[]>(image0 ? [image0] : []);
-  useEffect(() => {
-    setImages((prev) => prev.slice(0, 12));
-  }, [image0]);
+  // 详情“元数据”对象（URL 兜底）
+  const [meta, setMeta] = useState<AnyObj | null>(() => ({
+    num: numParam, product: titleQ, title: titleQ, oe: oeQ, brand: brandQ, price: priceQ, image: imageQ,
+  }));
 
+  // 列表缓存（用于上一条/下一条以及图片补充）
+  const [pageList, setPageList] = useState<AnyObj[]>([]);
+  const [navIdx, setNavIdx] = useState<number>(idxQ);
+
+  // 大图与缩略图
+  const [imgs, setImgs] = useState<string[]>([]);
   const [cur, setCur] = useState(0);
 
-  const goto = () => {
-    router.push(
-      `/stock/${encodeURIComponent(numNo)}?title=${encodeURIComponent(title)}&oe=${encodeURIComponent(
-        oe
-      )}&brand=${encodeURIComponent(brand)}&price=${price}&image=${encodeURIComponent(image0)}&idx=${idx}`
-    );
+  // 初次挂载：如果 URL 没有携带完整信息，尝试去当前页抓一下（若有 idx）
+  useEffect(() => {
+    let stop = false;
+    const run = async () => {
+      if (navIdx >= 0) {
+        try {
+          const size = 20;
+          // 当前 idx 对应的页号（与列表一致）
+          const page = Math.floor(navIdx / size);
+          const res = await fetch(`https://niuniuparts.com:6001/scm-product/v1/stock2?size=${size}&page=${page}`, { cache: 'no-store' });
+          const data = await res.json();
+          const list: AnyObj[] = data?.content || data?.list || data?.rows || data?.data || [];
+          if (!stop) setPageList(list);
+          // 找到当前这条
+          const found = list.find((x) => String(pick(x, ['num', 'Num', 'code', 'partNo'], '')).toLowerCase() === numParam.toLowerCase());
+          if (!stop && found) setMeta((m) => ({ ...found, ...(m || {}) }));
+        } catch {}
+      }
+    };
+    run();
+    return () => { stop = true; };
+  }, [navIdx, numParam]);
+
+  // 不管是 URL 还是接口拿到 meta，都在这里统一抽图
+  useEffect(() => {
+    const arr = extractImages(meta, imageQ);
+    setImgs(arr);
+    setCur(0);
+  }, [meta, imageQ]);
+
+  const title = String(pick(meta, ['product', 'title', 'name'], ''));
+  const oe    = String(pick(meta, ['oe', 'OE'], ''));
+  const brand = String(pick(meta, ['brand', 'Brand'], ''));
+  const price = toNum(pick(meta, ['price', 'Price'], priceQ), priceQ);
+
+  // 上/下一条
+  const gotoBy = (step: number) => {
+    if (pageList.length === 0 || navIdx < 0) return;
+    const nextIdx = Math.max(0, Math.min(navIdx + step, pageList.length - 1));
+    const it = pageList[nextIdx];
+    const numNo  = String(pick(it, ['num', 'Num', 'code', 'partNo'], ''));
+    const _title = String(pick(it, ['product', 'title', 'name'], ''));
+    const _oe    = String(pick(it, ['oe', 'OE'], ''));
+    const _brand = String(pick(it, ['brand', 'Brand'], ''));
+    const _price = toNum(pick(it, ['price', 'Price'], 0), 0);
+    const _image = String(pick(it, ['image','img','imageUrl','url','cover','pic','picUrl'],''));
+
+    setNavIdx(nextIdx);
+    setMeta({ ...it });
+    router.replace(`/stock/${encodeURIComponent(numNo)}?title=${encodeURIComponent(_title)}&oe=${encodeURIComponent(_oe)}&brand=${encodeURIComponent(_brand)}&price=${_price}&image=${encodeURIComponent(_image)}&idx=${nextIdx}`);
+  };
+
+  const addToCart = () => {
+    cart.add({ num: numParam, title: title || numParam, price, image: imgs[0] || imageQ || '' }, 1);
   };
 
   return (
     <div className="max-w-screen-2xl mx-auto px-4 py-6">
-      <Link href="/stock" className="inline-block mb-4 border rounded px-3 py-1.5 hover:bg-slate-50">
-        ← 返回列表
-      </Link>
+      <div className="mb-4">
+        <Link href="/stock" className="inline-flex items-center gap-2 border rounded px-3 py-1.5 hover:bg-slate-50">← 返回列表</Link>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* 大图 */}
+        {/* 左：大图 + 缩略图 */}
         <div>
-          <div className="aspect-[4/3] rounded-xl bg-slate-50 flex items-center justify-center overflow-hidden">
-            {images.length > 0 ? (
-              <img src={cdn(images[cur] || '', 1400)} alt="" className="w-full h-full object-contain" />
+          <div className="aspect-[4/3] bg-slate-50 rounded-xl overflow-hidden flex items-center justify-center">
+            {imgs.length ? (
+              <img
+                key={imgs[cur]}
+                src={cdn(imgs[cur], 1400)}
+                alt=""
+                decoding="async"
+                loading="eager"
+                className="w-full h-full object-contain"
+              />
             ) : (
               <div className="text-slate-400">无图</div>
             )}
           </div>
 
-          {/* 缩略图 */}
-          {images.length > 0 && (
-            <div className="mt-3 flex gap-2 overflow-x-auto">
-              {images.map((src, i) => (
+          {/* 缩略图（最多 12 张，可横向滚动） */}
+          {!!imgs.length && (
+            <div className="mt-3 flex gap-2 overflow-auto pb-1">
+              {imgs.map((src, i) => (
                 <button
-                  key={i}
+                  key={src + i}
                   onClick={() => setCur(i)}
-                  className={`shrink-0 w-24 h-20 rounded bg-slate-50 overflow-hidden border ${
-                    i === cur ? 'border-emerald-500' : 'border-transparent'
-                  }`}
+                  className={`shrink-0 w-24 h-20 rounded border ${i === cur ? 'border-emerald-600' : 'border-slate-200'} bg-white`}
+                  title={`图 ${i + 1}`}
                 >
-                  <img src={cdn(src, 360)} className="w-full h-full object-contain" />
+                  <img src={cdn(src, 300)} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain" />
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* 信息 & 操作 */}
+        {/* 右：信息与操作 */}
         <div>
-          <h1 className="text-2xl font-semibold mb-2">{title}</h1>
+          <h1 className="text-2xl font-semibold mb-4">{title || ' '}</h1>
+
           <div className="space-y-2 text-slate-700">
-            <div>Num: {numNo || '-'}</div>
-            <div>OE: {oe}</div>
-            <div>Brand: {brand}</div>
-            <div>Model: -</div>
-            <div>Year: -</div>
-            <div className="text-emerald-600 text-xl font-bold">Price: ¥ {price.toFixed(2)}</div>
-            <div>Stock: -</div>
+            <div><span className="text-slate-500 mr-2">Num:</span>{numParam || '-'}</div>
+            <div><span className="text-slate-500 mr-2">OE:</span>{oe || '-'}</div>
+            <div><span className="text-slate-500 mr-2">Brand:</span>{brand || '-'}</div>
+            <div><span className="text-slate-500 mr-2">Model:</span>-</div>
+            <div><span className="text-slate-500 mr-2">Year:</span>-</div>
+            <div className="text-emerald-600 text-xl font-bold mt-2">Price: ￥ {price.toFixed(2)}</div>
+            <div><span className="text-slate-500 mr-2">Stock:</span>-</div>
           </div>
 
-          <div className="mt-4 flex gap-2">
-            <QtyButton onAdd={(q) => cart.add({ num: numNo, title, price, image: images[0] }, q)} />
-          </div>
+          <div className="mt-4 flex items-center gap-3">
+            <button onClick={addToCart} className="bg-emerald-600 text-white rounded px-4 py-2 hover:bg-emerald-500">
+              加入购物车
+            </button>
 
-          <div className="mt-6 flex gap-2">
-            <button className="px-4 py-2 border rounded" onClick={() => goto()}>
+            <button onClick={() => gotoBy(-1)} className="border rounded px-4 py-2 disabled:opacity-40" disabled={navIdx <= 0}>
               上一条
             </button>
-            <button className="px-4 py-2 border rounded" onClick={() => goto()}>
+            <button onClick={() => gotoBy(+1)} className="border rounded px-4 py-2 disabled:opacity-40" disabled={navIdx < 0 || navIdx >= pageList.length - 1}>
               下一条
             </button>
           </div>
         </div>
       </div>
 
+      <CartButton cart={cart} />
       <CartDrawer cart={cart} />
     </div>
-  );
-}
-
-function QtyButton({ onAdd }: { onAdd: (qty: number) => void }) {
-  const [qty, setQty] = useState(1);
-  return (
-    <>
-      <div className="flex items-center border rounded">
-        <button className="px-3 py-2" onClick={() => setQty(Math.max(1, qty - 1))}>
-          -
-        </button>
-        <input
-          className="w-14 text-center outline-none"
-          value={qty}
-          onChange={(e) => setQty(Math.max(1, Number(e.target.value || 1)))}
-        />
-        <button className="px-3 py-2" onClick={() => setQty(Math.min(999, qty + 1))}>
-          +
-        </button>
-      </div>
-      <button className="bg-emerald-600 text-white rounded px-4 py-2 hover:bg-emerald-500" onClick={() => onAdd(qty)}>
-        加入购物车
-      </button>
-    </>
   );
 }
 
