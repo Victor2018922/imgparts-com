@@ -141,7 +141,10 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
 
 /* ----------------- 详情页 ----------------- */
 export default function StockDetailPage() {
-  const { num: numParam } = useParams<{ num: string }>();
+  // ✅ 兼容某些环境 useParams 可能返回 null 的情况 —— 不再解构
+  const params = useParams() as { num?: string } | null;
+  const numParam = decodeURIComponent(params?.num ?? '');
+
   const search = useSearchParams();
   const router = useRouter();
   const cart = useCart();
@@ -269,4 +272,3 @@ export default function StockDetailPage() {
     </div>
   );
 }
-
