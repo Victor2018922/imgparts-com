@@ -1,83 +1,145 @@
 'use client';
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 
-/* ----------------- 工具方法 ----------------- */
+/** ------------- 工具 ------------- */
 type AnyObj = Record<string, any>;
 
-function cdn(url: string, w = 1400) {
-  if (!url) return '';
-  try {
-    const u = new URL(url);
-    const bare = `${u.hostname}${u.pathname}${u.search}`;
-    return `https://wsrv.nl/?url=${encodeURIComponent(bare)}&w=${w}&output=webp&q=82`;
-  } catch {
-    return url;
-  }
+function toNum(v: any, dft = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : dft;
 }
-
-function pick<T extends AnyObj>(obj: T | null | undefined, keys: string[], dft: any = '') {
+function pick(obj: AnyObj | null | undefined, keys: string[], dft: any = '') {
   for (const k of keys) {
     const v = (obj as any)?.[k];
     if (v !== undefined && v !== null && v !== '') return v;
   }
   return dft;
 }
-
-function toNum(v: any, dft = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : dft;
-}
-
-function extractImages(fromObj: AnyObj | null, urlImage?: string): string[] {
+function extractImages(fromObj: AnyObj | null, extra?: string): string[] {
   const out: string[] = [];
   const push = (s?: string) => {
-    const t = String(s ?? '').trim();
+    if (!s) return;
+    const t = String(s).trim();
     if (!t || t === 'null' || t === 'undefined') return;
-    if (!/^https?:\/\//i.test(t)) return;
-    out.push(t);
+    if (/^https?:\/\//i.test(t)) out.push(t);
   };
-
-  // URL 携带的
-  push(urlImage);
-
+  if (extra) push(extra);
   if (fromObj) {
-    const direct = pick(fromObj, ['images', 'imageList', 'imgs', 'pictures', 'album'], null);
-    if (Array.isArray(direct)) direct.forEach((x: any) => push(String(x || '')));
-    if (typeof direct === 'string') direct.split(/[|,;\s]+/g).forEach((x) => push(x));
-
-    push(pick(fromObj, ['image', 'img', 'cover', 'pic', 'picUrl', 'imageUrl', 'url', 'thumb'], ''));
+    const direct = pick(fromObj, ['images', 'imageList', 'imgs'], null);
+    if (Array.isArray(direct)) direct.forEach((x: any) => push(x));
+    else if (typeof direct === 'string') direct.split(/[|,;\s]+/g).forEach(push);
 
     Object.keys(fromObj).forEach((k) => {
-      if (/^(img|image|pic|photo)\d*$/i.test(k)) push(String(fromObj[k] || ''));
+      if (/^(img|image|pic|photo)\d*$/i.test(k)) push(fromObj[k]);
     });
+    push(pick(fromObj, ['image', 'img', 'cover', 'pic', 'picUrl', 'imageUrl', 'url'], ''));
   }
-
   return Array.from(new Set(out)).slice(0, 12);
 }
 
-/* ----------------- 购物车（与列表页一致） ----------------- */
+/** ------------- 多源回退图片 ------------- */
+function wsrv1(url: string, w = 1200) {
+  const clean = url.replace(/^https?:\/\//, '');
+  return `https://wsrv.nl/?url=${encodeURIComponent(clean)}&w=${w}&q=80&output=webp`;
+}
+function wsrv2(url: string, w = 1200) {
+  return `https://wsrv.nl/?url=${encodeURIComponent(url)}&w=${w}&q=80&output=webp`;
+}
+function useImgCandidates(src: string, w: number) {
+  return useMemo(() => {
+    const arr = [wsrv1(src, w), wsrv2(src, w), src].filter(Boolean);
+    return Array.from(new Set(arr));
+  }, [src, w]);
+}
+function MultiImg({
+  src,
+  w = 1280,
+  alt = '',
+  className = '',
+}: {
+  src: string;
+  w?: number;
+  alt?: string;
+  className?: string;
+}) {
+  const cands = useImgCandidates(src, w);
+  const [i, setI] = useState(0);
+  const cur = cands[i];
+
+  if (!src) {
+    return (
+      <div className={`flex items-center justify-center text-slate-400 ${className}`}>
+        无图
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={cur}
+      alt={alt}
+      className={className}
+      referrerPolicy="no-referrer"
+      crossOrigin="anonymous"
+      loading="eager"
+      decoding="async"
+      onError={() => {
+        if (i < cands.length - 1) setI(i + 1);
+      }}
+    />
+  );
+}
+
+/** ------------- 购物车（与列表相同） ------------- */
 type CartItem = { num: string; title: string; price: number; image?: string; qty: number };
+type OrderContact = {
+  country: string;
+  city: string;
+  address: string;
+  postcode: string;
+  email: string;
+  receiver: string;
+};
+const CART_KEY = 'imgparts_cart_v2';
+const CONTACT_KEY = 'imgparts_checkout_contact_v1';
+
 function useCart() {
-  const KEY = 'imgparts_cart_v2';
   const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<'cart' | 'checkout' | 'done'>('cart');
   const [items, setItems] = useState<CartItem[]>([]);
-  const [step, setStep] = useState<'cart' | 'form' | 'done'>('cart');
-  const [order, setOrder] = useState<{ id: string; total: number } | null>(null);
+  const [orderId, setOrderId] = useState('');
+  const [contact, setContact] = useState<OrderContact>({
+    country: '',
+    city: '',
+    address: '',
+    postcode: '',
+    email: '',
+    receiver: '',
+  });
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(KEY);
+      const raw = localStorage.getItem(CART_KEY);
       if (raw) setItems(JSON.parse(raw));
+      const cRaw = localStorage.getItem(CONTACT_KEY);
+      if (cRaw) setContact((c) => ({ ...c, ...JSON.parse(cRaw) }));
     } catch {}
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(items));
+      localStorage.setItem(CART_KEY, JSON.stringify(items));
     } catch {}
   }, [items]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(CONTACT_KEY, JSON.stringify(contact));
+    } catch {}
+  }, [contact]);
+
+  const total = useMemo(() => items.reduce((s, x) => s + x.price * x.qty, 0), [items]);
 
   const add = useCallback((it: Omit<CartItem, 'qty'>, qty = 1) => {
     setItems((prev) => {
@@ -90,79 +152,110 @@ function useCart() {
       return [...prev, { ...it, qty: Math.max(1, qty) }];
     });
     setOpen(true);
-    setStep('cart');
   }, []);
   const setQty = useCallback((numNo: string, qty: number) => {
     setItems((prev) => prev.map((x) => (x.num === numNo ? { ...x, qty: Math.max(1, qty) } : x)));
   }, []);
   const remove = useCallback((numNo: string) => setItems((prev) => prev.filter((x) => x.num !== numNo)), []);
   const clear = useCallback(() => setItems([]), []);
-  const total = useMemo(() => items.reduce((s, x) => s + x.price * x.qty, 0), [items]);
 
-  const [form, setForm] = useState<{ name: string; phone: string; addr: string; note?: string }>({
-    name: '',
-    phone: '',
-    addr: '',
-    note: '',
-  });
-  const gotoForm = () => {
-    try {
-      const raw = localStorage.getItem('imgparts_last_buyer');
-      if (raw) setForm(JSON.parse(raw));
-    } catch {}
-    setStep('form');
-  };
-  const submitOrder = () => {
-    const id = 'IP' + String(Date.now()).slice(-10);
-    setOrder({ id, total });
-    localStorage.setItem('imgparts_last_buyer', JSON.stringify(form));
+  const goCheckout = useCallback(() => {
+    if (items.length === 0) return;
+    setPhase('checkout');
+  }, [items.length]);
+
+  const placeOrder = useCallback(() => {
+    const err: string[] = [];
+    if (!contact.country.trim()) err.push('国家/地区');
+    if (!contact.city.trim()) err.push('城市');
+    if (!contact.address.trim()) err.push('详细地址');
+    if (!contact.postcode.trim()) err.push('邮编');
+    if (!/^\S+@\S+\.\S+$/.test(contact.email)) err.push('邮箱');
+    if (!contact.receiver.trim()) err.push('收件人/公司');
+    if (err.length) {
+      alert(`请完善：${err.join('、')}`);
+      return;
+    }
+    const id = 'IP' + String(Date.now());
+    setOrderId(id);
+    setPhase('done');
     clear();
-    setStep('done');
-  };
+  }, [clear, contact]);
 
-  return { open, setOpen, items, add, setQty, remove, clear, total, step, setStep, form, setForm, gotoForm, submitOrder, order };
+  return {
+    open,
+    setOpen,
+    phase,
+    setPhase,
+    items,
+    add,
+    setQty,
+    remove,
+    clear,
+    total,
+    goCheckout,
+    placeOrder,
+    orderId,
+    contact,
+    setContact,
+  };
 }
 
 function CartButton({ cart }: { cart: ReturnType<typeof useCart> }) {
   return (
     <button
-      onClick={() => cart.setOpen(true)}
+      onClick={() => {
+        cart.setOpen(true);
+        cart.setPhase('cart');
+      }}
       className="fixed z-40 right-6 bottom-6 rounded-full bg-emerald-600 text-white px-4 py-3 shadow-lg hover:bg-emerald-500"
     >
       🛒 购物车（{cart.items.reduce((s, x) => s + x.qty, 0)}）
     </button>
   );
 }
-
+function Input({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block">
+      <div className="text-sm text-slate-600 mb-1">{label}</div>
+      <input value={value} onChange={(e) => onChange(e.target.value)} className="w-full border rounded px-3 py-2" />
+    </label>
+  );
+}
 function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
-  const valid = cart.form.name.trim() && cart.form.phone.trim() && cart.form.addr.trim();
-
   return (
     <>
       <div
-        className={`fixed z-50 top-0 right-0 h-full w-[360px] bg-white shadow-2xl transition-transform duration-200 ${
+        className={`fixed z-50 top-0 right-0 h-full w-[380px] bg-white shadow-2xl transition-transform duration-200 ${
           cart.open ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <div className="font-semibold">
-            {cart.step === 'cart' ? '购物车' : cart.step === 'form' ? '填写收件信息' : '下单成功'}
+            {cart.phase === 'cart' ? '购物车' : cart.phase === 'checkout' ? '填写订单信息' : '下单成功'}
           </div>
           <button onClick={() => cart.setOpen(false)} className="text-slate-500 hover:text-slate-700">
             ✕
           </button>
         </div>
 
-        {/* 购物车 */}
-        {cart.step === 'cart' && (
-          <>
-            <div className="p-4 space-y-3 overflow-auto h-[calc(100%-170px)]">
+        <div className="p-4 overflow-auto h-[calc(100%-160px)]">
+          {cart.phase === 'cart' && (
+            <>
               {cart.items.length === 0 ? (
                 <div className="text-slate-400 text-sm">购物车是空的～</div>
               ) : (
                 cart.items.map((it) => (
-                  <div key={it.num} className="flex gap-3 items-center">
-                    <img src={cdn(it.image || '', 120)} alt="" className="w-16 h-16 object-contain rounded bg-slate-50" />
+                  <div key={it.num} className="flex gap-3 items-center mb-3">
+                    <MultiImg src={it.image || ''} w={240} className="w-16 h-16 object-contain rounded bg-slate-50" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate text-sm">{it.title}</div>
                       <div className="text-emerald-600 font-semibold">￥{it.price.toFixed(2)}</div>
@@ -186,8 +279,41 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
                   </div>
                 ))
               )}
+            </>
+          )}
+
+          {cart.phase === 'checkout' && (
+            <div className="space-y-3">
+              <Input label="国家/地区" value={cart.contact.country} onChange={(v) => cart.setContact({ ...cart.contact, country: v })} />
+              <Input label="城市" value={cart.contact.city} onChange={(v) => cart.setContact({ ...cart.contact, city: v })} />
+              <Input label="详细地址" value={cart.contact.address} onChange={(v) => cart.setContact({ ...cart.contact, address: v })} />
+              <Input label="邮政编码" value={cart.contact.postcode} onChange={(v) => cart.setContact({ ...cart.contact, postcode: v })} />
+              <Input label="邮箱" value={cart.contact.email} onChange={(v) => cart.setContact({ ...cart.contact, email: v })} />
+              <Input label="收件人/公司" value={cart.contact.receiver} onChange={(v) => cart.setContact({ ...cart.contact, receiver: v })} />
             </div>
-            <div className="border-t p-4">
+          )}
+
+          {cart.phase === 'done' && (
+            <div className="space-y-3">
+              <div className="text-emerald-600 font-semibold text-lg">订单已提交</div>
+              <div className="text-slate-700">订单号：{cart.orderId}</div>
+              <button
+                className="border rounded px-3 py-2"
+                onClick={() =>
+                  navigator.clipboard?.writeText(
+                    `订单号：${cart.orderId}\n合计：￥${cart.total.toFixed(2)}\n收件人/公司：${cart.contact.receiver}\n国家：${cart.contact.country}\n城市：${cart.contact.city}\n地址：${cart.contact.address}\n邮编：${cart.contact.postcode}\n邮箱：${cart.contact.email}`
+                  )
+                }
+              >
+                复制订单信息
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t p-4">
+          {cart.phase === 'cart' && (
+            <>
               <div className="flex justify-between mb-3">
                 <span className="text-slate-500">合计</span>
                 <span className="text-lg font-bold text-emerald-600">￥{cart.total.toFixed(2)}</span>
@@ -196,138 +322,64 @@ function CartDrawer({ cart }: { cart: ReturnType<typeof useCart> }) {
                 <button className="flex-1 border rounded px-3 py-2" onClick={cart.clear}>
                   清空
                 </button>
-                <button
-                  className="flex-1 bg-emerald-600 text-white rounded px-3 py-2 hover:bg-emerald-500 disabled:opacity-40"
-                  disabled={cart.items.length === 0}
-                  onClick={cart.gotoForm}
-                >
+                <button className="flex-1 bg-emerald-600 text-white rounded px-3 py-2 hover:bg-emerald-500" onClick={cart.goCheckout}>
                   去结算
                 </button>
               </div>
-            </div>
-          </>
-        )}
-
-        {/* 表单页 */}
-        {cart.step === 'form' && (
-          <div className="p-4 flex flex-col h-[calc(100%-56px)]">
-            <div className="space-y-3 flex-1 overflow-auto">
-              <div>
-                <div className="text-sm text-slate-500 mb-1">收件人</div>
-                <input
-                  value={cart.form.name}
-                  onChange={(e) => cart.setForm((f) => ({ ...f, name: e.target.value }))}
-                  className="w-full border rounded px-3 py-2"
-                  placeholder="姓名"
-                />
-              </div>
-              <div>
-                <div className="text-sm text-slate-500 mb-1">手机</div>
-                <input
-                  value={cart.form.phone}
-                  onChange={(e) => cart.setForm((f) => ({ ...f, phone: e.target.value }))}
-                  className="w-full border rounded px-3 py-2"
-                  placeholder="手机"
-                />
-              </div>
-              <div>
-                <div className="text-sm text-slate-500 mb-1">地址</div>
-                <textarea
-                  value={cart.form.addr}
-                  onChange={(e) => cart.setForm((f) => ({ ...f, addr: e.target.value }))}
-                  className="w-full border rounded px-3 py-2"
-                  placeholder="省市区 + 详细地址"
-                  rows={3}
-                />
-              </div>
-              <div>
-                <div className="text-sm text-slate-500 mb-1">备注（可选）</div>
-                <input
-                  value={cart.form.note}
-                  onChange={(e) => cart.setForm((f) => ({ ...f, note: e.target.value }))}
-                  className="w-full border rounded px-3 py-2"
-                  placeholder="开票/送货等备注"
-                />
-              </div>
-            </div>
-            <div className="border-t pt-3">
-              <div className="flex justify-between mb-3">
-                <span className="text-slate-500">应付合计</span>
-                <span className="text-lg font-bold text-emerald-600">￥{cart.total.toFixed(2)}</span>
-              </div>
-              <div className="flex gap-2">
-                <button className="flex-1 border rounded px-3 py-2" onClick={() => cart.setStep('cart')}>
-                  返回购物车
-                </button>
-                <button
-                  className="flex-1 bg-emerald-600 text-white rounded px-3 py-2 hover:bg-emerald-500 disabled:opacity-40"
-                  disabled={!valid}
-                  onClick={cart.submitOrder}
-                >
-                  提交订单
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 成功页 */}
-        {cart.step === 'done' && cart.order && (
-          <div className="p-6 flex flex-col h-[calc(100%-56px)] items-center justify-center">
-            <div className="text-emerald-600 text-xl font-bold mb-2">下单成功</div>
-            <div className="text-slate-600 mb-2">订单号：{cart.order.id}</div>
-            <div className="text-slate-700 mb-6">应付合计：￥{cart.order.total.toFixed(2)}</div>
+            </>
+          )}
+          {cart.phase === 'checkout' && (
             <div className="flex gap-2">
-              <button className="border rounded px-3 py-2" onClick={() => cart.setOpen(false)}>
-                继续购物
+              <button className="flex-1 border rounded px-3 py-2" onClick={() => cart.setPhase('cart')}>
+                返回购物车
               </button>
-              <button
-                className="bg-slate-900 text-white rounded px-3 py-2"
-                onClick={() => navigator.clipboard?.writeText(`订单号：${cart.order!.id}，合计：￥${cart.order!.total.toFixed(2)}`)}
-              >
-                复制订单信息
+              <button className="flex-1 bg-emerald-600 text-white rounded px-3 py-2 hover:bg-emerald-500" onClick={cart.placeOrder}>
+                提交订单
               </button>
             </div>
-          </div>
-        )}
+          )}
+          {cart.phase === 'done' && (
+            <button className="w-full border rounded px-3 py-2" onClick={() => cart.setPhase('cart')}>
+              继续购物
+            </button>
+          )}
+        </div>
       </div>
     </>
   );
 }
 
-/* ----------------- 详情页主体 ----------------- */
+/** ------------- 详情页 ------------- */
 export default function StockDetailPage() {
   const params = useParams() as { num?: string } | null;
-  const numParam = decodeURIComponent((params as any)?.num ?? '');
-  const search = useSearchParams();
-  const router = useRouter();
-  const cart = useCart();
+  const numParam = decodeURIComponent(params?.num ?? '');
 
-  // URL 兜底信息
-  const getQ = (k: string) => decodeURIComponent(search?.get(k) ?? '');
+  // 用 window 解析 URL 参数，避免 useSearchParams 的 Suspense 提示
+  const getQ = (key: string) => {
+    if (typeof window === 'undefined') return '';
+    return decodeURIComponent(new URLSearchParams(window.location.search).get(key) ?? '');
+  };
+
+  const idxQ = toNum(getQ('idx') || -1, -1);
   const titleQ = getQ('title');
   const oeQ = getQ('oe');
   const brandQ = getQ('brand');
-  const priceQ = toNum(search?.get('price') ?? '', 0);
+  const priceQ = toNum(getQ('price'), 0);
   const imageQ = getQ('image');
-  const idxQ = toNum(search?.get('idx') ?? '', -1);
 
-  // 元数据
+  const cart = useCart();
+
   const [meta, setMeta] = useState<AnyObj | null>(() => ({
     num: numParam,
     product: titleQ,
-    title: titleQ,
     oe: oeQ,
     brand: brandQ,
     price: priceQ,
-    image: imageQ,
   }));
 
-  // 列表缓存（上一条/下一条）
   const [pageList, setPageList] = useState<AnyObj[]>([]);
   const [navIdx, setNavIdx] = useState<number>(idxQ);
 
-  // 大图 & 缩略图
   const [imgs, setImgs] = useState<string[]>([]);
   const [cur, setCur] = useState(0);
 
@@ -342,10 +394,8 @@ export default function StockDetailPage() {
           const data = await res.json();
           const list: AnyObj[] = data?.content || data?.list || data?.rows || data?.data || [];
           if (!stop) setPageList(list);
-          const found = list.find(
-            (x) => String(pick(x, ['num', 'Num', 'code', 'partNo'], '')).toLowerCase() === numParam.toLowerCase(),
-          );
-          if (!stop && found) setMeta((m) => ({ ...found, ...(m || {}) }));
+          const found = list.find((x) => String(pick(x, ['num', 'Num', 'code', 'partNo'], '')).toLowerCase() === numParam.toLowerCase());
+          if (!stop && found) setMeta((m) => ({ ...(m || {}), ...found }));
         } catch {}
       }
     };
@@ -368,6 +418,8 @@ export default function StockDetailPage() {
 
   const gotoBy = (step: number) => {
     if (pageList.length === 0 || navIdx < 0) return;
+    const size = 20;
+    const page = Math.floor(navIdx / size);
     const nextIdx = Math.max(0, Math.min(navIdx + step, pageList.length - 1));
     const it = pageList[nextIdx];
     const numNo = String(pick(it, ['num', 'Num', 'code', 'partNo'], ''));
@@ -375,19 +427,25 @@ export default function StockDetailPage() {
     const _oe = String(pick(it, ['oe', 'OE'], ''));
     const _brand = String(pick(it, ['brand', 'Brand'], ''));
     const _price = toNum(pick(it, ['price', 'Price'], 0), 0);
-    const _image = String(pick(it, ['image', 'img', 'imageUrl', 'url', 'cover', 'pic', 'picUrl'], ''));
+    const imgs2 = extractImages(it);
+    const _image = imgs2[0] || '';
 
     setNavIdx(nextIdx);
     setMeta({ ...it });
-    router.replace(
-      `/stock/${encodeURIComponent(numNo)}?title=${encodeURIComponent(_title)}&oe=${encodeURIComponent(_oe)}&brand=${encodeURIComponent(
-        _brand,
-      )}&price=${_price}&image=${encodeURIComponent(_image)}&idx=${nextIdx}`,
-    );
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(
+        null,
+        '',
+        `/stock/${encodeURIComponent(numNo)}?title=${encodeURIComponent(_title)}&oe=${encodeURIComponent(_oe)}&brand=${encodeURIComponent(
+          _brand
+        )}&price=${_price}&image=${encodeURIComponent(_image)}&idx=${page * size + (nextIdx % size)}`
+      );
+    }
   };
 
   const addToCart = () => {
-    cart.add({ num: numParam, title: title || numParam, price, image: imgs[0] || imageQ || '' }, 1);
+    const first = imgs[0] || imageQ || '';
+    cart.add({ num: numParam, title: title || numParam, price, image: first }, 1);
   };
 
   return (
@@ -399,19 +457,11 @@ export default function StockDetailPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* 左：大图 + 缩略图 */}
+        {/* 左侧：大图 + 缩略图 */}
         <div>
           <div className="aspect-[4/3] bg-slate-50 rounded-xl overflow-hidden flex items-center justify-center">
             {imgs.length ? (
-              <img
-                key={imgs[cur]}
-                src={cdn(imgs[cur], 1400)}
-                alt=""
-                decoding="async"
-                loading="eager"
-                className="w-full h-full object-contain"
-                onError={(e) => ((e.currentTarget.src = ''), (e.currentTarget.alt = ''))}
-              />
+              <MultiImg src={imgs[cur]} w={1400} className="w-full h-full object-contain" />
             ) : (
               <div className="text-slate-400">无图</div>
             )}
@@ -426,19 +476,17 @@ export default function StockDetailPage() {
                   className={`shrink-0 w-24 h-20 rounded border ${
                     i === cur ? 'border-emerald-600' : 'border-slate-200'
                   } bg-white`}
-                  title={`图 ${i + 1}`}
                 >
-                  <img src={cdn(src, 300)} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain" />
+                  <MultiImg src={src} w={320} className="w-full h-full object-contain" />
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* 右：信息与操作 */}
+        {/* 右侧：信息 + 操作 */}
         <div>
           <h1 className="text-2xl font-semibold mb-4">{title || ' '}</h1>
-
           <div className="space-y-2 text-slate-700">
             <div>
               <span className="text-slate-500 mr-2">Num:</span>
@@ -453,22 +501,18 @@ export default function StockDetailPage() {
               {brand || '-'}
             </div>
             <div>
-              <span className="text-slate-500 mr-2">Model:</span>-{/* 源数据无该字段 */}
-            </div>
+              <span className="text-slate-500 mr-2">Model:</span>-</div>
             <div>
-              <span className="text-slate-500 mr-2">Year:</span>-{/* 源数据无该字段 */}
-            </div>
+              <span className="text-slate-500 mr-2">Year:</span>-</div>
             <div className="text-emerald-600 text-xl font-bold mt-2">Price: ￥ {price.toFixed(2)}</div>
             <div>
-              <span className="text-slate-500 mr-2">Stock:</span>-{/* 源数据无该字段 */}
-            </div>
+              <span className="text-slate-500 mr-2">Stock:</span>-</div>
           </div>
 
           <div className="mt-4 flex items-center gap-3">
             <button onClick={addToCart} className="bg-emerald-600 text-white rounded px-4 py-2 hover:bg-emerald-500">
               加入购物车
             </button>
-
             <button onClick={() => gotoBy(-1)} className="border rounded px-4 py-2 disabled:opacity-40" disabled={navIdx <= 0}>
               上一条
             </button>
