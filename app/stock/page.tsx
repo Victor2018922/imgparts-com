@@ -32,12 +32,14 @@ function pickRawImageUrl(x: StockItem): string | null {
   if (Array.isArray(media) && media[0]?.url) return media[0].url;
   return null;
 }
+
 function normalizeImageUrl(u: string | null): string | null {
   if (!u) return null;
   if (u.startsWith('//')) return 'https:' + u;
   if (u.startsWith('http://')) return 'https://' + u.slice(7);
   return u;
 }
+
 const FALLBACK_DATA_URL =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -49,7 +51,6 @@ const FALLBACK_DATA_URL =
     </svg>`
   );
 
-// 兼容不同返回结构
 function extractArrayPayload(json: any): any[] {
   if (Array.isArray(json)) return json;
   const candidates = ['content', 'data', 'items', 'records', 'list', 'result'];
@@ -82,7 +83,6 @@ function encodeItemForUrl(item: StockItem): string {
       image: item.image ?? item.img ?? item.imgUrl ?? item.pic ?? item.picture ?? item.url ?? null
     };
     const s = JSON.stringify(compact);
-    // 浏览器端：btoa 可用
     return encodeURIComponent(btoa(unescape(encodeURIComponent(s))));
   } catch {
     return '';
@@ -108,7 +108,6 @@ export default function StockPage() {
           setBanner(`⚠️ 加载失败：HTTP ${res.status}（来源：niuniuparts stock2）`);
           setHasMore(false);
           setErr(`HTTP ${res.status}`);
-          setLoading(false);
           return;
         }
         const json = await res.json();
@@ -170,45 +169,3 @@ export default function StockPage() {
                     width={120}
                     height={120}
                     style={{ objectFit: 'contain', width: '100%', height: '100%' }}
-                    onError={(e) => {
-                      const el = e.currentTarget as HTMLImageElement;
-                      if (el.src !== FALLBACK_DATA_URL) el.src = FALLBACK_DATA_URL;
-                    }}
-                    loading="lazy"
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold group-hover:underline truncate">{item.product}</div>
-                  <div className="text-sm text-gray-500 truncate">
-                    {[item.brand, item.model, item.year].filter(Boolean).join(' · ')}
-                  </div>
-                  {item.oe && <div className="text-xs text-gray-400 mt-1">OE: {item.oe}</div>}
-                </div>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
-
-      <div className="flex justify-center">
-        {hasMore ? (
-          <button
-            className="mt-6 rounded-lg border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-            onClick={() => {
-              const next = page + 1;
-              setPage(next);
-              loadPage(next);
-            }}
-            disabled={loading}
-          >
-            {loading ? '加载中…' : '加载更多'}
-          </button>
-        ) : (
-          <div className="mt-6 text-xs text-gray-400">{items.length ? '没有更多了' : '暂无数据'}</div>
-        )}
-      </div>
-
-      {err && <div className="mt-6 text-xs text-gray-400">Debug: {err}</div>}
-    </main>
-  );
-}
