@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 
 type DetailItem = {
@@ -19,8 +20,7 @@ type DetailItem = {
   [k: string]: any;
 };
 
-const FALLBACK_LIST_API =
-  'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
+const FALLBACK_LIST_API = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
 
 function pickRawImageUrl(x: DetailItem): string | null {
   const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url'];
@@ -86,12 +86,15 @@ function extractArray(json: any): any[] {
 }
 
 export default function StockDetailPage({ params }: { params: { num: string } }) {
-  const searchParamsMaybe = useSearchParams(); // 你的环境类型可能是 URLSearchParams | null
-  const d = searchParamsMaybe ? searchParamsMaybe.get('d') : null;
+  // 某些环境类型声明可能是 URLSearchParams | null，这里做空值保护
+  const sp = useSearchParams();
+  const d = sp ? sp.get('d') : null;
 
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
   const [banner, setBanner] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
 
   // 若未携带 ?d=，从第一页兜底查找同 num 的条目
   useEffect(() => {
@@ -115,12 +118,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
 
         if (found) {
           setItem({
-            num:
-              found.num ||
-              found.sku ||
-              found.partNo ||
-              found.code ||
-              params.num,
+            num: found.num || found.sku || found.partNo || found.code || params.num,
             product: found.product || found.name || 'Part',
             oe: found.oe || found.oeNo || '',
             brand: found.brand || '',
@@ -167,6 +165,45 @@ export default function StockDetailPage({ params }: { params: { num: string } })
       .filter(Boolean)
       .join(' ') || 'Product Image';
 
+  function addToCart() {
+    try {
+      setAdding(true);
+      if (typeof window === 'undefined') return;
+
+      const cartRaw = localStorage.getItem('cart') || '[]';
+      const cart: any[] = JSON.parse(cartRaw);
+
+      const key = display.num || display.oe || display.product;
+      const idx = cart.findIndex((it: any) => it.key === key);
+
+      const cartItem = {
+        key,
+        num: display.num,
+        product: display.product,
+        oe: display.oe || '',
+        brand: display.brand || '',
+        model: display.model || '',
+        year: display.year || '',
+        qty: 1,
+        image: raw || null,
+      };
+
+      if (idx >= 0) {
+        cart[idx].qty = (cart[idx].qty || 1) + 1;
+      } else {
+        cart.push(cartItem);
+      }
+
+      localStorage.setItem('cart', JSON.stringify(cart));
+      setAdded(true);
+      setTimeout(() => setAdded(false), 2000);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAdding(false);
+    }
+  }
+
   return (
     <main className="container mx-auto p-4">
       {banner && (
@@ -197,16 +234,35 @@ export default function StockDetailPage({ params }: { params: { num: string } })
         <section>
           <h1 className="text-xl font-semibold mb-2">{display.product}</h1>
           <p className="text-gray-600">
-            {[display.brand, display.model, display.year]
-              .filter(Boolean)
-              .join(' · ')}
+            {[display.brand, display.model, display.year].filter(Boolean).join(' · ')}
           </p>
-          {display.oe && (
-            <p className="text-sm text-gray-400 mt-2">OE: {display.oe}</p>
+          {display.oe && <p className="text-sm text-gray-400 mt-2">OE: {display.oe}</p>}
+
+          {/* 动作区：恢复加入购物车 & 去结算 */}
+          <div className="mt-6 flex gap-3">
+            <button
+              onClick={addToCart}
+              disabled={adding}
+              className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              {adding ? '加入中…' : '加入购物车'}
+            </button>
+            <Link
+              href="/checkout"
+              className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
+            >
+              去结算
+            </Link>
+          </div>
+
+          {/* 轻提示 */}
+          {added && (
+            <div className="mt-3 text-green-600 text-sm">
+              已加入购物车（本地保存）！
+            </div>
           )}
-          <p className="text-xs text-gray-400 mt-4">
-            数据源：niuniuparts.com（测试预览用途）
-          </p>
+
+          <p className="text-xs text-gray-400 mt-6">数据源：niuniuparts.com（测试预览用途）</p>
           {err && <p className="text-xs text-red-500 mt-2">Debug：{err}</p>}
         </section>
       </div>
