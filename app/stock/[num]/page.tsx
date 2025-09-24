@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 type DetailItem = {
   num: string;
@@ -18,6 +19,8 @@ type DetailItem = {
   [k: string]: any;
 };
 
+const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
+
 function pickRawImageUrl(x: DetailItem): string | null {
   const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url'];
   for (const k of keys) {
@@ -28,14 +31,12 @@ function pickRawImageUrl(x: DetailItem): string | null {
   if (Array.isArray(media) && media[0]?.url) return media[0].url;
   return null;
 }
-
 function normalizeImageUrl(u: string | null): string | null {
   if (!u) return null;
   if (u.startsWith('//')) return 'https:' + u;
   if (u.startsWith('http://')) return 'https://' + u.slice(7);
   return u;
 }
-
 const FALLBACK_DATA_URL =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -47,49 +48,98 @@ const FALLBACK_DATA_URL =
     </svg>`
   );
 
+function safeDecodeItem(dParam: string | null): DetailItem | null {
+  if (!dParam) return null;
+  try {
+    const s = decodeURIComponent(dParam);
+    // 浏览器端：atob 可用
+    const json = decodeURIComponent(escape(atob(s)));
+    const obj = JSON.parse(json);
+    // 确保关键字段存在
+    return {
+      num: obj.num || '',
+      product: obj.product || 'Part',
+      oe: obj.oe || '',
+      brand: obj.brand || '',
+      model: obj.model || '',
+      year: obj.year || '',
+      image: obj.image ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function StockDetailPage({ params }: { params: { num: string } }) {
-  const [item, setItem] = useState<DetailItem | null>(null);
+  const search = useSearchParams();
+  const d = search.get('d');
+  const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
+  const [banner, setBanner] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // 若没有携带 d 参数，尝试从第一页里找同 num 的条目做兜底
   useEffect(() => {
-    async function load() {
+    async function fallbackFetch() {
+      if (item) return;
       try {
-        const url = `${process.env.NEXT_PUBLIC_STOCK_API_DETAIL!}?num=${encodeURIComponent(
-          params.num
-        )}`;
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const res = await fetch(API_BASE, { cache: 'no-store' });
+        if (!res.ok) {
+          setBanner(`⚠️ 详情未携带数据且远端兜底失败：HTTP ${res.status}`);
+          return;
+        }
         const json = await res.json();
-        setItem(json);
+        const arr =
+          Array.isArray(json) ? json :
+          (json?.content || json?.data?.list || json?.data?.items || json?.items || json?.records || []);
+        const found = Array.isArray(arr) ? arr.find((x: any) => (x?.num || x?.sku || x?.partNo || x?.code) === params.num) : null;
+        if (found) {
+          setItem({
+            num: found.num || found.sku || found.partNo || found.code || params.num,
+            product: found.product || found.name || 'Part',
+            oe: found.oe || found.oeNo || '',
+            brand: found.brand || '',
+            model: found.model || '',
+            year: found.year || '',
+            image: found.image ?? found.img ?? found.imgUrl ?? found.pic ?? found.picture ?? found.url ?? null,
+            ...found,
+          });
+          setBanner('ℹ️ 详情未携带数据：已从第一页兜底匹配同 num');
+        } else {
+          setBanner('⚠️ 详情未携带数据，且第一页未找到相同 num');
+        }
       } catch (e: any) {
+        setBanner(`⚠️ 详情兜底异常：${e?.message || '未知错误'}`);
         setErr(e?.message || 'Load failed');
       }
     }
-    load();
+    fallbackFetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.num]);
 
-  if (err) {
+  const display = useMemo<DetailItem>(() => {
     return (
-      <main className="container mx-auto p-4">
-        <div className="text-red-600">加载失败：{err}</div>
-      </main>
+      item || {
+        num: params.num,
+        product: 'Part',
+        brand: '',
+        model: '',
+        year: '',
+      }
     );
-  }
+  }, [item, params.num]);
 
-  if (!item) {
-    return (
-      <main className="container mx-auto p-4">
-        <div>加载中…</div>
-      </main>
-    );
-  }
-
-  const raw = pickRawImageUrl(item);
+  const raw = pickRawImageUrl(display);
   const src = normalizeImageUrl(raw) || FALLBACK_DATA_URL;
-  const alt = [item.brand, item.product, item.model, item.oe].filter(Boolean).join(' ') || 'Product Image';
+  const alt = [display.brand, display.product, display.model, display.oe].filter(Boolean).join(' ') || 'Product Image';
 
   return (
     <main className="container mx-auto p-4">
+      {banner && (
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 text-sm">
+          {banner}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="relative rounded-xl overflow-hidden bg-white" style={{ width: 360, height: 360 }}>
           <img
@@ -107,13 +157,13 @@ export default function StockDetailPage({ params }: { params: { num: string } })
         </div>
 
         <section>
-          <h1 className="text-xl font-semibold mb-2">{item.product}</h1>
+          <h1 className="text-xl font-semibold mb-2">{display.product}</h1>
           <p className="text-gray-600">
-            {[item.brand, item.model, item.year].filter(Boolean).join(' · ')}
+            {[display.brand, display.model, display.year].filter(Boolean).join(' · ')}
           </p>
-          {item.oe && <p className="text-sm text-gray-400 mt-2">OE: {item.oe}</p>}
-
-          {/* 这里可继续补充规格、价格、库存、加入购物车等 */}
+          {display.oe && <p className="text-sm text-gray-400 mt-2">OE: {display.oe}</p>}
+          <p className="text-xs text-gray-400 mt-4">数据源：niuniuparts.com（测试预览用途）</p>
+          {err && <p className="text-xs text-red-500 mt-2">Debug：{err}</p>}
         </section>
       </div>
     </main>

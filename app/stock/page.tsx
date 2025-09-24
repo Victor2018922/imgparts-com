@@ -32,14 +32,12 @@ function pickRawImageUrl(x: StockItem): string | null {
   if (Array.isArray(media) && media[0]?.url) return media[0].url;
   return null;
 }
-
 function normalizeImageUrl(u: string | null): string | null {
   if (!u) return null;
   if (u.startsWith('//')) return 'https:' + u;
   if (u.startsWith('http://')) return 'https://' + u.slice(7);
   return u;
 }
-
 const FALLBACK_DATA_URL =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -51,14 +49,13 @@ const FALLBACK_DATA_URL =
     </svg>`
   );
 
-// 尽量兼容不同分页结构：数组可能在 data/content/items/records/list 里，或直接是数组
+// 兼容不同返回结构
 function extractArrayPayload(json: any): any[] {
   if (Array.isArray(json)) return json;
-  const candidates = ['data', 'content', 'items', 'records', 'list', 'result'];
+  const candidates = ['content', 'data', 'items', 'records', 'list', 'result'];
   for (const k of candidates) {
     const v = json?.[k];
     if (Array.isArray(v)) return v;
-    // 常见结构：{ data: { list: [...] } }
     if (v && typeof v === 'object') {
       const deep = v.list || v.items || v.content || v.records;
       if (Array.isArray(deep)) return deep;
@@ -67,25 +64,29 @@ function extractArrayPayload(json: any): any[] {
   return [];
 }
 
-// 尽量抽取常见字段 => 适配 UI 显示
 function mapToStockItem(x: any): StockItem {
-  // 尝试从常见键映射
   const num = x.num || x.sku || x.code || x.partNo || x.part || x.id || '';
   const product = x.product || x.name || x.title || x.desc || x.description || 'Part';
   const oe = x.oe || x.oeNo || x.oeNumber || x.oe_code || x.oem || '';
   const brand = x.brand || x.make || x.maker || '';
   const model = x.model || x.vehicleModel || x.carModel || '';
   const year = x.year || x.years || x.modelYear || '';
-  // 可能的图片键原样保留，ProductCard 里会自动 pick
-  return {
-    ...x,
-    num,
-    product,
-    oe,
-    brand,
-    model,
-    year,
-  };
+  return { ...x, num, product, oe, brand, model, year };
+}
+
+function encodeItemForUrl(item: StockItem): string {
+  try {
+    const compact = {
+      num: item.num, product: item.product, oe: item.oe,
+      brand: item.brand, model: item.model, year: item.year,
+      image: item.image ?? item.img ?? item.imgUrl ?? item.pic ?? item.picture ?? item.url ?? null
+    };
+    const s = JSON.stringify(compact);
+    // 浏览器端：btoa 可用
+    return encodeURIComponent(btoa(unescape(encodeURIComponent(s))));
+  } catch {
+    return '';
+  }
 }
 
 export default function StockPage() {
@@ -104,8 +105,7 @@ export default function StockPage() {
         const url = `${API_BASE}?size=${PAGE_SIZE}&page=${p}`;
         const res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) {
-          // 404/其他错误：不让页面空白，展示横幅并停止加载更多
-          setBanner(`⚠️ 加载失败：HTTP ${res.status}（来源：niuniuparts.com 预览接口）`);
+          setBanner(`⚠️ 加载失败：HTTP ${res.status}（来源：niuniuparts stock2）`);
           setHasMore(false);
           setErr(`HTTP ${res.status}`);
           setLoading(false);
@@ -114,23 +114,19 @@ export default function StockPage() {
         const json = await res.json();
         const arr = extractArrayPayload(json).map(mapToStockItem);
 
-        if (Array.isArray(arr) && arr.length > 0) {
-          setItems((prev) => (p === 0 ? arr : [...prev, ...arr]));
-          // 如果返回数量小于 PAGE_SIZE，默认认为没有更多
+        if (arr.length > 0) {
+          setItems(prev => (p === 0 ? arr : [...prev, ...arr]));
           setHasMore(arr.length >= PAGE_SIZE);
           setBanner(null);
         } else {
-          // 本页数据为空 => 没有更多
-          if (p === 0) {
-            setBanner('ℹ️ 接口返回空列表');
-          }
+          if (p === 0) setBanner('ℹ️ 接口返回空列表');
           setHasMore(false);
         }
-        setLoading(false);
       } catch (e: any) {
         setBanner(`⚠️ 加载异常：${e?.message || '未知错误'}`);
         setHasMore(false);
         setErr(e?.message || 'Load failed');
+      } finally {
         setLoading(false);
       }
     },
@@ -143,37 +139,31 @@ export default function StockPage() {
 
   return (
     <main className="container mx-auto p-4">
-      {/* 顶部诊断横幅 */}
       {banner && (
         <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 text-sm">
           {banner}
           <div className="mt-1 text-xs text-amber-700">
-            数据源：<code>niuniuparts.com stock2</code> · 请求：
-            <code>{API_BASE}?size={PAGE_SIZE}&page={page}</code>
+            数据源：<code>{API_BASE}</code> · 当前页：<code>{page}</code>
           </div>
         </div>
       )}
 
-      {/* 列表 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {items.map((item) => {
-          // 图片
           const raw = pickRawImageUrl(item);
           const src = normalizeImageUrl(raw) || FALLBACK_DATA_URL;
-          const alt =
-            [item.brand, item.product, item.model, item.oe].filter(Boolean).join(' ') || 'Product Image';
+          const alt = [item.brand, item.product, item.model, item.oe].filter(Boolean).join(' ') || 'Product Image';
+          const d = encodeItemForUrl(item);
+          const href = `/stock/${encodeURIComponent(item.num || '')}${d ? `?d=${d}` : ''}`;
 
           return (
             <Link
               key={`${item.num}-${item.oe || ''}-${item.product}`}
-              href={`/stock/${encodeURIComponent(item.num || '')}`}
+              href={href}
               className="group block rounded-2xl border p-3 hover:shadow"
             >
               <div className="flex gap-3">
-                <div
-                  className="relative rounded-xl overflow-hidden bg-white shrink-0"
-                  style={{ width: 120, height: 120 }}
-                >
+                <div className="relative rounded-xl overflow-hidden bg-white shrink-0" style={{ width: 120, height: 120 }}>
                   <img
                     src={src}
                     alt={alt}
@@ -200,7 +190,6 @@ export default function StockPage() {
         })}
       </div>
 
-      {/* load more */}
       <div className="flex justify-center">
         {hasMore ? (
           <button
@@ -219,12 +208,7 @@ export default function StockPage() {
         )}
       </div>
 
-      {/* 可选调试输出 */}
-      {err && (
-        <div className="mt-6 text-xs text-gray-400">
-          Debug: {err}
-        </div>
-      )}
+      {err && <div className="mt-6 text-xs text-gray-400">Debug: {err}</div>}
     </main>
   );
 }
