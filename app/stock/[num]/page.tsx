@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 type DetailItem = {
@@ -24,20 +23,18 @@ type DetailItem = {
 const FALLBACK_LIST_API = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
 const BASE_ORIGIN = new URL(FALLBACK_LIST_API).origin;
 
+function isLikelyImageUrl(s: string): boolean {
+  if (!s || typeof s !== 'string') return false;
+  const v = s.trim();
+  if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
+  if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif)(\?|#|$)/i.test(v)) return true;
+  if (/file(id)?=|\/download\/|\/files?\//i.test(v)) return true;
+  return false;
+}
+
 function deepFindImage(obj: any, depth = 0): string | null {
   if (!obj || depth > 3) return null;
-  if (typeof obj === 'string') {
-    const s = obj.trim();
-    if (
-      /^https?:\/\//i.test(s) ||
-      s.startsWith('//') ||
-      s.startsWith('/') ||
-      /\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(s)
-    ) {
-      return s;
-    }
-    return null;
-  }
+  if (typeof obj === 'string') return isLikelyImageUrl(obj) ? obj.trim() : null;
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const hit = deepFindImage(v, depth + 1);
@@ -55,13 +52,13 @@ function deepFindImage(obj: any, depth = 0): string | null {
 }
 
 function pickRawImageUrl(x: DetailItem): string | null {
-  const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url', 'thumb', 'thumbnail', 'imageUrl', 'pictureUrl'];
+  const keys = ['image','imgUrl','picture','pic','imageUrl','pictureUrl','thumb','thumbnail','url','img'];
   for (const k of keys) {
     const v = (x as any)?.[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'string' && isLikelyImageUrl(v)) return v.trim();
   }
   const media = (x as any)?.media;
-  if (Array.isArray(media) && media[0]?.url) return media[0].url;
+  if (Array.isArray(media) && media[0]?.url && isLikelyImageUrl(media[0].url)) return media[0].url;
   const deep = deepFindImage(x);
   if (deep) return deep;
   return null;
@@ -72,7 +69,6 @@ function normalizeImageUrl(u: string | null): string | null {
   let s = u.trim();
   if (s.startsWith('data:image')) return s;
   if (s.startsWith('//')) s = 'https:' + s;
-  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
   if (/^https?:\/\//i.test(s)) return encodeURI(s);
   if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
   return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
@@ -140,7 +136,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
       try {
         const res = await fetch(FALLBACK_LIST_API, { cache: 'no-store' });
         if (!res.ok) {
-          setBanner(`⚠️ 详情未携带数据且兜底失败：HTTP ${res.status}`);
+          setBanner(⚠️ 详情未携带数据且兜底失败：HTTP ${res.status}`);
           return;
         }
         const json = await res.json();
@@ -157,7 +153,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
             brand: found.brand || '',
             model: found.model || '',
             year: found.year || '',
-            image: found.image ?? found.img ?? found.imgUrl ?? found.pic ?? found.picture ?? found.url ?? null,
+            image: found.image ?? found.imgUrl ?? found.pic ?? found.picture ?? found.url ?? found.img ?? null,
             ...found,
           });
           setBanner('ℹ️ 详情未携带数据：已从第一页兜底匹配同 num');

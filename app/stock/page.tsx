@@ -43,19 +43,23 @@ const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
 
+/** 判断字符串是否“像图片地址” */
+function isLikelyImageUrl(s: string): boolean {
+  if (!s || typeof s !== 'string') return false;
+  const v = s.trim();
+  // 明确的 URL / 协议相对 / 站内相对
+  if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
+  // 常见图片后缀
+  if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif)(\?|#|$)/i.test(v)) return true;
+  // 常见下载式路由里带 file/fileId/path
+  if (/file(id)?=|\/download\/|\/files?\//i.test(v)) return true;
+  return false;
+}
+
 function deepFindImage(obj: any, depth = 0): string | null {
   if (!obj || depth > 3) return null;
   if (typeof obj === 'string') {
-    const s = obj.trim();
-    if (
-      /^https?:\/\//i.test(s) ||
-      s.startsWith('//') ||
-      s.startsWith('/') ||
-      /\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(s)
-    ) {
-      return s;
-    }
-    return null;
+    return isLikelyImageUrl(obj) ? obj.trim() : null;
   }
   if (Array.isArray(obj)) {
     for (const v of obj) {
@@ -75,14 +79,27 @@ function deepFindImage(obj: any, depth = 0): string | null {
 
 function pickRawImageUrl(x: StockItem | CartItem): string | null {
   const anyx = x as any;
-  const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url', 'thumb', 'thumbnail', 'imageUrl', 'pictureUrl'];
+  const keys = [
+    'image',
+    'imgUrl',
+    'picture',
+    'pic',
+    'imageUrl',
+    'pictureUrl',
+    'thumb',
+    'thumbnail',
+    'url',
+    // 注意：不直接信任 "img" 字段，除非它看起来像图片
+    'img',
+  ];
   for (const k of keys) {
     const v = anyx?.[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'string' && isLikelyImageUrl(v)) return v.trim();
   }
   const media = anyx?.media;
-  if (Array.isArray(media) && media[0]?.url) return media[0].url;
-  // 深度兜底：在任意字段里找形如图片的链接
+  if (Array.isArray(media) && media[0]?.url && isLikelyImageUrl(media[0].url)) {
+    return media[0].url;
+  }
   const deep = deepFindImage(anyx);
   if (deep) return deep;
   return null;
@@ -93,10 +110,9 @@ function normalizeImageUrl(u: string | null): string | null {
   let s = u.trim();
   if (s.startsWith('data:image')) return s;
   if (s.startsWith('//')) s = 'https:' + s;
-  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
+  // 不再强制 http -> https 升级，保持原协议；若为相对路径则拼接域名
   if (/^https?:\/\//i.test(s)) return encodeURI(s);
   if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
-  // 相对路径（如 images/x.jpg）
   return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
 }
 
@@ -151,11 +167,11 @@ function encodeItemForUrl(item: StockItem): string {
       year: item.year,
       image:
         item.image ??
-        (item as any).img ??
         (item as any).imgUrl ??
         (item as any).pic ??
         (item as any).picture ??
         (item as any).url ??
+        (item as any).img ?? // 只作为兜底传递，渲染时仍会再次校验
         null,
     };
     const s = JSON.stringify(compact);
@@ -205,6 +221,8 @@ function StockPageInner() {
 
   // cart & checkout state
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [tradeMode, setTradeMode] = useState<'B2C' | 'B2B'>('B2C'); // 交易模式
+  const [company, setCompany] = useState(''); // B2B 必填
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState(''); // 必填
@@ -277,10 +295,24 @@ function StockPageInner() {
       setFormMsg('请填写有效邮箱地址');
       return;
     }
+    if (tradeMode === 'B2B' && !company.trim()) {
+      setFormMsg('B2B 模式下，公司名称为必填项');
+      return;
+    }
 
     const order = {
       id: 'ORD-' + Date.now(),
-      contact: { name, phone, email: emailVal, country, city, address, postcode },
+      mode: tradeMode,
+      contact: {
+        company: tradeMode === 'B2B' ? company.trim() : undefined,
+        name,
+        phone,
+        email: emailVal,
+        country,
+        city,
+        address,
+        postcode,
+      },
       items: cart,
       createdAt: new Date().toISOString(),
       origin: 'imgparts-preview',
@@ -523,10 +555,39 @@ function StockPageInner() {
                   )}
                 </div>
 
+                {/* 交易模式：B2C / B2B */}
+                <div className="mt-6">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-gray-600">交易模式：</span>
+                    <button
+                      className={`rounded-md border px-3 py-1 ${tradeMode === 'B2C' ? 'bg-gray-100' : ''}`}
+                      onClick={() => setTradeMode('B2C')}
+                      type="button"
+                    >
+                      B2C（个人）
+                    </button>
+                    <button
+                      className={`rounded-md border px-3 py-1 ${tradeMode === 'B2B' ? 'bg-gray-100' : ''}`}
+                      onClick={() => setTradeMode('B2B')}
+                      type="button"
+                    >
+                      B2B（公司）
+                    </button>
+                  </div>
+                </div>
+
                 {/* 收货信息表单 */}
-                <form className="mt-6 space-y-3" onSubmit={submitOrder}>
+                <form className="mt-4 space-y-3" onSubmit={submitOrder}>
                   <h3 className="font-medium">收货信息</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {tradeMode === 'B2B' && (
+                      <input
+                        className="border rounded-lg px-3 py-2 md:col-span-2"
+                        placeholder="公司名称（必填）"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                      />
+                    )}
                     <input className="border rounded-lg px-3 py-2" placeholder="联系人姓名 *" value={name} onChange={(e) => setName(e.target.value)} />
                     <input className="border rounded-lg px-3 py-2" placeholder="联系电话 *" value={phone} onChange={(e) => setPhone(e.target.value)} />
                     <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="邮箱（必填）" required value={email} onChange={(e) => setEmail(e.target.value)} />
