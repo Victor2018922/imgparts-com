@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 type DetailItem = {
   num: string;
@@ -32,14 +32,12 @@ function pickRawImageUrl(x: DetailItem): string | null {
   if (Array.isArray(media) && media[0]?.url) return media[0].url;
   return null;
 }
-
 function normalizeImageUrl(u: string | null): string | null {
   if (!u) return null;
   if (u.startsWith('//')) return 'https:' + u;
   if (u.startsWith('http://')) return 'https://' + u.slice(7);
   return u;
 }
-
 const FALLBACK_DATA_URL =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -86,7 +84,7 @@ function extractArray(json: any): any[] {
 }
 
 export default function StockDetailPage({ params }: { params: { num: string } }) {
-  // 某些环境类型声明可能是 URLSearchParams | null，这里做空值保护
+  const router = useRouter();
   const sp = useSearchParams();
   const d = sp ? sp.get('d') : null;
 
@@ -96,10 +94,8 @@ export default function StockDetailPage({ params }: { params: { num: string } })
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
 
-  // 若未携带 ?d=，从第一页兜底查找同 num 的条目
   useEffect(() => {
     if (item) return;
-
     (async () => {
       try {
         const res = await fetch(FALLBACK_LIST_API, { cache: 'no-store' });
@@ -110,10 +106,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
         const json = await res.json();
         const arr = extractArray(json);
         const found = Array.isArray(arr)
-          ? arr.find(
-              (x: any) =>
-                (x?.num || x?.sku || x?.partNo || x?.code) === params.num
-            )
+          ? arr.find((x: any) => (x?.num || x?.sku || x?.partNo || x?.code) === params.num)
           : null;
 
         if (found) {
@@ -124,14 +117,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
             brand: found.brand || '',
             model: found.model || '',
             year: found.year || '',
-            image:
-              found.image ??
-              found.img ??
-              found.imgUrl ??
-              found.pic ??
-              found.picture ??
-              found.url ??
-              null,
+            image: found.image ?? found.img ?? found.imgUrl ?? found.pic ?? found.picture ?? found.url ?? null,
             ...found,
           });
           setBanner('ℹ️ 详情未携带数据：已从第一页兜底匹配同 num');
@@ -148,34 +134,24 @@ export default function StockDetailPage({ params }: { params: { num: string } })
 
   const display = useMemo<DetailItem>(
     () =>
-      item || {
-        num: params.num,
-        product: 'Part',
-        brand: '',
-        model: '',
-        year: '',
-      },
+      item || { num: params.num, product: 'Part', brand: '', model: '', year: '' },
     [item, params.num]
   );
 
   const raw = pickRawImageUrl(display);
   const src = normalizeImageUrl(raw) || FALLBACK_DATA_URL;
   const alt =
-    [display.brand, display.product, display.model, display.oe]
-      .filter(Boolean)
-      .join(' ') || 'Product Image';
+    [display.brand, display.product, display.model, display.oe].filter(Boolean).join(' ') ||
+    'Product Image';
 
   function addToCart() {
     try {
       setAdding(true);
       if (typeof window === 'undefined') return;
-
       const cartRaw = localStorage.getItem('cart') || '[]';
       const cart: any[] = JSON.parse(cartRaw);
-
       const key = display.num || display.oe || display.product;
       const idx = cart.findIndex((it: any) => it.key === key);
-
       const cartItem = {
         key,
         num: display.num,
@@ -187,13 +163,11 @@ export default function StockDetailPage({ params }: { params: { num: string } })
         qty: 1,
         image: raw || null,
       };
-
       if (idx >= 0) {
         cart[idx].qty = (cart[idx].qty || 1) + 1;
       } else {
         cart.push(cartItem);
       }
-
       localStorage.setItem('cart', JSON.stringify(cart));
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
@@ -213,10 +187,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div
-          className="relative rounded-xl overflow-hidden bg-white"
-          style={{ width: 360, height: 360 }}
-        >
+        <div className="relative rounded-xl overflow-hidden bg-white" style={{ width: 360, height: 360 }}>
           <img
             src={src}
             alt={alt}
@@ -238,7 +209,6 @@ export default function StockDetailPage({ params }: { params: { num: string } })
           </p>
           {display.oe && <p className="text-sm text-gray-400 mt-2">OE: {display.oe}</p>}
 
-          {/* 动作区：恢复加入购物车 & 去结算 */}
           <div className="mt-6 flex gap-3">
             <button
               onClick={addToCart}
@@ -247,20 +217,17 @@ export default function StockDetailPage({ params }: { params: { num: string } })
             >
               {adding ? '加入中…' : '加入购物车'}
             </button>
-            <Link
-              href="/checkout"
+
+            {/* 改为跳到 /stock?checkout=1 打开结算面板 */}
+            <button
+              onClick={() => router.push('/stock?checkout=1')}
               className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
             >
               去结算
-            </Link>
+            </button>
           </div>
 
-          {/* 轻提示 */}
-          {added && (
-            <div className="mt-3 text-green-600 text-sm">
-              已加入购物车（本地保存）！
-            </div>
-          )}
+          {added && <div className="mt-3 text-green-600 text-sm">已加入购物车（本地保存）！</div>}
 
           <p className="text-xs text-gray-400 mt-6">数据源：niuniuparts.com（测试预览用途）</p>
           {err && <p className="text-xs text-red-500 mt-2">Debug：{err}</p>}
