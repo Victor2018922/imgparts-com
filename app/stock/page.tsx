@@ -23,6 +23,7 @@ type StockItem = {
   pic?: string | null;
   picture?: string | null;
   url?: string | null;
+  media?: any[];
   [k: string]: any;
 };
 
@@ -39,25 +40,64 @@ type CartItem = {
 };
 
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
+const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
+
+function deepFindImage(obj: any, depth = 0): string | null {
+  if (!obj || depth > 3) return null;
+  if (typeof obj === 'string') {
+    const s = obj.trim();
+    if (
+      /^https?:\/\//i.test(s) ||
+      s.startsWith('//') ||
+      s.startsWith('/') ||
+      /\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(s)
+    ) {
+      return s;
+    }
+    return null;
+  }
+  if (Array.isArray(obj)) {
+    for (const v of obj) {
+      const hit = deepFindImage(v, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof obj === 'object') {
+    for (const k of Object.keys(obj)) {
+      const hit = deepFindImage(obj[k], depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
 
 function pickRawImageUrl(x: StockItem | CartItem): string | null {
   const anyx = x as any;
-  const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url'];
+  const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url', 'thumb', 'thumbnail', 'imageUrl', 'pictureUrl'];
   for (const k of keys) {
     const v = anyx?.[k];
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   const media = anyx?.media;
   if (Array.isArray(media) && media[0]?.url) return media[0].url;
+  // 深度兜底：在任意字段里找形如图片的链接
+  const deep = deepFindImage(anyx);
+  if (deep) return deep;
   return null;
 }
 
 function normalizeImageUrl(u: string | null): string | null {
   if (!u) return null;
-  if (u.startsWith('//')) return 'https:' + u;
-  if (u.startsWith('http://')) return 'https://' + u.slice(7);
-  return u;
+  let s = u.trim();
+  if (s.startsWith('data:image')) return s;
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
+  if (/^https?:\/\//i.test(s)) return encodeURI(s);
+  if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
+  // 相对路径（如 images/x.jpg）
+  return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
 }
 
 const FALLBACK_IMG =
@@ -142,9 +182,7 @@ function saveCart(arr: CartItem[]) {
   localStorage.setItem('cart', JSON.stringify(arr));
 }
 
-/**
- * 外层导出：包裹 Suspense，满足 Next.js 对 useSearchParams 的要求
- */
+/** 外层：包 Suspense（useSearchParams 需要） */
 export default function StockPage() {
   return (
     <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
@@ -153,9 +191,6 @@ export default function StockPage() {
   );
 }
 
-/**
- * 实际页面逻辑（含 useSearchParams）
- */
 function StockPageInner() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -172,7 +207,7 @@ function StockPageInner() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(''); // 必填
   const [country, setCountry] = useState('');
   const [city, setCity] = useState('');
   const [address, setAddress] = useState('');
@@ -180,12 +215,10 @@ function StockPageInner() {
   const [formMsg, setFormMsg] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
-  // Load cart when opening checkout or on initial mount
   useEffect(() => {
     setCart(loadCart());
   }, [checkoutOpen]);
 
-  // Keep cart in sync if other tab changes
   useEffect(() => {
     function onStorage(e: StorageEvent) {
       if (e.key === 'cart') setCart(loadCart());
@@ -238,10 +271,16 @@ function StockPageInner() {
       setFormMsg('请填写有效联系电话（至少6位）');
       return;
     }
+    const emailVal = email.trim();
+    const emailOK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal);
+    if (!emailVal || !emailOK) {
+      setFormMsg('请填写有效邮箱地址');
+      return;
+    }
 
     const order = {
       id: 'ORD-' + Date.now(),
-      contact: { name, phone, email, country, city, address, postcode },
+      contact: { name, phone, email: emailVal, country, city, address, postcode },
       items: cart,
       createdAt: new Date().toISOString(),
       origin: 'imgparts-preview',
@@ -255,7 +294,6 @@ function StockPageInner() {
     setSubmitted(true);
   };
 
-  // ---- data list: fetch stock2
   const loadPage = useCallback(
     async (p: number) => {
       if (loading) return;
@@ -294,7 +332,6 @@ function StockPageInner() {
     loadPage(0);
   }, [loadPage]);
 
-  // --- UI
   return (
     <main className="container mx-auto p-4">
       {banner && (
@@ -306,7 +343,6 @@ function StockPageInner() {
         </div>
       )}
 
-      {/* 顶部右侧：结算入口（显示购物车数量） */}
       <div className="flex justify-end mb-3">
         <button
           onClick={() => router.push('/stock?checkout=1')}
@@ -410,31 +446,132 @@ function StockPageInner() {
               </button>
             </div>
 
-            {/* 购物车/表单/提交逻辑与之前一致 */}
-            <CheckoutPanel
-              cart={cart}
-              totalQty={totalQty}
-              updateQty={updateQty}
-              removeItem={removeItem}
-              clearCart={clearCart}
-              name={name}
-              setName={setName}
-              phone={phone}
-              setPhone={setPhone}
-              email={email}
-              setEmail={setEmail}
-              country={country}
-              setCountry={setCountry}
-              city={city}
-              setCity={setCity}
-              address={address}
-              setAddress={setAddress}
-              postcode={postcode}
-              setPostcode={setPostcode}
-              formMsg={formMsg}
-              submitted={submitted}
-              submitOrder={submitOrder}
-            />
+            {!submitted ? (
+              <>
+                {/* 购物车列表 */}
+                <div className="mt-4">
+                  <h3 className="font-medium mb-2">购物车（{totalQty}）</h3>
+                  {cart.length === 0 ? (
+                    <div className="text-sm text-gray-500">购物车为空。</div>
+                  ) : (
+                    <ul className="space-y-3">
+                      {cart.map((it) => {
+                        const src =
+                          normalizeImageUrl(pickRawImageUrl(it)) || FALLBACK_IMG;
+                        const alt =
+                          [it.brand, it.product, it.model, it.oe]
+                            .filter(Boolean)
+                            .join(' ') || 'Product';
+                        return (
+                          <li key={it.key} className="flex gap-3 border rounded-xl p-3">
+                            <div
+                              className="relative rounded-lg overflow-hidden bg-white shrink-0"
+                              style={{ width: 72, height: 72 }}
+                            >
+                              <img
+                                src={src}
+                                alt={alt}
+                                width={72}
+                                height={72}
+                                style={{ objectFit: 'contain', width: '100%', height: '100%' }}
+                                onError={(e) => {
+                                  const el = e.currentTarget as HTMLImageElement;
+                                  if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
+                                }}
+                                loading="lazy"
+                              />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate">{it.product}</div>
+                              <div className="text-xs text-gray-500 truncate">
+                                {[it.brand, it.model].filter(Boolean).join(' · ')}
+                              </div>
+                              {it.oe && <div className="text-xs text-gray-400">OE: {it.oe}</div>}
+                              <div className="mt-2 flex items-center gap-2">
+                                <button
+                                  className="rounded border px-2 py-0.5 text-sm"
+                                  onClick={() => updateQty(it.key, -1)}
+                                >
+                                  −
+                                </button>
+                                <span className="text-sm">{it.qty || 1}</span>
+                                <button
+                                  className="rounded border px-2 py-0.5 text-sm"
+                                  onClick={() => updateQty(it.key, +1)}
+                                >
+                                  ＋
+                                </button>
+                                <button
+                                  className="ml-3 rounded border px-2 py-0.5 text-xs text-red-600"
+                                  onClick={() => removeItem(it.key)}
+                                >
+                                  移除
+                                </button>
+                              </div>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  {cart.length > 0 && (
+                    <div className="mt-2 text-right">
+                      <button className="text-xs text-gray-500 underline" onClick={clearCart}>
+                        清空购物车
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* 收货信息表单 */}
+                <form className="mt-6 space-y-3" onSubmit={submitOrder}>
+                  <h3 className="font-medium">收货信息</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <input className="border rounded-lg px-3 py-2" placeholder="联系人姓名 *" value={name} onChange={(e) => setName(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="联系电话 *" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="邮箱（必填）" required value={email} onChange={(e) => setEmail(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="国家" value={country} onChange={(e) => setCountry(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="城市" value={city} onChange={(e) => setCity(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="详细地址" value={address} onChange={(e) => setAddress(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="邮编" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
+                  </div>
+
+                  {formMsg && <div className="text-sm text-red-600">{formMsg}</div>}
+
+                  <div className="pt-2 flex gap-3">
+                    <button
+                      type="submit"
+                      className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
+                      disabled={!cart.length}
+                    >
+                      提交订单
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
+                      onClick={() => router.push('/stock')}
+                    >
+                      继续浏览
+                    </button>
+                  </div>
+                </form>
+              </>
+            ) : (
+              <div className="mt-6 text-center">
+                <div className="text-lg font-semibold">订单已提交（本地保存）</div>
+                <div className="text-sm text-gray-500 mt-2">
+                  你可在浏览器本地的 <code>lastOrder</code> 查看订单草稿，后续可接入后端接口。
+                </div>
+                <div className="mt-6">
+                  <button
+                    className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
+                    onClick={() => router.push('/stock')}
+                  >
+                    返回库存预览
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -442,215 +579,4 @@ function StockPageInner() {
   );
 }
 
-function CheckoutPanel(props: {
-  cart: CartItem[];
-  totalQty: number;
-  updateQty: (key: string, delta: number) => void;
-  removeItem: (key: string) => void;
-  clearCart: () => void;
-  name: string;
-  setName: (v: string) => void;
-  phone: string;
-  setPhone: (v: string) => void;
-  email: string;
-  setEmail: (v: string) => void;
-  country: string;
-  setCountry: (v: string) => void;
-  city: string;
-  setCity: (v: string) => void;
-  address: string;
-  setAddress: (v: string) => void;
-  postcode: string;
-  setPostcode: (v: string) => void;
-  formMsg: string | null;
-  submitted: boolean;
-  submitOrder: (e: React.FormEvent) => void;
-}) {
-  const {
-    cart,
-    totalQty,
-    updateQty,
-    removeItem,
-    clearCart,
-    name,
-    setName,
-    phone,
-    setPhone,
-    email,
-    setEmail,
-    country,
-    setCountry,
-    city,
-    setCity,
-    address,
-    setAddress,
-    postcode,
-    setPostcode,
-    formMsg,
-    submitted,
-    submitOrder,
-  } = props;
-
-  if (!submitted) {
-    return (
-      <>
-        {/* 购物车列表 */}
-        <div className="mt-4">
-          <h3 className="font-medium mb-2">购物车（{totalQty}）</h3>
-          {cart.length === 0 ? (
-            <div className="text-sm text-gray-500">购物车为空。</div>
-          ) : (
-            <ul className="space-y-3">
-              {cart.map((it) => {
-                const src =
-                  normalizeImageUrl(pickRawImageUrl(it)) || FALLBACK_IMG;
-                const alt =
-                  [it.brand, it.product, it.model, it.oe]
-                    .filter(Boolean)
-                    .join(' ') || 'Product';
-                return (
-                  <li key={it.key} className="flex gap-3 border rounded-xl p-3">
-                    <div
-                      className="relative rounded-lg overflow-hidden bg-white shrink-0"
-                      style={{ width: 72, height: 72 }}
-                    >
-                      <img
-                        src={src}
-                        alt={alt}
-                        width={72}
-                        height={72}
-                        style={{
-                          objectFit: 'contain',
-                          width: '100%',
-                          height: '100%',
-                        }}
-                        onError={(e) => {
-                          const el = e.currentTarget as HTMLImageElement;
-                          if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
-                        }}
-                        loading="lazy"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{it.product}</div>
-                      <div className="text-xs text-gray-500 truncate">
-                        {[it.brand, it.model].filter(Boolean).join(' · ')}
-                      </div>
-                      {it.oe && (
-                        <div className="text-xs text-gray-400">OE: {it.oe}</div>
-                      )}
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          className="rounded border px-2 py-0.5 text-sm"
-                          onClick={() => updateQty(it.key, -1)}
-                        >
-                          −
-                        </button>
-                        <span className="text-sm">{it.qty || 1}</span>
-                        <button
-                          className="rounded border px-2 py-0.5 text-sm"
-                          onClick={() => updateQty(it.key, +1)}
-                        >
-                          ＋
-                        </button>
-                        <button
-                          className="ml-3 rounded border px-2 py-0.5 text-xs text-red-600"
-                          onClick={() => removeItem(it.key)}
-                        >
-                          移除
-                        </button>
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {cart.length > 0 && (
-            <div className="mt-2 text-right">
-              <button
-                className="text-xs text-gray-500 underline"
-                onClick={clearCart}
-              >
-                清空购物车
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* 收货信息表单 */}
-        <form className="mt-6 space-y-3" onSubmit={submitOrder}>
-          <h3 className="font-medium">收货信息</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input
-              className="border rounded-lg px-3 py-2"
-              placeholder="联系人姓名 *"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2"
-              placeholder="联系电话 *"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2 md:col-span-2"
-              placeholder="邮箱（可选）"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2"
-              placeholder="国家"
-              value={country}
-              onChange={(e) => setCountry(e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2"
-              placeholder="城市"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2 md:col-span-2"
-              placeholder="详细地址"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2"
-              placeholder="邮编"
-              value={postcode}
-              onChange={(e) => setPostcode(e.target.value)}
-            />
-          </div>
-
-          {props.formMsg && (
-            <div className="text-sm text-red-600">{props.formMsg}</div>
-          )}
-
-          <div className="pt-2 flex gap-3">
-            <button
-              type="submit"
-              className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-              disabled={!cart.length}
-            >
-              提交订单
-            </button>
-          </div>
-        </form>
-      </>
-    );
-  }
-
-  return (
-    <div className="mt-6 text-center">
-      <div className="text-lg font-semibold">订单已提交（本地保存）</div>
-      <div className="text-sm text-gray-500 mt-2">
-        你可在浏览器本地的 <code>lastOrder</code> 查看订单草稿，后续可接入后端接口。
-      </div>
-    </div>
-  );
-}
 

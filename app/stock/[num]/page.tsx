@@ -17,27 +17,67 @@ type DetailItem = {
   pic?: string | null;
   picture?: string | null;
   url?: string | null;
+  media?: any[];
   [k: string]: any;
 };
 
 const FALLBACK_LIST_API = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
+const BASE_ORIGIN = new URL(FALLBACK_LIST_API).origin;
+
+function deepFindImage(obj: any, depth = 0): string | null {
+  if (!obj || depth > 3) return null;
+  if (typeof obj === 'string') {
+    const s = obj.trim();
+    if (
+      /^https?:\/\//i.test(s) ||
+      s.startsWith('//') ||
+      s.startsWith('/') ||
+      /\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(s)
+    ) {
+      return s;
+    }
+    return null;
+  }
+  if (Array.isArray(obj)) {
+    for (const v of obj) {
+      const hit = deepFindImage(v, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof obj === 'object') {
+    for (const k of Object.keys(obj)) {
+      const hit = deepFindImage(obj[k], depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
 
 function pickRawImageUrl(x: DetailItem): string | null {
-  const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url'];
+  const keys = ['image', 'img', 'imgUrl', 'pic', 'picture', 'url', 'thumb', 'thumbnail', 'imageUrl', 'pictureUrl'];
   for (const k of keys) {
     const v = (x as any)?.[k];
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   const media = (x as any)?.media;
   if (Array.isArray(media) && media[0]?.url) return media[0].url;
+  const deep = deepFindImage(x);
+  if (deep) return deep;
   return null;
 }
+
 function normalizeImageUrl(u: string | null): string | null {
   if (!u) return null;
-  if (u.startsWith('//')) return 'https:' + u;
-  if (u.startsWith('http://')) return 'https://' + u.slice(7);
-  return u;
+  let s = u.trim();
+  if (s.startsWith('data:image')) return s;
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
+  if (/^https?:\/\//i.test(s)) return encodeURI(s);
+  if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
+  return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
 }
+
 const FALLBACK_DATA_URL =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -76,7 +116,7 @@ function extractArray(json: any): any[] {
     const v = json?.[k];
     if (Array.isArray(v)) return v;
     if (v && typeof v === 'object') {
-      const deep = v.list || v.items || v.content || v.records;
+      const deep = (v as any).list || (v as any).items || (v as any).content || (v as any).records;
       if (Array.isArray(deep)) return deep;
     }
   }
@@ -217,8 +257,6 @@ export default function StockDetailPage({ params }: { params: { num: string } })
             >
               {adding ? '加入中…' : '加入购物车'}
             </button>
-
-            {/* 改为跳到 /stock?checkout=1 打开结算面板 */}
             <button
               onClick={() => router.push('/stock?checkout=1')}
               className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
