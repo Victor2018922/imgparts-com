@@ -86,8 +86,9 @@ function extractArray(json: any): any[] {
 }
 
 export default function StockDetailPage({ params }: { params: { num: string } }) {
-  const search = useSearchParams();
-  const d = search.get('d');
+  const searchParamsMaybe = useSearchParams(); // 你的环境类型可能是 URLSearchParams | null
+  const d = searchParamsMaybe ? searchParamsMaybe.get('d') : null;
+
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
   const [banner, setBanner] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -145,7 +146,7 @@ export default function StockDetailPage({ params }: { params: { num: string } })
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.num]);
+  }, [params.num, item]);
 
   const display = useMemo<DetailItem>(
     () =>
