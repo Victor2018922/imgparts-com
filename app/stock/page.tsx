@@ -78,9 +78,20 @@ function mapToStockItem(x: any): StockItem {
 function encodeItemForUrl(item: StockItem): string {
   try {
     const compact = {
-      num: item.num, product: item.product, oe: item.oe,
-      brand: item.brand, model: item.model, year: item.year,
-      image: item.image ?? item.img ?? item.imgUrl ?? item.pic ?? item.picture ?? item.url ?? null
+      num: item.num,
+      product: item.product,
+      oe: item.oe,
+      brand: item.brand,
+      model: item.model,
+      year: item.year,
+      image:
+        item.image ??
+        item.img ??
+        item.imgUrl ??
+        item.pic ??
+        item.picture ??
+        item.url ??
+        null,
     };
     const s = JSON.stringify(compact);
     return encodeURIComponent(btoa(unescape(encodeURIComponent(s))));
@@ -108,18 +119,17 @@ export default function StockPage() {
           setBanner(`⚠️ 加载失败：HTTP ${res.status}（来源：niuniuparts stock2）`);
           setHasMore(false);
           setErr(`HTTP ${res.status}`);
-          return;
-        }
-        const json = await res.json();
-        const arr = extractArrayPayload(json).map(mapToStockItem);
-
-        if (arr.length > 0) {
-          setItems(prev => (p === 0 ? arr : [...prev, ...arr]));
-          setHasMore(arr.length >= PAGE_SIZE);
-          setBanner(null);
         } else {
-          if (p === 0) setBanner('ℹ️ 接口返回空列表');
-          setHasMore(false);
+          const json = await res.json();
+          const arr = extractArrayPayload(json).map(mapToStockItem);
+          if (arr.length > 0) {
+            setItems(prev => (p === 0 ? arr : [...prev, ...arr]));
+            setHasMore(arr.length >= PAGE_SIZE);
+            setBanner(null);
+          } else {
+            if (p === 0) setBanner('ℹ️ 接口返回空列表');
+            setHasMore(false);
+          }
         }
       } catch (e: any) {
         setBanner(`⚠️ 加载异常：${e?.message || '未知错误'}`);
@@ -148,12 +158,17 @@ export default function StockPage() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {items.map((item) => {
+        {items.map(item => {
           const raw = pickRawImageUrl(item);
           const src = normalizeImageUrl(raw) || FALLBACK_DATA_URL;
-          const alt = [item.brand, item.product, item.model, item.oe].filter(Boolean).join(' ') || 'Product Image';
+          const alt =
+            [item.brand, item.product, item.model, item.oe]
+              .filter(Boolean)
+              .join(' ') || 'Product Image';
           const d = encodeItemForUrl(item);
-          const href = `/stock/${encodeURIComponent(item.num || '')}${d ? `?d=${d}` : ''}`;
+          const href = `/stock/${encodeURIComponent(item.num || '')}${
+            d ? `?d=${d}` : ''
+          }`;
 
           return (
             <Link
@@ -162,10 +177,63 @@ export default function StockPage() {
               className="group block rounded-2xl border p-3 hover:shadow"
             >
               <div className="flex gap-3">
-                <div className="relative rounded-xl overflow-hidden bg-white shrink-0" style={{ width: 120, height: 120 }}>
+                <div
+                  className="relative rounded-xl overflow-hidden bg-white shrink-0"
+                  style={{ width: 120, height: 120 }}
+                >
                   <img
                     src={src}
                     alt={alt}
                     width={120}
                     height={120}
                     style={{ objectFit: 'contain', width: '100%', height: '100%' }}
+                    onError={e => {
+                      const el = e.currentTarget as HTMLImageElement;
+                      if (el.src !== FALLBACK_DATA_URL) el.src = FALLBACK_DATA_URL;
+                    }}
+                    loading="lazy"
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold group-hover:underline truncate">
+                    {item.product}
+                  </div>
+                  <div className="text-sm text-gray-500 truncate">
+                    {[item.brand, item.model, item.year]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                  {item.oe && (
+                    <div className="text-xs text-gray-400 mt-1">OE: {item.oe}</div>
+                  )}
+                </div>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+
+      <div className="flex justify-center">
+        {hasMore ? (
+          <button
+            className="mt-6 rounded-lg border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            onClick={() => {
+              const next = page + 1;
+              setPage(next);
+              loadPage(next);
+            }}
+            disabled={loading}
+          >
+            {loading ? '加载中…' : '加载更多'}
+          </button>
+        ) : (
+          <div className="mt-6 text-xs text-gray-400">
+            {items.length ? '没有更多了' : '暂无数据'}
+          </div>
+        )}
+      </div>
+
+      {err && <div className="mt-6 text-xs text-gray-400">Debug: {err}</div>}
+    </main>
+  );
+}
