@@ -1,20 +1,20 @@
 'use client';
 
 import React, { useEffect, useMemo, useState, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import Link from 'next/link';
 
 /* ================== 类型 ================== */
 type DetailItem = {
-  num?: string;
-  product?: string;
+  num?: string;         // 编号
+  product?: string;     // 标题
   name?: string;
   title?: string;
-  oe?: string;
-  brand?: string;
-  model?: string;
-  year?: string;
-  image?: string | null;
+  oe?: string;          // OE
+  brand?: string;       // 品牌
+  model?: string;       // 车型
+  year?: string;        // 年款
+  image?: string | null;// 我们传过来的图
   img?: string | null;
   imgUrl?: string | null;
   pic?: string | null;
@@ -40,6 +40,8 @@ type CartItem = {
 /* ================== 常量 ================== */
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
+const PAGE_SIZE = 20;         // API 每页数量
+const MAX_PAGES_TO_SCAN = 30; // 兜底最多扫描 30 页（600 条），可按需调整
 
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
@@ -52,7 +54,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ================== 图片工具（与列表页同策略） ================== */
+/* ================== 工具：图片提取 + 代理（与列表页一致） ================== */
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -101,8 +103,7 @@ function deepFindImage(obj: any, depth = 0): string | null {
 
   if (typeof obj === 'string') {
     const url = extractFirstUrl(obj) || obj;
-    if (url && isImgUrl(url)) return url;
-    return null;
+    return url && isImgUrl(url) ? url : null;
   }
 
   if (Array.isArray(obj)) {
@@ -200,7 +201,7 @@ function saveCart(arr: CartItem[]) {
   localStorage.setItem('cart', JSON.stringify(arr));
 }
 
-/** 关键修复：UTF-8 对称解码，避免标题乱码 */
+/** UTF-8 对称解码，避免乱码 */
 function safeDecodeItem(encoded: string | null): DetailItem | null {
   if (!encoded) return null;
   try {
@@ -208,9 +209,22 @@ function safeDecodeItem(encoded: string | null): DetailItem | null {
     const json = decodeURIComponent(escape(atob(b64)));
     const obj = JSON.parse(json);
     return (obj && typeof obj === 'object') ? (obj as DetailItem) : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
+}
+
+/** API 返回列表容器的兼容抽取 */
+function extractArray(js: any): any[] {
+  if (Array.isArray(js)) return js;
+  const cand =
+    js?.content ??
+    js?.data?.content ??
+    js?.data?.records ??
+    js?.data?.list ??
+    js?.data ??
+    js?.records ??
+    js?.list ??
+    null;
+  return Array.isArray(cand) ? cand : [];
 }
 
 /* ================== 页面 ================== */
@@ -224,20 +238,82 @@ export default function StockDetailPage() {
 
 function Inner() {
   const router = useRouter();
+  const params = useParams<{ num: string }>();
   const search = useSearchParams();
 
   const d = useMemo(() => search?.get('d') ?? null, [search]);
+
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
   const [added, setAdded] = useState<string | null>(null);
 
-  useEffect(() => setItem(safeDecodeItem(d)), [d]);
+  // ====== 若 d 里没有图片，则按 num 逐页兜底请求 API 来补图/补充信息 ======
+  useEffect(() => {
+    setItem(safeDecodeItem(d));
+  }, [d]);
+
+  useEffect(() => {
+    const hasImage = !!pickRawImageUrl(item || {});
+    const hasBasic  = !!(item?.product || item?.name || item?.title);
+
+    if (hasImage && hasBasic) return; // 已有图且有基本信息，不用兜底
+
+    const num = params?.num;
+    if (!num) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        for (let page = 0; page < MAX_PAGES_TO_SCAN; page++) {
+          const url = `${API_BASE}?size=${PAGE_SIZE}&page=${page}`;
+          const res = await fetch(url, { cache: 'no-store' });
+          if (!res.ok) break;
+          const json = await res.json();
+          const arr = extractArray(json);
+          if (!arr?.length) break;
+
+          const found = arr.find((x: any) => String(x?.num || '').trim() === String(num).trim());
+          if (found) {
+            const imgRaw = pickRawImageUrl(found);
+            if (cancelled) return;
+            setItem((prev) => ({
+              ...prev,
+              // 用 API 的原始数据补全
+              num: found.num ?? prev?.num,
+              product: found.product ?? found.name ?? found.title ?? prev?.product,
+              oe: found.oe ?? prev?.oe,
+              brand: found.brand ?? prev?.brand,
+              model: found.model ?? prev?.model,
+              year: found.year ?? prev?.year,
+              image:
+                imgRaw ??
+                prev?.image ??
+                prev?.imgUrl ??
+                prev?.img ??
+                prev?.pic ??
+                prev?.picture ??
+                prev?.url ??
+                null,
+              ...found, // 保留更多字段以便后续扩展
+            }));
+            break;
+          }
+        }
+      } catch {
+        /* 忽略兜底失败 */
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [params?.num, item?.image, item?.product]);
 
   // 标题与副标题
-  const title = item?.product || item?.name || item?.title || '未命名配件';
+  const title =
+    item?.product || item?.name || item?.title || '未命名配件';
   const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
   const oe = item?.oe;
 
-  // 图片：对 d 里的对象做一次“深挖”
+  // 图片：对当前 item 做“深挖”
   const src = useMemo(() => {
     const raw = pickRawImageUrl(item || {});
     return buildSrcs(raw);
@@ -291,8 +367,8 @@ function Inner() {
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>
           <div className="text-gray-500 mt-1">{sub}</div>
-          <div className="text-gray-500 mt-1">{item?.num ? `编号：${item.num}` : null}</div>
-          {oe && <div className="text-gray-500 mt-1">OE：{oe}</div>}
+          {item?.num && <div className="text-gray-500 mt-1">编号：{item.num}</div>}
+          {oe &&       <div className="text-gray-500 mt-1">OE：{oe}</div>}
 
           <div className="mt-6 flex gap-3">
             <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={addToCart}>
