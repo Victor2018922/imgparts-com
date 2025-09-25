@@ -231,6 +231,7 @@ function StockInner() {
   const miniRef = useRef<HTMLDivElement | null>(null);
 
   // 轻提示
+  the: any;
   const [toast, setToast] = useState<string | null>(null);
 
   // 结算表单
@@ -405,6 +406,30 @@ function StockInner() {
     if (miniOpen) document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [miniOpen]);
+
+  /* 清除筛选（缺失补回） */
+  const clearOne = (k: 'brand' | 'model' | 'year') => {
+    if (k === 'brand') {
+      setBrandFilter('');
+      setModelFilter('');
+      setYearFilter('');
+      syncUrl({ brand: '', model: '', year: '' });
+    } else if (k === 'model') {
+      setModelFilter('');
+      setYearFilter('');
+      syncUrl({ model: '', year: '' });
+    } else if (k === 'year') {
+      setYearFilter('');
+      syncUrl({ year: '' });
+    }
+  };
+  const clearAllFilters = () => {
+    setBrandFilter('');
+    setModelFilter('');
+    setYearFilter('');
+    setQ('');
+    syncUrl({ brand: '', model: '', year: '', q: '' });
+  };
 
   /* ================== 渲染 ================== */
   return (
