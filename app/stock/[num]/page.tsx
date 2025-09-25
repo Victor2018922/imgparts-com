@@ -40,8 +40,8 @@ type CartItem = {
 /* ================== 常量 ================== */
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
-const PAGE_SIZE = 20;         // API 每页数量
-const MAX_PAGES_TO_SCAN = 30; // 兜底最多扫描 30 页（600 条）
+const PAGE_SIZE = 20;
+const MAX_PAGES_TO_SCAN = 30;
 
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
@@ -54,7 +54,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ================== 图片工具（与列表页一致） ================== */
+/* ================== 图片工具 ================== */
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -92,7 +92,6 @@ function absolutize(u: string | null): string | null {
   if (s.startsWith('/')) return BASE_ORIGIN + s;
   return BASE_ORIGIN + '/' + s.replace(/^\.\//, '');
 }
-
 function toProxy(u: string): string {
   const clean = u.replace(/^https?:\/\//i, '');
   return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
@@ -104,7 +103,6 @@ function collectUrlsFromAny(v: any): string[] {
     const url = s && (extractFirstUrl(s) || s);
     if (url && isImgUrl(url)) out.push(url);
   };
-
   if (!v) return out;
   if (typeof v === 'string') { push(v); return out; }
   if (Array.isArray(v)) { v.forEach((it) => out.push(...collectUrlsFromAny(it))); return out; }
@@ -114,27 +112,18 @@ function collectUrlsFromAny(v: any): string[] {
   return out;
 }
 
-/** 从对象“深挖”出尽可能多的图片地址，去重后返回（最多 8 张） */
-function pickMultiImages(x: any, max = 8): string[] {
+/** 深挖多图：最多 18 张 */
+function pickMultiImages(x: any, max = 18): string[] {
   if (!x) return [];
-  const PRIORITY_FIELDS = [
-    // 明确的单图字段
+  const FIELDS = [
     'image','imgUrl','img_url','imageUrl','image_url','picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src',
-    // 容器字段
     'images','pictures','pics','photos','gallery','media','attachments',
-    // 可能含 HTML/文本的描述字段
     'content','html','desc','description'
   ];
-
   const bag: string[] = [];
-
-  for (const k of PRIORITY_FIELDS) {
-    if (k in x) bag.push(...collectUrlsFromAny((x as any)[k]));
-  }
-  // 再全对象兜底扫描
+  for (const k of FIELDS) if (k in x) bag.push(...collectUrlsFromAny((x as any)[k]));
   if (bag.length < max) bag.push(...collectUrlsFromAny(x));
 
-  // 绝对化 + 去重 + 截断
   const uniq: string[] = [];
   for (const raw of bag) {
     const abs = absolutize(raw);
@@ -149,18 +138,13 @@ function pickMultiImages(x: any, max = 8): string[] {
 /* ================== 其它工具 ================== */
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem('cart') || '[]';
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch { return []; }
+  try { const raw = localStorage.getItem('cart') || '[]'; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; }
+  catch { return []; }
 }
 function saveCart(arr: CartItem[]) {
   if (typeof window === 'undefined') return;
   localStorage.setItem('cart', JSON.stringify(arr));
 }
-
-/** UTF-8 对称解码，避免乱码 */
 function safeDecodeItem(encoded: string | null): DetailItem | null {
   if (!encoded) return null;
   try {
@@ -170,8 +154,6 @@ function safeDecodeItem(encoded: string | null): DetailItem | null {
     return (obj && typeof obj === 'object') ? (obj as DetailItem) : null;
   } catch { return null; }
 }
-
-/** API 返回列表容器的兼容抽取 */
 function extractArray(js: any): any[] {
   if (Array.isArray(js)) return js;
   const cand =
@@ -203,32 +185,26 @@ function Inner() {
   const d = useMemo(() => search?.get('d') ?? null, [search]);
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
 
-  // 多图画廊状态
-  const [images, setImages] = useState<string[]>(() => pickMultiImages(safeDecodeItem(d) || {}));
+  const [images, setImages] = useState<string[]>(() => pickMultiImages(safeDecodeItem(d) || {}, 18));
   const [active, setActive] = useState(0);
   const [added, setAdded] = useState<string | null>(null);
 
-  // 同步 d 改变
   useEffect(() => {
     const obj = safeDecodeItem(d);
     setItem(obj);
-    const fromD = pickMultiImages(obj || {});
-    if (fromD.length) {
-      setImages(fromD);
-      setActive(0);
-    }
+    const fromD = pickMultiImages(obj || {}, 18);
+    if (fromD.length) { setImages(fromD); setActive(0); }
   }, [d]);
 
-  // ====== 若 d 里没有图或信息不足，则按 num 逐页兜底请求 API 来补图/补充信息 ======
+  // 兜底：按 num 扫描 API
   useEffect(() => {
-    const alreadyHas = images.length > 0 && (item?.product || item?.name || item?.title);
-    if (alreadyHas) return;
+    const hasEnough = images.length > 0 && (item?.product || item?.name || item?.title);
+    if (hasEnough) return;
 
     const num = params?.num;
     if (!num) return;
 
     let cancelled = false;
-
     (async () => {
       try {
         for (let page = 0; page < MAX_PAGES_TO_SCAN; page++) {
@@ -242,7 +218,7 @@ function Inner() {
           const found = arr.find((x: any) => String(x?.num || '').trim() === String(num).trim());
           if (found) {
             if (cancelled) return;
-            const imgs = pickMultiImages(found);
+            const imgs = pickMultiImages(found, 18);
             setImages((prev) => (prev.length ? prev : imgs));
             setItem((prev) => ({
               ...prev,
@@ -252,31 +228,23 @@ function Inner() {
               brand: found.brand ?? prev?.brand,
               model: found.model ?? prev?.model,
               year: found.year ?? prev?.year,
-              image:
-                found.image ?? prev?.image ?? null,
+              image: found.image ?? prev?.image ?? null,
               ...found,
             }));
             setActive(0);
             break;
           }
         }
-      } catch {
-        /* 忽略兜底失败 */
-      }
+      } catch {}
     })();
-
     return () => { cancelled = true; };
   }, [params?.num, images.length, item?.product]);
 
-  // 标题与副标题
-  const title =
-    item?.product || item?.name || item?.title || '未命名配件';
+  const title = item?.product || item?.name || item?.title || '未命名配件';
   const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
-  const oe = item?.oe;
+  const oe  = item?.oe;
 
-  // 画廊当前主图
   const mainSrc = images[active] || FALLBACK_IMG;
-
   const prev = () => setActive((i) => (images.length ? (i - 1 + images.length) % images.length : 0));
   const next = () => setActive((i) => (images.length ? (i + 1) % images.length : 0));
 
@@ -284,18 +252,13 @@ function Inner() {
     const firstImg = images[0] || null;
     const key = `${item?.num || ''}|${item?.oe || ''}|${Date.now()}`;
     const nextItem: CartItem = {
-      key,
-      num: item?.num,
-      product: title,
-      oe: item?.oe,
-      brand: item?.brand,
-      model: item?.model,
-      year: item?.year,
-      qty: 1,
-      image: firstImg,
+      key, num: item?.num, product: title, oe: item?.oe,
+      brand: item?.brand, model: item?.model, year: item?.year,
+      qty: 1, image: firstImg,
     };
-    const cart = [...loadCart(), nextItem];
-    saveCart(cart);
+    const list = loadCart();
+    list.push(nextItem);
+    saveCart(list);
     setAdded('已加入购物车（本地保存）！');
     setTimeout(() => setAdded(null), 1500);
   };
@@ -314,43 +277,25 @@ function Inner() {
               src={mainSrc}
               alt={title}
               style={{ objectFit: 'contain', width: '100%', height: '100%' }}
-              onError={(e) => {
-                const el = e.currentTarget as HTMLImageElement;
-                if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
-              }}
+              onError={(e) => { const el = e.currentTarget as HTMLImageElement; if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG; }}
             />
             {images.length > 1 && (
               <>
-                <button
-                  aria-label="上一张"
-                  onClick={prev}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow"
-                >‹</button>
-                <button
-                  aria-label="下一张"
-                  onClick={next}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow"
-                >›</button>
+                <button aria-label="上一张" onClick={prev}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow">‹</button>
+                <button aria-label="下一张" onClick={next}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow">›</button>
               </>
             )}
           </div>
-
-          {/* 缩略图 */}
           {images.length > 1 && (
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
               {images.map((src, idx) => (
-                <button
-                  key={src + idx}
-                  onClick={() => setActive(idx)}
+                <button key={src + idx} onClick={() => setActive(idx)}
                   className={`h-16 w-16 shrink-0 rounded border ${idx === active ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'}`}
-                  title={`图片 ${idx + 1}`}
-                >
-                  <img
-                    src={src}
-                    alt={`thumb-${idx + 1}`}
-                    className="h-full w-full object-contain"
-                    onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }}
-                  />
+                  title={`图片 ${idx + 1}`}>
+                  <img src={src} alt={`thumb-${idx + 1}`} className="h-full w-full object-contain"
+                       onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }} />
                 </button>
               ))}
             </div>
@@ -362,22 +307,16 @@ function Inner() {
           <h1 className="text-2xl font-bold">{title}</h1>
           <div className="text-gray-500 mt-1">{sub}</div>
           {item?.num && <div className="text-gray-500 mt-1">编号：{item.num}</div>}
-          {oe &&       <div className="text-gray-500 mt-1">OE：{oe}</div>}
+          {oe && <div className="text-gray-500 mt-1">OE：{oe}</div>}
 
           <div className="mt-6 flex gap-3">
-            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={addToCart}>
-              加入购物车
-            </button>
-            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={() => router.push('/stock?checkout=1')}>
-              去结算
-            </button>
+            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={addToCart}>加入购物车</button>
+            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={() => router.push('/stock?checkout=1')}>去结算</button>
           </div>
 
           {added && <div className="mt-3 text-green-600 text-sm">{added}</div>}
 
-          <div className="mt-8 text-xs text-gray-400">
-            数据源：niuniuparts.com（测试预览用途）
-          </div>
+          <div className="mt-8 text-xs text-gray-400">数据源：niuniuparts.com（测试预览用途）</div>
         </div>
       </div>
     </main>
