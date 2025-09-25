@@ -14,12 +14,6 @@ type DetailItem = {
   model?: string;
   year?: string;
   image?: string | null;
-  img?: string | null;
-  imgUrl?: string | null;
-  pic?: string | null;
-  picture?: string | null;
-  url?: string | null;
-  media?: any[];
   [k: string]: any;
 };
 
@@ -51,17 +45,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ========= 工具：图片提取 + 代理（与列表页一致） ========= */
-
-function isLikelyImageUrl(s: string): boolean {
-  if (!s || typeof s !== 'string') return false;
-  const v = s.trim();
-  if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
-  if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif|avif)(\?|#|$)/i.test(v)) return true;
-  if (/\/(upload|image|images|img|media|file|files)\//i.test(v)) return true;
-  if (/[?&](file|img|image|pic|path)=/i.test(v)) return true;
-  return false;
-}
+/* ========= 工具：图片提取 + 代理 ========= */
 
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
@@ -80,6 +64,16 @@ function extractFirstUrl(s: string): string | null {
   return null;
 }
 
+function isLikelyImageUrl(s: string): boolean {
+  if (!s || typeof s !== 'string') return false;
+  const v = s.trim();
+  if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
+  if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif|avif)(\?|#|$)/i.test(v)) return true;
+  if (/\/(upload|image|images|img|media|file|files)\//i.test(v)) return true;
+  if (/[?&](file|img|image|pic|path)=/i.test(v)) return true;
+  return false;
+}
+
 function absolutize(u: string | null): string | null {
   if (!u) return null;
   let s = u.trim();
@@ -94,95 +88,6 @@ function absolutize(u: string | null): string | null {
 function toProxy(u: string): string {
   const clean = u.replace(/^https?:\/\//i, '');
   return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
-}
-
-function deepFindImage(obj: any, depth = 0): string | null {
-  if (!obj || depth > 4) return null;
-
-  if (typeof obj === 'string') {
-    const url = extractFirstUrl(obj) || obj;
-    if (url && isLikelyImageUrl(url)) return url;
-    return null;
-  }
-
-  if (Array.isArray(obj)) {
-    for (const v of obj) {
-      const hit = deepFindImage(v, depth + 1);
-      if (hit) return hit;
-    }
-    return null;
-  }
-
-  if (typeof obj === 'object') {
-    const PRIORITY_KEYS = [
-      'image', 'imgUrl', 'img_url', 'imageUrl', 'image_url',
-      'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src',
-      'images', 'pictures', 'pics', 'photos', 'gallery', 'media', 'attachments',
-      'content', 'html', 'desc', 'description',
-    ];
-
-    for (const k of PRIORITY_KEYS) {
-      if (k in obj) {
-        const v = (obj as any)[k];
-        if (Array.isArray(v)) {
-          for (const it of v) {
-            const cand =
-              typeof it === 'string'
-                ? (extractFirstUrl(it) || it)
-                : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
-            if (cand && isLikelyImageUrl(cand)) return cand;
-            const deep = deepFindImage(it, depth + 1);
-            if (deep) return deep;
-          }
-        } else {
-          const hit = deepFindImage(v, depth + 1);
-          if (hit) return hit;
-        }
-      }
-    }
-
-    for (const k of Object.keys(obj)) {
-      const hit = deepFindImage(obj[k], depth + 1);
-      if (hit) return hit;
-    }
-  }
-
-  return null;
-}
-
-function pickRawImageUrl(x: any): string | null {
-  const anyx = x as any;
-  const DIRECT_KEYS = [
-    'image', 'imgUrl', 'img_url', 'imageUrl', 'image_url',
-    'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src',
-  ];
-  for (const k of DIRECT_KEYS) {
-    const v = anyx?.[k];
-    if (!v) continue;
-    if (typeof v === 'string') {
-      const url = extractFirstUrl(v) || v;
-      if (url && isLikelyImageUrl(url)) return url;
-    } else {
-      const hit = deepFindImage(v);
-      if (hit) return hit;
-    }
-  }
-
-  const LIST_KEYS = ['images', 'pictures', 'pics', 'photos', 'gallery', 'media', 'attachments'];
-  for (const k of LIST_KEYS) {
-    const v = anyx?.[k];
-    if (Array.isArray(v)) {
-      for (const it of v) {
-        const url =
-          typeof it === 'string'
-            ? (extractFirstUrl(it) || it)
-            : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
-        if (url && isLikelyImageUrl(url)) return url;
-      }
-    }
-  }
-
-  return deepFindImage(anyx);
 }
 
 function buildImageSources(raw: string | null): { direct: string; proxy: string } {
@@ -213,14 +118,15 @@ function saveCart(arr: CartItem[]) {
   localStorage.setItem('cart', JSON.stringify(arr));
 }
 
+/** 解码列表页塞进来的 d：修复乱码关键点 —— 需要 escape() 再 decodeURIComponent */
 function safeDecodeItem(d: string | null): DetailItem | null {
   if (!d) return null;
   try {
-    const json = decodeURIComponent(atob(decodeURIComponent(d)));
+    const b64 = decodeURIComponent(d);
+    // 与列表页的 btoa(unescape(encodeURIComponent())) 完全对称
+    const json = decodeURIComponent(escape(atob(b64)));
     const obj = JSON.parse(json);
-    if (obj && typeof obj === 'object') {
-      return obj as DetailItem;
-    }
+    if (obj && typeof obj === 'object') return obj as DetailItem;
   } catch {}
   return null;
 }
@@ -239,36 +145,30 @@ function Inner() {
   const router = useRouter();
   const search = useSearchParams();
 
-  // 👇 修复点：把可能为 null 的 search 安全读取
+  // 安全读取 d
   const d = useMemo(() => search?.get('d') ?? null, [search]);
 
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
-  const [banner, setBanner] = useState<string | null>(null);
   const [added, setAdded] = useState<string | null>(null);
 
   useEffect(() => {
     setItem(safeDecodeItem(d));
   }, [d]);
 
-  const img = useMemo(() => {
-    const raw = pickRawImageUrl(item || {});
-    const { direct, proxy } = buildImageSources(raw);
-    return { direct, proxy };
-  }, [item]);
-
   const title =
-    item?.product ||
-    item?.name ||
-    item?.title ||
-    '未命名配件';
-  const sub =
-    [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
+    item?.product || item?.name || item?.title || '未命名配件';
+  const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
   const oe = item?.oe;
+
+  const img = useMemo(() => {
+    const raw = item?.image || item?.imgUrl || item?.img || item?.pic || item?.picture || item?.url || null;
+    return buildImageSources(raw);
+  }, [item]);
 
   const addToCart = () => {
     if (!item) return;
     const key = `${item.num || ''}|${item.oe || ''}|${Date.now()}`;
-    const newItem: CartItem = {
+    const next: CartItem = {
       key,
       num: item.num,
       product: item.product || title,
@@ -277,22 +177,16 @@ function Inner() {
       model: item.model,
       year: item.year,
       qty: 1,
-      image: pickRawImageUrl(item),
+      image: item.image || null,
     };
-    const next = [...loadCart(), newItem];
-    saveCart(next);
+    const cart = [...loadCart(), next];
+    saveCart(cart);
     setAdded('已加入购物车（本地保存）！');
-    setTimeout(() => setAdded(null), 1800);
+    setTimeout(() => setAdded(null), 1600);
   };
 
   return (
     <main className="container mx-auto p-4">
-      {banner && (
-        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 text-sm">
-          {banner}
-        </div>
-      )}
-
       <div className="mb-4 text-sm text-gray-500">
         <Link href="/stock" className="underline hover:text-gray-700">← 返回库存预览</Link>
       </div>
@@ -322,23 +216,15 @@ function Inner() {
           {oe && <div className="text-gray-400 text-sm mt-2">OE: {oe}</div>}
 
           <div className="mt-6 flex gap-3">
-            <button
-              className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-              onClick={addToCart}
-            >
+            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={addToCart}>
               加入购物车
             </button>
-            <button
-              className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-              onClick={() => router.push('/stock?checkout=1')}
-            >
+            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={() => router.push('/stock?checkout=1')}>
               去结算
             </button>
           </div>
 
-          {added && (
-            <div className="mt-3 text-green-600 text-sm">{added}</div>
-          )}
+          {added && <div className="mt-3 text-green-600 text-sm">{added}</div>}
 
           <div className="mt-8 text-xs text-gray-400">
             数据源：niuniuparts.com（测试预览用途）
