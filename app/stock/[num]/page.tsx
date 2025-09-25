@@ -51,7 +51,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ========= 工具：图片提取 + 代理（与列表页完全一致的策略） ========= */
+/* ========= 工具：图片提取 + 代理（与列表页一致） ========= */
 
 function isLikelyImageUrl(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
@@ -239,7 +239,9 @@ function Inner() {
   const router = useRouter();
   const search = useSearchParams();
 
-  const d = search.get('d');
+  // 👇 修复点：把可能为 null 的 search 安全读取
+  const d = useMemo(() => search?.get('d') ?? null, [search]);
+
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
   const [banner, setBanner] = useState<string | null>(null);
   const [added, setAdded] = useState<string | null>(null);
@@ -248,14 +250,12 @@ function Inner() {
     setItem(safeDecodeItem(d));
   }, [d]);
 
-  // 组装图片 src（直链 + 代理 + 兜底）
   const img = useMemo(() => {
     const raw = pickRawImageUrl(item || {});
     const { direct, proxy } = buildImageSources(raw);
     return { direct, proxy };
   }, [item]);
 
-  // 基本信息
   const title =
     item?.product ||
     item?.name ||
