@@ -178,6 +178,9 @@ function saveMode(v: TradeMode) {
   localStorage.setItem('tradeMode', v);
 }
 
+const normalize = (s?: string | null) =>
+  (s ?? '').toString().trim();
+
 /** ================= 页面（带 Suspense） ================= */
 export default function StockPage() {
   return (
@@ -193,8 +196,18 @@ function StockInner() {
   const searchParams = useSearchParams();
   const checkoutParam = searchParams?.get('checkout');
 
+  // URL 同步：q / brand / model / year
+  const urlQ = searchParams?.get('q') ?? '';
+  const urlBrand = searchParams?.get('brand') ?? '';
+  const urlModel = searchParams?.get('model') ?? '';
+  const urlYear = searchParams?.get('year') ?? '';
+
   const [mode, setMode] = useState<TradeMode>('B2C');
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(urlQ);
+  const [brandFilter, setBrandFilter] = useState(urlBrand);
+  const [modelFilter, setModelFilter] = useState(urlModel);
+  const [yearFilter, setYearFilter] = useState(urlYear);
+
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<CardItem[]>([]);
@@ -235,9 +248,9 @@ function StockInner() {
         num: x.num,
         product: x.product ?? x.name ?? x.title ?? 'IMG',
         oe: x.oe,
-        brand: x.brand,
-        model: x.model,
-        year: x.year,
+        brand: normalize(x.brand),
+        model: normalize(x.model),
+        year: normalize(x.year),
         image: pickImage(x),
         raw: x,
       }));
@@ -250,17 +263,70 @@ function StockInner() {
 
   useEffect(() => { loadPage(0); }, []); // 首次加载一页
 
-  // 搜索（前端包含匹配）
+  // URL 写回（便于分享与回访）
+  const syncUrl = (next: { q?: string; brand?: string; model?: string; year?: string }) => {
+    const sp = new URLSearchParams(searchParams?.toString() ?? '');
+    if (next.q !== undefined) {
+      next.q ? sp.set('q', next.q) : sp.delete('q');
+    }
+    if (next.brand !== undefined) {
+      next.brand ? sp.set('brand', next.brand) : sp.delete('brand');
+    }
+    if (next.model !== undefined) {
+      next.model ? sp.set('model', next.model) : sp.delete('model');
+    }
+    if (next.year !== undefined) {
+      next.year ? sp.set('year', next.year) : sp.delete('year');
+    }
+    router.replace(`?${sp.toString()}`);
+  };
+
+  // 选项列表（去重排序）。车型/年款会根据已选“品牌”做联动缩小范围
+  const brandOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      const b = normalize(it.brand);
+      if (b) set.add(b);
+    }
+    return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  }, [items]);
+
+  const modelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      if (brandFilter && normalize(it.brand) !== normalize(brandFilter)) continue;
+      const m = normalize(it.model);
+      if (m) set.add(m);
+    }
+    return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  }, [items, brandFilter]);
+
+  const yearOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      if (brandFilter && normalize(it.brand) !== normalize(brandFilter)) continue;
+      if (modelFilter && normalize(it.model) !== normalize(modelFilter)) continue;
+      const y = normalize(it.year);
+      if (y) set.add(y);
+    }
+    // 年款一般是文本，这里不做特殊排序
+    return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  }, [items, brandFilter, modelFilter]);
+
+  // 最终过滤：搜索 + 品牌 + 车型 + 年款
   const filtered = useMemo(() => {
-    if (!q.trim()) return items;
-    const key = q.trim().toLowerCase();
+    const key = normalize(q).toLowerCase();
     return items.filter((it) => {
+      if (brandFilter && normalize(it.brand) !== normalize(brandFilter)) return false;
+      if (modelFilter && normalize(it.model) !== normalize(modelFilter)) return false;
+      if (yearFilter && normalize(it.year) !== normalize(yearFilter)) return false;
+      if (!key) return true;
       const text = [
         it.product, it.oe, it.brand, it.model, it.year, it.num
       ].filter(Boolean).join(' ').toLowerCase();
       return text.includes(key);
     });
-  }, [items, q]);
+  }, [items, q, brandFilter, modelFilter, yearFilter]);
 
   // 打开/关闭结算
   const openCheckout = () => setCartOpen(true);
@@ -277,22 +343,26 @@ function StockInner() {
   // 模式切换
   const setTradeMode = (m: TradeMode) => { setMode(m); saveMode(m); };
 
-  // 表单提交（演示：控制台 + 提示）
+  // 表单提交（演示）
   const submitOrder = () => {
-    // 必填校验
-    if (!form.email.trim()) {
-      alert('请填写邮箱（必填）');
-      return;
-    }
-    if (mode === 'B2B' && !form.company.trim()) {
-      alert('公司名称为必填项（B2B）');
-      return;
-    }
+    if (!form.email.trim()) { alert('请填写邮箱（必填）'); return; }
+    if (mode === 'B2B' && !form.company.trim()) { alert('公司名称为必填项（B2B）'); return; }
     const payload = { mode, cart, form };
     console.log('提交订单（演示）:', payload);
     alert('订单已提交（演示提交）。我们将尽快与您联系！');
     setCart([]);
     setCartOpen(false);
+  };
+
+  // 清除某一项筛选/清空
+  const clearOne = (k: 'brand'|'model'|'year') => {
+    if (k==='brand') { setBrandFilter(''); setModelFilter(''); setYearFilter(''); syncUrl({ brand:'', model:'', year:'' }); }
+    if (k==='model') { setModelFilter(''); setYearFilter(''); syncUrl({ model:'', year:'' }); }
+    if (k==='year')  { setYearFilter(''); syncUrl({ year:'' }); }
+  };
+  const clearAllFilters = () => {
+    setBrandFilter(''); setModelFilter(''); setYearFilter(''); setQ('');
+    syncUrl({ brand:'', model:'', year:'', q:'' });
   };
 
   return (
@@ -321,21 +391,73 @@ function StockInner() {
         </button>
       </div>
 
-      {/* 搜索框 */}
-      <div className="mb-4 flex items-center gap-2">
+      {/* 检索条：搜索 + 三级筛选 + 清空 */}
+      <div className="mb-3 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto_auto_auto] gap-2">
         <input
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => { setQ(e.target.value); syncUrl({ q: e.target.value }); }}
           placeholder="搜索：OE号 / 商品名 / 品牌 / 车型"
           className="w-full rounded-lg border px-3 py-2 text-sm"
         />
-        <button
-          onClick={() => { /* 前端过滤，无需额外操作 */ }}
-          className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+        <select
+          value={brandFilter}
+          onChange={(e) => { setBrandFilter(e.target.value); setModelFilter(''); setYearFilter(''); syncUrl({ brand:e.target.value, model:'', year:'' }); }}
+          className="rounded-lg border px-3 py-2 text-sm"
         >
-          搜索
+          <option value="">品牌（全部）</option>
+          {brandOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select
+          value={modelFilter}
+          onChange={(e) => { setModelFilter(e.target.value); setYearFilter(''); syncUrl({ model:e.target.value, year:'' }); }}
+          className="rounded-lg border px-3 py-2 text-sm"
+        >
+          <option value="">车型（全部）</option>
+          {modelOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select
+          value={yearFilter}
+          onChange={(e) => { setYearFilter(e.target.value); syncUrl({ year:e.target.value }); }}
+          className="rounded-lg border px-3 py-2 text-sm"
+        >
+          <option value="">年款（全部）</option>
+          {yearOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <button onClick={clearAllFilters} className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50">
+          清空筛选
         </button>
       </div>
+
+      {/* 活动筛选提示 Chip */}
+      {(brandFilter || modelFilter || yearFilter || q) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-500">已选：</span>
+          {q && (
+            <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
+              关键词：{q}
+              <button className="text-gray-400 hover:text-gray-600" onClick={() => { setQ(''); syncUrl({ q:'' }); }}>✕</button>
+            </span>
+          )}
+          {brandFilter && (
+            <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
+              品牌：{brandFilter}
+              <button className="text-gray-400 hover:text-gray-600" onClick={() => clearOne('brand')}>✕</button>
+            </span>
+          )}
+          {modelFilter && (
+            <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
+              车型：{modelFilter}
+              <button className="text-gray-400 hover:text-gray-600" onClick={() => clearOne('model')}>✕</button>
+            </span>
+          )}
+          {yearFilter && (
+            <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
+              年款：{yearFilter}
+              <button className="text-gray-400 hover:text-gray-600" onClick={() => clearOne('year')}>✕</button>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* 列表 */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -359,7 +481,7 @@ function StockInner() {
                 </div>
                 <div className="min-w-0">
                   <div className="font-semibold line-clamp-1">{it.product}</div>
-                  <div className="text-xs text-gray-500 mt-1">{it.brand || 'IMG'}</div>
+                  <div className="text-xs text-gray-500 mt-1">{it.brand || 'IMG'} {it.model ? `· ${it.model}` : ''} {it.year ? `· ${it.year}` : ''}</div>
                   {it.oe && <div className="text-xs text-gray-500 mt-1">OE: {it.oe}</div>}
                 </div>
               </div>
@@ -383,7 +505,7 @@ function StockInner() {
         )}
       </div>
 
-      {/* 结算弹窗 */}
+      {/* 结算弹窗（保持原联动） */}
       {cartOpen && (
         <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
           <div className="max-h-[90vh] w-[960px] overflow-auto rounded-2xl bg-white p-4">
@@ -392,7 +514,6 @@ function StockInner() {
               <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={closeCheckout}>关闭</button>
             </div>
 
-            {/* 顶部：购物车条目 */}
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="rounded-xl border">
                 <div className="p-3 text-sm text-gray-500 flex items-center justify-between">
@@ -419,7 +540,6 @@ function StockInner() {
                 </div>
               </div>
 
-              {/* 收货信息（随模式变化） */}
               <div className="rounded-xl border p-3">
                 <div className="mb-2 flex items-center gap-2">
                   <span className="text-sm text-gray-500">交易模式：</span>
