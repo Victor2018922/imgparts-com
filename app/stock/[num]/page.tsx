@@ -4,16 +4,24 @@ import React, { useEffect, useMemo, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
-/* ========= 类型 ========= */
-
+/* ================== 类型 ================== */
 type DetailItem = {
   num?: string;
-  product: string;
+  product?: string;
+  name?: string;
+  title?: string;
   oe?: string;
   brand?: string;
   model?: string;
   year?: string;
   image?: string | null;
+  img?: string | null;
+  imgUrl?: string | null;
+  pic?: string | null;
+  picture?: string | null;
+  url?: string | null;
+  images?: any[];
+  media?: any[];
   [k: string]: any;
 };
 
@@ -29,8 +37,7 @@ type CartItem = {
   image?: string | null;
 };
 
-/* ========= 常量 ========= */
-
+/* ================== 常量 ================== */
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 
@@ -45,8 +52,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ========= 工具：图片提取 + 代理 ========= */
-
+/* ================== 图片工具（与列表页同策略） ================== */
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -64,7 +70,7 @@ function extractFirstUrl(s: string): string | null {
   return null;
 }
 
-function isLikelyImageUrl(s: string): boolean {
+function isImgUrl(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
   if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
@@ -90,7 +96,87 @@ function toProxy(u: string): string {
   return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
 }
 
-function buildImageSources(raw: string | null): { direct: string; proxy: string } {
+function deepFindImage(obj: any, depth = 0): string | null {
+  if (!obj || depth > 4) return null;
+
+  if (typeof obj === 'string') {
+    const url = extractFirstUrl(obj) || obj;
+    if (url && isImgUrl(url)) return url;
+    return null;
+  }
+
+  if (Array.isArray(obj)) {
+    for (const v of obj) {
+      const hit = deepFindImage(v, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  if (typeof obj === 'object') {
+    const PRIORITY = [
+      'image','imgUrl','img_url','imageUrl','image_url',
+      'picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src',
+      'images','pictures','pics','photos','gallery','media','attachments',
+      'content','html','desc','description'
+    ];
+    for (const k of PRIORITY) {
+      if (!(k in obj)) continue;
+      const v = (obj as any)[k];
+      if (Array.isArray(v)) {
+        for (const it of v) {
+          const cand = typeof it === 'string'
+            ? (extractFirstUrl(it) || it)
+            : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
+          if (cand && isImgUrl(cand)) return cand;
+          const deep = deepFindImage(it, depth + 1);
+          if (deep) return deep;
+        }
+      } else {
+        const hit = deepFindImage(v, depth + 1);
+        if (hit) return hit;
+      }
+    }
+    for (const k of Object.keys(obj)) {
+      const hit = deepFindImage(obj[k], depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function pickRawImageUrl(x: any): string | null {
+  const DIRECT = [
+    'image','imgUrl','img_url','imageUrl','image_url',
+    'picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src'
+  ];
+  for (const k of DIRECT) {
+    const v = (x as any)?.[k];
+    if (!v) continue;
+    if (typeof v === 'string') {
+      const url = extractFirstUrl(v) || v;
+      if (url && isImgUrl(url)) return url;
+    } else {
+      const hit = deepFindImage(v);
+      if (hit) return hit;
+    }
+  }
+  const LIST = ['images','pictures','pics','photos','gallery','media','attachments'];
+  for (const k of LIST) {
+    const v = (x as any)?.[k];
+    if (Array.isArray(v)) {
+      for (const it of v) {
+        const url = typeof it === 'string'
+          ? (extractFirstUrl(it) || it)
+          : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
+        if (url && isImgUrl(url)) return url;
+      }
+    }
+  }
+  return deepFindImage(x);
+}
+
+function buildSrcs(raw: string | null): { direct: string; proxy: string } {
   const abs = absolutize(raw || '') || '';
   if (!abs) return { direct: '', proxy: '' };
   if (abs.startsWith('http://')) {
@@ -100,39 +186,34 @@ function buildImageSources(raw: string | null): { direct: string; proxy: string 
   return { direct: abs, proxy: toProxy(abs) };
 }
 
-/* ========= 其它工具 ========= */
-
+/* ================== 其它工具 ================== */
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem('cart') || '[]';
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
-
 function saveCart(arr: CartItem[]) {
   if (typeof window === 'undefined') return;
   localStorage.setItem('cart', JSON.stringify(arr));
 }
 
-/** 解码列表页塞进来的 d：修复乱码关键点 —— 需要 escape() 再 decodeURIComponent */
-function safeDecodeItem(d: string | null): DetailItem | null {
-  if (!d) return null;
+/** 关键修复：UTF-8 对称解码，避免标题乱码 */
+function safeDecodeItem(encoded: string | null): DetailItem | null {
+  if (!encoded) return null;
   try {
-    const b64 = decodeURIComponent(d);
-    // 与列表页的 btoa(unescape(encodeURIComponent())) 完全对称
+    const b64 = decodeURIComponent(encoded);
     const json = decodeURIComponent(escape(atob(b64)));
     const obj = JSON.parse(json);
-    if (obj && typeof obj === 'object') return obj as DetailItem;
-  } catch {}
-  return null;
+    return (obj && typeof obj === 'object') ? (obj as DetailItem) : null;
+  } catch {
+    return null;
+  }
 }
 
-/* ========= 页面 ========= */
-
+/* ================== 页面 ================== */
 export default function StockDetailPage() {
   return (
     <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
@@ -145,24 +226,21 @@ function Inner() {
   const router = useRouter();
   const search = useSearchParams();
 
-  // 安全读取 d
   const d = useMemo(() => search?.get('d') ?? null, [search]);
-
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
   const [added, setAdded] = useState<string | null>(null);
 
-  useEffect(() => {
-    setItem(safeDecodeItem(d));
-  }, [d]);
+  useEffect(() => setItem(safeDecodeItem(d)), [d]);
 
-  const title =
-    item?.product || item?.name || item?.title || '未命名配件';
+  // 标题与副标题
+  const title = item?.product || item?.name || item?.title || '未命名配件';
   const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
   const oe = item?.oe;
 
-  const img = useMemo(() => {
-    const raw = item?.image || item?.imgUrl || item?.img || item?.pic || item?.picture || item?.url || null;
-    return buildImageSources(raw);
+  // 图片：对 d 里的对象做一次“深挖”
+  const src = useMemo(() => {
+    const raw = pickRawImageUrl(item || {});
+    return buildSrcs(raw);
   }, [item]);
 
   const addToCart = () => {
@@ -171,18 +249,18 @@ function Inner() {
     const next: CartItem = {
       key,
       num: item.num,
-      product: item.product || title,
+      product: title,
       oe: item.oe,
       brand: item.brand,
       model: item.model,
       year: item.year,
       qty: 1,
-      image: item.image || null,
+      image: pickRawImageUrl(item || {}),
     };
     const cart = [...loadCart(), next];
     saveCart(cart);
     setAdded('已加入购物车（本地保存）！');
-    setTimeout(() => setAdded(null), 1600);
+    setTimeout(() => setAdded(null), 1500);
   };
 
   return (
@@ -196,13 +274,13 @@ function Inner() {
         <div className="rounded-2xl border bg-white p-3">
           <div className="relative rounded-xl overflow-hidden bg-white" style={{ width: '100%', height: 480 }}>
             <img
-              src={img.direct || img.proxy || FALLBACK_IMG}
+              src={src.direct || src.proxy || FALLBACK_IMG}
               alt={title}
               style={{ objectFit: 'contain', width: '100%', height: '100%' }}
               onError={(e) => {
                 const el = e.currentTarget as HTMLImageElement;
                 const isProxy = el.src.includes('images.weserv.nl/?url=');
-                if (!isProxy && img.proxy) el.src = img.proxy;
+                if (!isProxy && src.proxy) el.src = src.proxy;
                 else if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
               }}
             />
@@ -213,7 +291,8 @@ function Inner() {
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>
           <div className="text-gray-500 mt-1">{sub}</div>
-          {oe && <div className="text-gray-400 text-sm mt-2">OE: {oe}</div>}
+          <div className="text-gray-500 mt-1">{item?.num ? `编号：${item.num}` : null}</div>
+          {oe && <div className="text-gray-500 mt-1">OE：{oe}</div>}
 
           <div className="mt-6 flex gap-3">
             <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={addToCart}>
