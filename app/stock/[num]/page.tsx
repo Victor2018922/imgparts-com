@@ -14,7 +14,7 @@ type DetailItem = {
   brand?: string;       // 品牌
   model?: string;       // 车型
   year?: string;        // 年款
-  image?: string | null;// 我们传过来的图
+  image?: string | null;// 可能的单图
   img?: string | null;
   imgUrl?: string | null;
   pic?: string | null;
@@ -41,7 +41,7 @@ type CartItem = {
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;         // API 每页数量
-const MAX_PAGES_TO_SCAN = 30; // 兜底最多扫描 30 页（600 条），可按需调整
+const MAX_PAGES_TO_SCAN = 30; // 兜底最多扫描 30 页（600 条）
 
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
@@ -54,7 +54,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ================== 工具：图片提取 + 代理（与列表页一致） ================== */
+/* ================== 图片工具（与列表页一致） ================== */
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -98,93 +98,52 @@ function toProxy(u: string): string {
   return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
 }
 
-function deepFindImage(obj: any, depth = 0): string | null {
-  if (!obj || depth > 4) return null;
+function collectUrlsFromAny(v: any): string[] {
+  const out: string[] = [];
+  const push = (s: string | null) => {
+    const url = s && (extractFirstUrl(s) || s);
+    if (url && isImgUrl(url)) out.push(url);
+  };
 
-  if (typeof obj === 'string') {
-    const url = extractFirstUrl(obj) || obj;
-    return url && isImgUrl(url) ? url : null;
+  if (!v) return out;
+  if (typeof v === 'string') { push(v); return out; }
+  if (Array.isArray(v)) { v.forEach((it) => out.push(...collectUrlsFromAny(it))); return out; }
+  if (typeof v === 'object') {
+    for (const k of Object.keys(v)) out.push(...collectUrlsFromAny(v[k]));
   }
-
-  if (Array.isArray(obj)) {
-    for (const v of obj) {
-      const hit = deepFindImage(v, depth + 1);
-      if (hit) return hit;
-    }
-    return null;
-  }
-
-  if (typeof obj === 'object') {
-    const PRIORITY = [
-      'image','imgUrl','img_url','imageUrl','image_url',
-      'picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src',
-      'images','pictures','pics','photos','gallery','media','attachments',
-      'content','html','desc','description'
-    ];
-    for (const k of PRIORITY) {
-      if (!(k in obj)) continue;
-      const v = (obj as any)[k];
-      if (Array.isArray(v)) {
-        for (const it of v) {
-          const cand = typeof it === 'string'
-            ? (extractFirstUrl(it) || it)
-            : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
-          if (cand && isImgUrl(cand)) return cand;
-          const deep = deepFindImage(it, depth + 1);
-          if (deep) return deep;
-        }
-      } else {
-        const hit = deepFindImage(v, depth + 1);
-        if (hit) return hit;
-      }
-    }
-    for (const k of Object.keys(obj)) {
-      const hit = deepFindImage(obj[k], depth + 1);
-      if (hit) return hit;
-    }
-  }
-  return null;
+  return out;
 }
 
-function pickRawImageUrl(x: any): string | null {
-  const DIRECT = [
-    'image','imgUrl','img_url','imageUrl','image_url',
-    'picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src'
+/** 从对象“深挖”出尽可能多的图片地址，去重后返回（最多 8 张） */
+function pickMultiImages(x: any, max = 8): string[] {
+  if (!x) return [];
+  const PRIORITY_FIELDS = [
+    // 明确的单图字段
+    'image','imgUrl','img_url','imageUrl','image_url','picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src',
+    // 容器字段
+    'images','pictures','pics','photos','gallery','media','attachments',
+    // 可能含 HTML/文本的描述字段
+    'content','html','desc','description'
   ];
-  for (const k of DIRECT) {
-    const v = (x as any)?.[k];
-    if (!v) continue;
-    if (typeof v === 'string') {
-      const url = extractFirstUrl(v) || v;
-      if (url && isImgUrl(url)) return url;
-    } else {
-      const hit = deepFindImage(v);
-      if (hit) return hit;
-    }
-  }
-  const LIST = ['images','pictures','pics','photos','gallery','media','attachments'];
-  for (const k of LIST) {
-    const v = (x as any)?.[k];
-    if (Array.isArray(v)) {
-      for (const it of v) {
-        const url = typeof it === 'string'
-          ? (extractFirstUrl(it) || it)
-          : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
-        if (url && isImgUrl(url)) return url;
-      }
-    }
-  }
-  return deepFindImage(x);
-}
 
-function buildSrcs(raw: string | null): { direct: string; proxy: string } {
-  const abs = absolutize(raw || '') || '';
-  if (!abs) return { direct: '', proxy: '' };
-  if (abs.startsWith('http://')) {
-    const p = toProxy(abs);
-    return { direct: p, proxy: p };
+  const bag: string[] = [];
+
+  for (const k of PRIORITY_FIELDS) {
+    if (k in x) bag.push(...collectUrlsFromAny((x as any)[k]));
   }
-  return { direct: abs, proxy: toProxy(abs) };
+  // 再全对象兜底扫描
+  if (bag.length < max) bag.push(...collectUrlsFromAny(x));
+
+  // 绝对化 + 去重 + 截断
+  const uniq: string[] = [];
+  for (const raw of bag) {
+    const abs = absolutize(raw);
+    if (!abs) continue;
+    const final = abs.startsWith('http://') ? toProxy(abs) : abs;
+    if (!uniq.includes(final)) uniq.push(final);
+    if (uniq.length >= max) break;
+  }
+  return uniq.length ? uniq : [];
 }
 
 /* ================== 其它工具 ================== */
@@ -242,20 +201,28 @@ function Inner() {
   const search = useSearchParams();
 
   const d = useMemo(() => search?.get('d') ?? null, [search]);
-
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
+
+  // 多图画廊状态
+  const [images, setImages] = useState<string[]>(() => pickMultiImages(safeDecodeItem(d) || {}));
+  const [active, setActive] = useState(0);
   const [added, setAdded] = useState<string | null>(null);
 
-  // ====== 若 d 里没有图片，则按 num 逐页兜底请求 API 来补图/补充信息 ======
+  // 同步 d 改变
   useEffect(() => {
-    setItem(safeDecodeItem(d));
+    const obj = safeDecodeItem(d);
+    setItem(obj);
+    const fromD = pickMultiImages(obj || {});
+    if (fromD.length) {
+      setImages(fromD);
+      setActive(0);
+    }
   }, [d]);
 
+  // ====== 若 d 里没有图或信息不足，则按 num 逐页兜底请求 API 来补图/补充信息 ======
   useEffect(() => {
-    const hasImage = !!pickRawImageUrl(item || {});
-    const hasBasic  = !!(item?.product || item?.name || item?.title);
-
-    if (hasImage && hasBasic) return; // 已有图且有基本信息，不用兜底
+    const alreadyHas = images.length > 0 && (item?.product || item?.name || item?.title);
+    if (alreadyHas) return;
 
     const num = params?.num;
     if (!num) return;
@@ -274,11 +241,11 @@ function Inner() {
 
           const found = arr.find((x: any) => String(x?.num || '').trim() === String(num).trim());
           if (found) {
-            const imgRaw = pickRawImageUrl(found);
             if (cancelled) return;
+            const imgs = pickMultiImages(found);
+            setImages((prev) => (prev.length ? prev : imgs));
             setItem((prev) => ({
               ...prev,
-              // 用 API 的原始数据补全
               num: found.num ?? prev?.num,
               product: found.product ?? found.name ?? found.title ?? prev?.product,
               oe: found.oe ?? prev?.oe,
@@ -286,16 +253,10 @@ function Inner() {
               model: found.model ?? prev?.model,
               year: found.year ?? prev?.year,
               image:
-                imgRaw ??
-                prev?.image ??
-                prev?.imgUrl ??
-                prev?.img ??
-                prev?.pic ??
-                prev?.picture ??
-                prev?.url ??
-                null,
-              ...found, // 保留更多字段以便后续扩展
+                found.image ?? prev?.image ?? null,
+              ...found,
             }));
+            setActive(0);
             break;
           }
         }
@@ -305,7 +266,7 @@ function Inner() {
     })();
 
     return () => { cancelled = true; };
-  }, [params?.num, item?.image, item?.product]);
+  }, [params?.num, images.length, item?.product]);
 
   // 标题与副标题
   const title =
@@ -313,27 +274,27 @@ function Inner() {
   const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
   const oe = item?.oe;
 
-  // 图片：对当前 item 做“深挖”
-  const src = useMemo(() => {
-    const raw = pickRawImageUrl(item || {});
-    return buildSrcs(raw);
-  }, [item]);
+  // 画廊当前主图
+  const mainSrc = images[active] || FALLBACK_IMG;
+
+  const prev = () => setActive((i) => (images.length ? (i - 1 + images.length) % images.length : 0));
+  const next = () => setActive((i) => (images.length ? (i + 1) % images.length : 0));
 
   const addToCart = () => {
-    if (!item) return;
-    const key = `${item.num || ''}|${item.oe || ''}|${Date.now()}`;
-    const next: CartItem = {
+    const firstImg = images[0] || null;
+    const key = `${item?.num || ''}|${item?.oe || ''}|${Date.now()}`;
+    const nextItem: CartItem = {
       key,
-      num: item.num,
+      num: item?.num,
       product: title,
-      oe: item.oe,
-      brand: item.brand,
-      model: item.model,
-      year: item.year,
+      oe: item?.oe,
+      brand: item?.brand,
+      model: item?.model,
+      year: item?.year,
       qty: 1,
-      image: pickRawImageUrl(item || {}),
+      image: firstImg,
     };
-    const cart = [...loadCart(), next];
+    const cart = [...loadCart(), nextItem];
     saveCart(cart);
     setAdded('已加入购物车（本地保存）！');
     setTimeout(() => setAdded(null), 1500);
@@ -346,21 +307,54 @@ function Inner() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 大图 */}
+        {/* 多图画廊 */}
         <div className="rounded-2xl border bg-white p-3">
           <div className="relative rounded-xl overflow-hidden bg-white" style={{ width: '100%', height: 480 }}>
             <img
-              src={src.direct || src.proxy || FALLBACK_IMG}
+              src={mainSrc}
               alt={title}
               style={{ objectFit: 'contain', width: '100%', height: '100%' }}
               onError={(e) => {
                 const el = e.currentTarget as HTMLImageElement;
-                const isProxy = el.src.includes('images.weserv.nl/?url=');
-                if (!isProxy && src.proxy) el.src = src.proxy;
-                else if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
+                if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
               }}
             />
+            {images.length > 1 && (
+              <>
+                <button
+                  aria-label="上一张"
+                  onClick={prev}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow"
+                >‹</button>
+                <button
+                  aria-label="下一张"
+                  onClick={next}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow"
+                >›</button>
+              </>
+            )}
           </div>
+
+          {/* 缩略图 */}
+          {images.length > 1 && (
+            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+              {images.map((src, idx) => (
+                <button
+                  key={src + idx}
+                  onClick={() => setActive(idx)}
+                  className={`h-16 w-16 shrink-0 rounded border ${idx === active ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'}`}
+                  title={`图片 ${idx + 1}`}
+                >
+                  <img
+                    src={src}
+                    alt={`thumb-${idx + 1}`}
+                    className="h-full w-full object-contain"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 文案与操作 */}
