@@ -43,9 +43,7 @@ const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
 
-/* ----------------------------------------------
-   更激进、更健壮的图片解析工具
-   ---------------------------------------------- */
+/* ================== 图片解析与兜底 ================== */
 
 /** 判断“像图片地址” */
 function isLikelyImageUrl(s: string): boolean {
@@ -54,59 +52,55 @@ function isLikelyImageUrl(s: string): boolean {
   if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
   if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif|avif)(\?|#|$)/i.test(v)) return true;
   if (/\/(upload|image|images|img|media|file|files)\//i.test(v)) return true;
-  if (/[?&](file|img|image|pic)=/i.test(v)) return true;
+  if (/[?&](file|img|image|pic|path)=/i.test(v)) return true;
   return false;
 }
 
-/** 从任意字符串中抽出第一个 URL（即使字符串里还带其它文字/HTML） */
+/** 从任意字符串中抽第一个 URL（包含 HTML 片段时也可取出 <img src>） */
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
-  // 先找 <img src="...">
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
   if (m1?.[1]) return m1[1];
-
-  // 再找 http(s)://xxxx
   const m2 = s.match(/https?:\/\/[^\s"'<>\\)]+/i);
   if (m2?.[0]) return m2[0];
-
-  // 再找 //xxxx（协议相对）
   const m3 = s.match(/(^|[^:])\/\/[^\s"'<>\\)]+/i);
   if (m3) {
-    const hit = m3[0].replace(/^.+?(\/\/)/, '//$2').trim();
+    const raw = m3[0];
+    const hit = raw.slice(raw.indexOf('//')); // 取到 //
     if (hit.startsWith('//')) return hit;
   }
-
-  // 再找 /xxx 相对路径
-  if (/\/[^\s"'<>\\)]+/.test(s)) {
-    const m4 = s.match(/\/[^\s"'<>\\)]+/);
-    if (m4?.[0]) return m4[0];
-  }
+  const m4 = s.match(/\/[^\s"'<>\\)]+/);
+  if (m4?.[0]) return m4[0];
   return null;
 }
 
-/** 归一化 URL：强制 http→https，协议相对/相对路径补全为绝对地址 */
-function normalizeImageUrl(u: string | null): string | null {
+/** 将 URL 规范化为可直接访问的绝对地址（但不强制 http→https） */
+function absolutize(u: string | null): string | null {
   if (!u) return null;
   let s = u.trim();
   if (!s) return null;
   if (s.startsWith('data:image')) return s;
-
-  if (s.startsWith('//')) s = 'https:' + s;
-  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
-  if (/^https?:\/\//i.test(s)) return encodeURI(s);
-
-  if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
-  return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
+  if (s.startsWith('//')) return 'http:' + s; // 先保留 http，稍后可代理
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('/')) return BASE_ORIGIN + s;
+  return BASE_ORIGIN + '/' + s.replace(/^\.\//, '');
 }
 
-/** 深度扫描对象，尽可能挖出第一张图片 URL */
+/** 通过 HTTPS 图片代理，解决 https 页面加载 http 图片被拦截的问题 */
+function toProxy(u: string): string {
+  // images.weserv.nl 要求不包含协议，或者用 url= 参数
+  // 为兼容所有情况，这里统一用 url=，并移除协议
+  const clean = u.replace(/^https?:\/\//i, '');
+  return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
+}
+
+/** 深度扫描对象，尽量挖出第一张图片 URL（原始值） */
 function deepFindImage(obj: any, depth = 0): string | null {
   if (!obj || depth > 4) return null;
 
   if (typeof obj === 'string') {
-    const url = extractFirstUrl(obj);
+    const url = extractFirstUrl(obj) || obj;
     if (url && isLikelyImageUrl(url)) return url;
-    if (isLikelyImageUrl(obj)) return obj;
     return null;
   }
 
@@ -119,27 +113,26 @@ function deepFindImage(obj: any, depth = 0): string | null {
   }
 
   if (typeof obj === 'object') {
-    // 优先常见图片字段
     const PRIORITY_KEYS = [
       'image', 'imgUrl', 'img_url', 'imageUrl', 'image_url',
-      'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src',
-      // 常见集合字段
+      'picture', 'pic', 'picUrl', 'pic_url',
+      'thumbnail', 'thumb', 'url', 'path', 'src',
       'images', 'pictures', 'pics', 'photos', 'gallery', 'media', 'attachments',
-      // 有些后端把 HTML 放在描述里
-      'content', 'html', 'desc', 'description'
+      'content', 'html', 'desc', 'description',
     ];
 
     for (const k of PRIORITY_KEYS) {
       if (k in obj) {
         const v = (obj as any)[k];
-        // 集合
         if (Array.isArray(v)) {
           for (const it of v) {
-            const viaObj =
-              (typeof it === 'object' && (it?.url || it?.src || it?.path)) ?
-                (it.url || it.src || it.path) : it;
-            const hit = deepFindImage(viaObj, depth + 1);
-            if (hit) return hit;
+            const cand =
+              typeof it === 'string'
+                ? (extractFirstUrl(it) || it)
+                : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
+            if (cand && isLikelyImageUrl(cand)) return cand;
+            const deep = deepFindImage(it, depth + 1);
+            if (deep) return deep;
           }
         } else {
           const hit = deepFindImage(v, depth + 1);
@@ -148,7 +141,6 @@ function deepFindImage(obj: any, depth = 0): string | null {
       }
     }
 
-    // 兜底：遍历所有 key
     for (const k of Object.keys(obj)) {
       const hit = deepFindImage(obj[k], depth + 1);
       if (hit) return hit;
@@ -158,14 +150,12 @@ function deepFindImage(obj: any, depth = 0): string | null {
   return null;
 }
 
-/** 在一个条目对象上挑出最可能的图片 URL（字符串或嵌套里） */
+/** 在条目对象上挑出最可能的图片 URL（原始值，未做协议替换） */
 function pickRawImageUrl(x: StockItem | CartItem): string | null {
   const anyx = x as any;
-
-  // 直接字段（优先级最高）
   const DIRECT_KEYS = [
     'image', 'imgUrl', 'img_url', 'imageUrl', 'image_url',
-    'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src'
+    'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src',
   ];
   for (const k of DIRECT_KEYS) {
     const v = anyx?.[k];
@@ -179,26 +169,39 @@ function pickRawImageUrl(x: StockItem | CartItem): string | null {
     }
   }
 
-  // 可能是集合
   const LIST_KEYS = ['images', 'pictures', 'pics', 'photos', 'gallery', 'media', 'attachments'];
   for (const k of LIST_KEYS) {
     const v = anyx?.[k];
     if (Array.isArray(v)) {
       for (const it of v) {
-        // 既兼容字符串，又兼容 {url/src/path: xxx}
-        const url = typeof it === 'string'
-          ? (extractFirstUrl(it) || it)
-          : (it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it)));
+        const url =
+          typeof it === 'string'
+            ? (extractFirstUrl(it) || it)
+            : it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it));
         if (url && isLikelyImageUrl(url)) return url;
       }
     }
   }
 
-  // 兜底：深度扫描整个对象
   return deepFindImage(anyx);
 }
 
-/* ---------------------------------------------- */
+/** 返回：{ direct, proxy }，优先用 direct，失败再切 proxy */
+function buildImageSources(raw: string | null): { direct: string; proxy: string } {
+  // 先得到绝对地址（可能是 http）
+  const abs = absolutize(raw || '') || '';
+  if (!abs) {
+    return { direct: '', proxy: '' };
+  }
+  // 如果是 http（或协议相对转成了 http），先用代理；但也提供 direct 作为备用
+  if (abs.startsWith('http://')) {
+    return { direct: toProxy(abs), proxy: toProxy(abs) };
+  }
+  // https 直链优先，备用代理
+  return { direct: abs, proxy: toProxy(abs) };
+}
+
+/* ================== 其它工具与常量 ================== */
 
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
@@ -277,7 +280,8 @@ function saveCart(arr: CartItem[]) {
   localStorage.setItem('cart', JSON.stringify(arr));
 }
 
-/** 外层：包 Suspense（useSearchParams 需要） */
+/* ================== 页面组件 ================== */
+
 export default function StockPage() {
   return (
     <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
@@ -290,7 +294,6 @@ function StockPageInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
-  // 结算开关 & 搜索词从 URL 读取
   const checkoutOpen = !!(sp && sp.get('checkout'));
   const [q, setQ] = useState<string>(() => (sp?.get('q') || '').trim());
   useEffect(() => {
@@ -304,9 +307,7 @@ function StockPageInner() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // cart & checkout state
   const [cart, setCart] = useState<CartItem[]>([]);
-  // 默认从首页用户选择读取
   const [tradeMode, setTradeMode] = useState<'B2C' | 'B2B'>('B2C');
   const [company, setCompany] = useState('');
   const [name, setName] = useState('');
@@ -316,7 +317,6 @@ function StockPageInner() {
   const [city, setCity] = useState('');
   const [address, setAddress] = useState('');
   const [postcode, setPostcode] = useState('');
-  // 国际化条款
   const [currency, setCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'CNY'>('USD');
   const [incoterm, setIncoterm] = useState<'EXW' | 'FOB' | 'CIF' | 'DAP'>('EXW');
   const [shipping, setShipping] = useState<'Express' | 'Air' | 'Sea'>('Express');
@@ -326,7 +326,6 @@ function StockPageInner() {
 
   useEffect(() => {
     setCart(loadCart());
-    // 读取首页设定
     try {
       const pref = localStorage.getItem('preferredTradeMode');
       if (pref === 'B2B' || pref === 'B2C') setTradeMode(pref);
@@ -373,32 +372,21 @@ function StockPageInner() {
     setCart([]);
   };
 
+  function 公司名称有效(v: string) {
+    return v && v.trim().length >= 2;
+  }
+
   const submitOrder = (e: React.FormEvent) => {
     e.preventDefault();
     setFormMsg(null);
 
-    if (!cart.length) {
-      setFormMsg('购物车为空');
-      return;
-    }
-    if (!name.trim()) {
-      setFormMsg('请填写联系人姓名');
-      return;
-    }
-    if (!phone.trim() || phone.trim().length < 6) {
-      setFormMsg('请填写有效联系电话（至少6位）');
-      return;
-    }
+    if (!cart.length) return setFormMsg('购物车为空');
+    if (!name.trim()) return setFormMsg('请填写联系人姓名');
+    if (!phone.trim() || phone.trim().length < 6) return setFormMsg('请填写有效联系电话（至少6位）');
     const emailVal = email.trim();
     const emailOK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal);
-    if (!emailVal || !emailOK) {
-      setFormMsg('请填写有效邮箱地址');
-      return;
-    }
-    if (tradeMode === 'B2B' && !公司名称有效(company)) {
-      setFormMsg('B2B 模式下，公司名称为必填项');
-      return;
-    }
+    if (!emailVal || !emailOK) return setFormMsg('请填写有效邮箱地址');
+    if (tradeMode === 'B2B' && !公司名称有效(company)) return setFormMsg('B2B 模式下，公司名称为必填项');
 
     const order = {
       id: 'ORD-' + Date.now(),
@@ -424,13 +412,8 @@ function StockPageInner() {
       localStorage.setItem('lastOrder', JSON.stringify(order));
       clearCart();
     }
-
     setSubmitted(true);
   };
-
-  function 公司名称有效(v: string) {
-    return v && v.trim().length >= 2;
-  }
 
   const loadPage = useCallback(
     async (p: number) => {
@@ -546,15 +529,14 @@ function StockPageInner() {
         ) : (
           filteredItems.map((item) => {
             const raw = pickRawImageUrl(item);
-            const src = normalizeImageUrl(raw) || FALLBACK_IMG;
+            const { direct, proxy } = buildImageSources(raw);
+            const firstSrc = direct || proxy || FALLBACK_IMG;
             const alt =
               [item.brand, item.product, item.model, item.oe]
                 .filter(Boolean)
                 .join(' ') || 'Product Image';
             const d = encodeItemForUrl(item);
-            const href = `/stock/${encodeURIComponent(item.num || '')}${
-              d ? `?d=${d}` : ''
-            }`;
+            const href = `/stock/${encodeURIComponent(item.num || '')}${d ? `?d=${d}` : ''}`;
 
             return (
               <Link
@@ -568,14 +550,17 @@ function StockPageInner() {
                     style={{ width: 120, height: 120 }}
                   >
                     <img
-                      src={src}
+                      src={firstSrc}
                       alt={alt}
                       width={120}
                       height={120}
                       style={{ objectFit: 'contain', width: '100%', height: '100%' }}
                       onError={(e) => {
                         const el = e.currentTarget as HTMLImageElement;
-                        if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
+                        // 如果当前不是代理且有代理，先切换到代理；否则用占位图
+                        const isProxy = el.src.includes('images.weserv.nl/?url=');
+                        if (!isProxy && proxy) el.src = proxy;
+                        else if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
                       }}
                       loading="lazy"
                     />
@@ -645,12 +630,12 @@ function StockPageInner() {
                   ) : (
                     <ul className="space-y-3">
                       {cart.map((it) => {
-                        const src =
-                          normalizeImageUrl(pickRawImageUrl(it)) || FALLBACK_IMG;
+                        const raw = pickRawImageUrl(it);
+                        const { direct, proxy } = buildImageSources(raw);
+                        const firstSrc = direct || proxy || FALLBACK_IMG;
                         const alt =
-                          [it.brand, it.product, it.model, it.oe]
-                            .filter(Boolean)
-                            .join(' ') || 'Product';
+                          [it.brand, it.product, it.model, it.oe].filter(Boolean).join(' ') ||
+                          'Product';
                         return (
                           <li key={it.key} className="flex gap-3 border rounded-xl p-3">
                             <div
@@ -658,14 +643,16 @@ function StockPageInner() {
                               style={{ width: 72, height: 72 }}
                             >
                               <img
-                                src={src}
+                                src={firstSrc}
                                 alt={alt}
                                 width={72}
                                 height={72}
                                 style={{ objectFit: 'contain', width: '100%', height: '100%' }}
                                 onError={(e) => {
                                   const el = e.currentTarget as HTMLImageElement;
-                                  if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
+                                  const isProxy = el.src.includes('images.weserv.nl/?url=');
+                                  if (!isProxy && proxy) el.src = proxy;
+                                  else if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
                                 }}
                                 loading="lazy"
                               />
@@ -783,7 +770,7 @@ function StockPageInner() {
                       <input
                         className="border rounded-lg px-3 py-2 md:col-span-2"
                         placeholder="公司名称（必填）"
-                        value={公司名称有效(company) ? company : company}
+                        value={company}
                         onChange={(e) => setCompany(e.target.value)}
                       />
                     )}
@@ -796,7 +783,6 @@ function StockPageInner() {
                     <input className="border rounded-lg px-3 py-2" placeholder="邮编" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
                   </div>
 
-                  {/* 订单备注 */}
                   <textarea
                     className="border rounded-lg px-3 py-2 w-full"
                     rows={3}
@@ -808,18 +794,10 @@ function StockPageInner() {
                   {formMsg && <div className="text-sm text-red-600">{formMsg}</div>}
 
                   <div className="pt-2 flex gap-3">
-                    <button
-                      type="submit"
-                      className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-                      disabled={!cart.length}
-                    >
+                    <button type="submit" className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" disabled={!cart.length}>
                       提交订单
                     </button>
-                    <button
-                      type="button"
-                      className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-                      onClick={() => router.push('/stock')}
-                    >
+                    <button type="button" className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={() => router.push('/stock')}>
                       继续浏览
                     </button>
                   </div>
@@ -832,10 +810,7 @@ function StockPageInner() {
                   你可在浏览器本地的 <code>lastOrder</code> 查看订单草稿（包含货币、Incoterms、运输方式与备注），后续可接入后端接口。
                 </div>
                 <div className="mt-6">
-                  <button
-                    className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-                    onClick={() => router.push('/stock')}
-                  >
+                  <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={() => router.push('/stock')}>
                     返回库存预览
                   </button>
                 </div>
