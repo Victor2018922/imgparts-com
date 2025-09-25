@@ -62,9 +62,7 @@ function extractImgFromHtml(html: string): string | null {
 function deepFindImage(obj: any, depth = 0): string | null {
   if (!obj || depth > 3) return null;
   if (typeof obj === 'string') {
-    // 先看是否是纯 URL / 路径
     if (isLikelyImageUrl(obj)) return obj.trim();
-    // 再尝试 HTML 里的 <img src>
     const fromHtml = extractImgFromHtml(obj);
     if (fromHtml && isLikelyImageUrl(fromHtml)) return fromHtml;
     return null;
@@ -97,9 +95,9 @@ function pickRawImageUrl(x: StockItem | CartItem): string | null {
     'thumb',
     'thumbnail',
     'url',
-    // 注意 'img' 只有像 URL 才使用
+    // 仅在“像图片”时才用 img
     'img',
-    // 常见内容字段里可能嵌 HTML
+    // 某些后端把 HTML 放在这些字段
     'content',
     'html',
     'desc',
@@ -199,6 +197,7 @@ function encodeItemForUrl(item: StockItem): string {
   }
 }
 
+/* 读取 / 保存购物车（本地存储） */
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -228,7 +227,13 @@ export default function StockPage() {
 function StockPageInner() {
   const router = useRouter();
   const sp = useSearchParams();
+
+  // 结算开关 & 搜索词从 URL 读取
   const checkoutOpen = !!(sp && sp.get('checkout'));
+  const [q, setQ] = useState<string>(() => (sp?.get('q') || '').trim());
+  useEffect(() => {
+    setQ((sp?.get('q') || '').trim());
+  }, [sp]);
 
   const [items, setItems] = useState<StockItem[]>([]);
   const [page, setPage] = useState(0);
@@ -399,6 +404,19 @@ function StockPageInner() {
     loadPage(0);
   }, [loadPage]);
 
+  // 搜索过滤（客户端）
+  const filteredItems = useMemo(() => {
+    const kw = (q || '').toLowerCase();
+    if (!kw) return items;
+    return items.filter((it) => {
+      const bag = [it.num, it.oe, it.product, it.brand, it.model]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return bag.includes(kw);
+    });
+  }, [items, q]);
+
   return (
     <main className="container mx-auto p-4">
       {banner && (
@@ -410,10 +428,46 @@ function StockPageInner() {
         </div>
       )}
 
-      <div className="flex justify-end mb-3">
+      {/* 搜索 + 购物车按钮 */}
+      <div className="mb-3 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+        <div className="flex items-center gap-2 w-full md:w-[520px]">
+          <input
+            className="flex-1 border rounded-lg px-3 py-2 text-sm"
+            placeholder="搜索：OE号 / 商品名 / 品牌 / 车型"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+                router.push(`/stock${qs}`);
+              }
+            }}
+          />
+          <button
+            className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+            onClick={() => {
+              const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+              router.push(`/stock${qs}`);
+            }}
+          >
+            搜索
+          </button>
+          {q && (
+            <button
+              className="rounded-lg border px-2 py-2 text-xs hover:bg-gray-50"
+              onClick={() => {
+                setQ('');
+                router.push('/stock');
+              }}
+            >
+              清空
+            </button>
+          )}
+        </div>
+
         <button
-          onClick={() => router.push('/stock?checkout=1')}
-          className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
+          onClick={() => router.push(`/stock?checkout=1`)}
+          className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50 self-end md:self-auto"
         >
           购物车 / 结算 {totalQty ? `(${totalQty})` : ''}
         </button>
@@ -421,59 +475,61 @@ function StockPageInner() {
 
       {/* 列表 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {items.map((item) => {
-          const raw = pickRawImageUrl(item);
-          const src = normalizeImageUrl(raw) || FALLBACK_IMG;
-          const alt =
-            [item.brand, item.product, item.model, item.oe]
-              .filter(Boolean)
-              .join(' ') || 'Product Image';
-          const d = encodeItemForUrl(item);
-          const href = `/stock/${encodeURIComponent(item.num || '')}${
-            d ? `?d=${d}` : ''
-          }`;
+        {filteredItems.length === 0 ? (
+          <div className="col-span-full text-sm text-gray-500">无匹配结果。</div>
+        ) : (
+          filteredItems.map((item) => {
+            const raw = pickRawImageUrl(item);
+            const src = normalizeImageUrl(raw) || FALLBACK_IMG;
+            const alt =
+              [item.brand, item.product, item.model, item.oe]
+                .filter(Boolean)
+                .join(' ') || 'Product Image';
+            const d = encodeItemForUrl(item);
+            const href = `/stock/${encodeURIComponent(item.num || '')}${
+              d ? `?d=${d}` : ''
+            }`;
 
-          return (
-            <Link
-              key={`${item.num}-${item.oe || ''}-${item.product}`}
-              href={href}
-              className="group block rounded-2xl border p-3 hover:shadow"
-            >
-              <div className="flex gap-3">
-                <div
-                  className="relative rounded-xl overflow-hidden bg-white shrink-0"
-                  style={{ width: 120, height: 120 }}
-                >
-                  <img
-                    src={src}
-                    alt={alt}
-                    width={120}
-                    height={120}
-                    style={{ objectFit: 'contain', width: '100%', height: '100%' }}
-                    onError={(e) => {
-                      const el = e.currentTarget as HTMLImageElement;
-                      if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
-                    }}
-                    loading="lazy"
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold group-hover:underline truncate">
-                    {item.product}
+            return (
+              <Link
+                key={`${item.num}-${item.oe || ''}-${item.product}`}
+                href={href}
+                className="group block rounded-2xl border p-3 hover:shadow"
+              >
+                <div className="flex gap-3">
+                  <div
+                    className="relative rounded-xl overflow-hidden bg-white shrink-0"
+                    style={{ width: 120, height: 120 }}
+                  >
+                    <img
+                      src={src}
+                      alt={alt}
+                      width={120}
+                      height={120}
+                      style={{ objectFit: 'contain', width: '100%', height: '100%' }}
+                      onError={(e) => {
+                        const el = e.currentTarget as HTMLImageElement;
+                        if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG;
+                      }}
+                      loading="lazy"
+                    />
                   </div>
-                  <div className="text-sm text-gray-500 truncate">
-                    {[item.brand, item.model, item.year]
-                      .filter(Boolean)
-                      .join(' · ')}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold group-hover:underline truncate">
+                      {item.product}
+                    </div>
+                    <div className="text-sm text-gray-500 truncate">
+                      {[item.brand, item.model, item.year].filter(Boolean).join(' · ')}
+                    </div>
+                    {item.oe && (
+                      <div className="text-xs text-gray-400 mt-1">OE: {item.oe}</div>
+                    )}
                   </div>
-                  {item.oe && (
-                    <div className="text-xs text-gray-400 mt-1">OE: {item.oe}</div>
-                  )}
                 </div>
-              </div>
-            </Link>
-          );
-        })}
+              </Link>
+            );
+          })
+        )}
       </div>
 
       {/* load more */}
@@ -665,13 +721,49 @@ function StockPageInner() {
                         onChange={(e) => setCompany(e.target.value)}
                       />
                     )}
-                    <input className="border rounded-lg px-3 py-2" placeholder="联系人姓名 *" value={name} onChange={(e) => setName(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2" placeholder="联系电话 *" value={phone} onChange={(e) => setPhone(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="邮箱（必填）" required value={email} onChange={(e) => setEmail(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2" placeholder="国家" value={country} onChange={(e) => setCountry(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2" placeholder="城市" value={city} onChange={(e) => setCity(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="详细地址" value={address} onChange={(e) => setAddress(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2" placeholder="邮编" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
+                    <input
+                      className="border rounded-lg px-3 py-2"
+                      placeholder="联系人姓名 *"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                    <input
+                      className="border rounded-lg px-3 py-2"
+                      placeholder="联系电话 *"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                    />
+                    <input
+                      className="border rounded-lg px-3 py-2 md:col-span-2"
+                      placeholder="邮箱（必填）"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                    <input
+                      className="border rounded-lg px-3 py-2"
+                      placeholder="国家"
+                      value={country}
+                      onChange={(e) => setCountry(e.target.value)}
+                    />
+                    <input
+                      className="border rounded-lg px-3 py-2"
+                      placeholder="城市"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                    />
+                    <input
+                      className="border rounded-lg px-3 py-2 md:col-span-2"
+                      placeholder="详细地址"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                    />
+                    <input
+                      className="border rounded-lg px-3 py-2"
+                      placeholder="邮编"
+                      value={postcode}
+                      onChange={(e) => setPostcode(e.target.value)}
+                    />
                   </div>
 
                   {/* 订单备注 */}
