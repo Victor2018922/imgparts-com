@@ -4,17 +4,16 @@ import React, { useEffect, useMemo, useState, Suspense } from 'react';
 import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import Link from 'next/link';
 
-/* ================== 类型 ================== */
 type DetailItem = {
-  num?: string;         // 编号
-  product?: string;     // 标题
+  num?: string;
+  product?: string;
   name?: string;
   title?: string;
-  oe?: string;          // OE
-  brand?: string;       // 品牌
-  model?: string;       // 车型
-  year?: string;        // 年款
-  image?: string | null;// 可能的单图
+  oe?: string;
+  brand?: string;
+  model?: string;
+  year?: string;
+  image?: string | null;
   img?: string | null;
   imgUrl?: string | null;
   pic?: string | null;
@@ -37,7 +36,6 @@ type CartItem = {
   image?: string | null;
 };
 
-/* ================== 常量 ================== */
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
@@ -48,13 +46,10 @@ const FALLBACK_IMG =
   encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">
       <rect width="100%" height="100%" fill="#f3f4f6"/>
-      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#9ca3af" font-size="16">
-        No Image
-      </text>
+      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#9ca3af" font-size="16">No Image</text>
     </svg>`
   );
 
-/* ================== 图片工具 ================== */
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -71,7 +66,6 @@ function extractFirstUrl(s: string): string | null {
   if (m4?.[0]) return m4[0];
   return null;
 }
-
 function isImgUrl(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
@@ -81,7 +75,6 @@ function isImgUrl(s: string): boolean {
   if (/[?&](file|img|image|pic|path)=/i.test(v)) return true;
   return false;
 }
-
 function absolutize(u: string | null): string | null {
   if (!u) return null;
   let s = u.trim();
@@ -96,7 +89,6 @@ function toProxy(u: string): string {
   const clean = u.replace(/^https?:\/\//i, '');
   return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
 }
-
 function collectUrlsFromAny(v: any): string[] {
   const out: string[] = [];
   const push = (s: string | null) => {
@@ -111,19 +103,15 @@ function collectUrlsFromAny(v: any): string[] {
   }
   return out;
 }
-
-/** 深挖多图：最多 18 张 */
 function pickMultiImages(x: any, max = 18): string[] {
   if (!x) return [];
   const FIELDS = [
     'image','imgUrl','img_url','imageUrl','image_url','picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src',
-    'images','pictures','pics','photos','gallery','media','attachments',
-    'content','html','desc','description'
+    'images','pictures','pics','photos','gallery','media','attachments','content','html','desc','description'
   ];
   const bag: string[] = [];
   for (const k of FIELDS) if (k in x) bag.push(...collectUrlsFromAny((x as any)[k]));
   if (bag.length < max) bag.push(...collectUrlsFromAny(x));
-
   const uniq: string[] = [];
   for (const raw of bag) {
     const abs = absolutize(raw);
@@ -132,10 +120,9 @@ function pickMultiImages(x: any, max = 18): string[] {
     if (!uniq.includes(final)) uniq.push(final);
     if (uniq.length >= max) break;
   }
-  return uniq.length ? uniq : [];
+  return uniq;
 }
 
-/* ================== 其它工具 ================== */
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
   try { const raw = localStorage.getItem('cart') || '[]'; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; }
@@ -168,7 +155,6 @@ function extractArray(js: any): any[] {
   return Array.isArray(cand) ? cand : [];
 }
 
-/* ================== 页面 ================== */
 export default function StockDetailPage() {
   return (
     <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
@@ -184,7 +170,6 @@ function Inner() {
 
   const d = useMemo(() => search?.get('d') ?? null, [search]);
   const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
-
   const [images, setImages] = useState<string[]>(() => pickMultiImages(safeDecodeItem(d) || {}, 18));
   const [active, setActive] = useState(0);
   const [added, setAdded] = useState<string | null>(null);
@@ -196,11 +181,8 @@ function Inner() {
     if (fromD.length) { setImages(fromD); setActive(0); }
   }, [d]);
 
-  // 兜底：按 num 扫描 API
+  // 兜底：按 num 扫描 API，并在拿到更多图时覆盖
   useEffect(() => {
-    const hasEnough = images.length > 0 && (item?.product || item?.name || item?.title);
-    if (hasEnough) return;
-
     const num = params?.num;
     if (!num) return;
 
@@ -219,7 +201,11 @@ function Inner() {
           if (found) {
             if (cancelled) return;
             const imgs = pickMultiImages(found, 18);
-            setImages((prev) => (prev.length ? prev : imgs));
+
+            // ★ 修复点：只有当兜底查到的数量“多于当前数量”时，才覆盖，保证缩略图能出现
+            setImages((prev) => (imgs.length > prev.length ? imgs : prev));
+            if (imgs.length > 0) setActive(0);
+
             setItem((prev) => ({
               ...prev,
               num: found.num ?? prev?.num,
@@ -231,14 +217,14 @@ function Inner() {
               image: found.image ?? prev?.image ?? null,
               ...found,
             }));
-            setActive(0);
             break;
           }
         }
       } catch {}
     })();
+
     return () => { cancelled = true; };
-  }, [params?.num, images.length, item?.product]);
+  }, [params?.num]);
 
   const title = item?.product || item?.name || item?.title || '未命名配件';
   const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
@@ -288,14 +274,23 @@ function Inner() {
               </>
             )}
           </div>
+
+          {/* 缩略图 */}
           {images.length > 1 && (
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
               {images.map((src, idx) => (
-                <button key={src + idx} onClick={() => setActive(idx)}
+                <button
+                  key={src + idx}
+                  onClick={() => setActive(idx)}
                   className={`h-16 w-16 shrink-0 rounded border ${idx === active ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'}`}
-                  title={`图片 ${idx + 1}`}>
-                  <img src={src} alt={`thumb-${idx + 1}`} className="h-full w-full object-contain"
-                       onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }} />
+                  title={`图片 ${idx + 1}`}
+                >
+                  <img
+                    src={src}
+                    alt={`thumb-${idx + 1}`}
+                    className="h-full w-full object-contain"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }}
+                  />
                 </button>
               ))}
             </div>
