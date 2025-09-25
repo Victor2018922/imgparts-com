@@ -43,7 +43,7 @@ const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
 
-/** 判断字符串是否“像图片地址”（避免把品牌“IMG”等误判为 URL） */
+/** 更严谨的“像图片地址”判断，避免把品牌“IMG”等误判为 URL */
 function isLikelyImageUrl(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
@@ -53,9 +53,22 @@ function isLikelyImageUrl(s: string): boolean {
   return false;
 }
 
+/** 从 HTML 片段中抽取 <img src="..."> */
+function extractImgFromHtml(html: string): string | null {
+  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return m?.[1] || null;
+}
+
 function deepFindImage(obj: any, depth = 0): string | null {
   if (!obj || depth > 3) return null;
-  if (typeof obj === 'string') return isLikelyImageUrl(obj) ? obj.trim() : null;
+  if (typeof obj === 'string') {
+    // 先看是否是纯 URL / 路径
+    if (isLikelyImageUrl(obj)) return obj.trim();
+    // 再尝试 HTML 里的 <img src>
+    const fromHtml = extractImgFromHtml(obj);
+    if (fromHtml && isLikelyImageUrl(fromHtml)) return fromHtml;
+    return null;
+  }
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const hit = deepFindImage(v, depth + 1);
@@ -84,11 +97,21 @@ function pickRawImageUrl(x: StockItem | CartItem): string | null {
     'thumb',
     'thumbnail',
     'url',
-    'img', // 仅在像图片时才用
+    // 注意 'img' 只有像 URL 才使用
+    'img',
+    // 常见内容字段里可能嵌 HTML
+    'content',
+    'html',
+    'desc',
+    'description',
   ];
   for (const k of keys) {
     const v = anyx?.[k];
-    if (typeof v === 'string' && isLikelyImageUrl(v)) return v.trim();
+    if (typeof v === 'string') {
+      const fromHtml = extractImgFromHtml(v);
+      if (fromHtml && isLikelyImageUrl(fromHtml)) return fromHtml.trim();
+      if (isLikelyImageUrl(v)) return v.trim();
+    }
   }
   const media = anyx?.media;
   if (Array.isArray(media) && media[0]?.url && isLikelyImageUrl(media[0].url)) {
@@ -104,6 +127,8 @@ function normalizeImageUrl(u: string | null): string | null {
   let s = u.trim();
   if (s.startsWith('data:image')) return s;
   if (s.startsWith('//')) s = 'https:' + s;
+  // 关键：强制 http -> https，避免 Mixed Content 被浏览器拦截
+  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
   if (/^https?:\/\//i.test(s)) return encodeURI(s);
   if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
   return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
@@ -214,16 +239,17 @@ function StockPageInner() {
 
   // cart & checkout state
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [tradeMode, setTradeMode] = useState<'B2C' | 'B2B'>('B2C'); // 交易模式
-  const [company, setCompany] = useState(''); // B2B 必填
+  // 默认从首页用户选择读取
+  const [tradeMode, setTradeMode] = useState<'B2C' | 'B2B'>('B2C');
+  const [company, setCompany] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState(''); // 必填
+  const [email, setEmail] = useState('');
   const [country, setCountry] = useState('');
   const [city, setCity] = useState('');
   const [address, setAddress] = useState('');
   const [postcode, setPostcode] = useState('');
-  // 国际化新增
+  // 国际化条款
   const [currency, setCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'CNY'>('USD');
   const [incoterm, setIncoterm] = useState<'EXW' | 'FOB' | 'CIF' | 'DAP'>('EXW');
   const [shipping, setShipping] = useState<'Express' | 'Air' | 'Sea'>('Express');
@@ -233,11 +259,20 @@ function StockPageInner() {
 
   useEffect(() => {
     setCart(loadCart());
+    // 读取首页设定
+    try {
+      const pref = localStorage.getItem('preferredTradeMode');
+      if (pref === 'B2B' || pref === 'B2C') setTradeMode(pref);
+    } catch {}
   }, [checkoutOpen]);
 
   useEffect(() => {
     function onStorage(e: StorageEvent) {
       if (e.key === 'cart') setCart(loadCart());
+      if (e.key === 'preferredTradeMode') {
+        const pref = e.newValue === 'B2B' ? 'B2B' : 'B2C';
+        setTradeMode(pref);
+      }
     }
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -301,11 +336,7 @@ function StockPageInner() {
     const order = {
       id: 'ORD-' + Date.now(),
       mode: tradeMode,
-      terms: {
-        currency,
-        incoterm,
-        shipping,
-      },
+      terms: { currency, incoterm, shipping },
       contact: {
         company: tradeMode === 'B2B' ? company.trim() : undefined,
         name,
@@ -559,7 +590,7 @@ function StockPageInner() {
                   )}
                 </div>
 
-                {/* 交易模式：B2C / B2B */}
+                {/* 交易模式：B2C / B2B（默认从首页读取） */}
                 <div className="mt-6">
                   <div className="flex items-center gap-2 text-sm">
                     <span className="text-gray-600">交易模式：</span>
