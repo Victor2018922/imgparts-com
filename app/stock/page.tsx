@@ -43,30 +43,73 @@ const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
 
-/** 更严谨的“像图片地址”判断，避免把品牌“IMG”等误判为 URL */
+/* ----------------------------------------------
+   更激进、更健壮的图片解析工具
+   ---------------------------------------------- */
+
+/** 判断“像图片地址” */
 function isLikelyImageUrl(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
   if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
-  if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif)(\?|#|$)/i.test(v)) return true;
-  if (/file(id)?=|\/download\/|\/files?\//i.test(v)) return true;
+  if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif|avif)(\?|#|$)/i.test(v)) return true;
+  if (/\/(upload|image|images|img|media|file|files)\//i.test(v)) return true;
+  if (/[?&](file|img|image|pic)=/i.test(v)) return true;
   return false;
 }
 
-/** 从 HTML 片段中抽取 <img src="..."> */
-function extractImgFromHtml(html: string): string | null {
-  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-  return m?.[1] || null;
+/** 从任意字符串中抽出第一个 URL（即使字符串里还带其它文字/HTML） */
+function extractFirstUrl(s: string): string | null {
+  if (!s || typeof s !== 'string') return null;
+  // 先找 <img src="...">
+  const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (m1?.[1]) return m1[1];
+
+  // 再找 http(s)://xxxx
+  const m2 = s.match(/https?:\/\/[^\s"'<>\\)]+/i);
+  if (m2?.[0]) return m2[0];
+
+  // 再找 //xxxx（协议相对）
+  const m3 = s.match(/(^|[^:])\/\/[^\s"'<>\\)]+/i);
+  if (m3) {
+    const hit = m3[0].replace(/^.+?(\/\/)/, '//$2').trim();
+    if (hit.startsWith('//')) return hit;
+  }
+
+  // 再找 /xxx 相对路径
+  if (/\/[^\s"'<>\\)]+/.test(s)) {
+    const m4 = s.match(/\/[^\s"'<>\\)]+/);
+    if (m4?.[0]) return m4[0];
+  }
+  return null;
 }
 
+/** 归一化 URL：强制 http→https，协议相对/相对路径补全为绝对地址 */
+function normalizeImageUrl(u: string | null): string | null {
+  if (!u) return null;
+  let s = u.trim();
+  if (!s) return null;
+  if (s.startsWith('data:image')) return s;
+
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
+  if (/^https?:\/\//i.test(s)) return encodeURI(s);
+
+  if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
+  return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
+}
+
+/** 深度扫描对象，尽可能挖出第一张图片 URL */
 function deepFindImage(obj: any, depth = 0): string | null {
-  if (!obj || depth > 3) return null;
+  if (!obj || depth > 4) return null;
+
   if (typeof obj === 'string') {
-    if (isLikelyImageUrl(obj)) return obj.trim();
-    const fromHtml = extractImgFromHtml(obj);
-    if (fromHtml && isLikelyImageUrl(fromHtml)) return fromHtml;
+    const url = extractFirstUrl(obj);
+    if (url && isLikelyImageUrl(url)) return url;
+    if (isLikelyImageUrl(obj)) return obj;
     return null;
   }
+
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const hit = deepFindImage(v, depth + 1);
@@ -74,63 +117,88 @@ function deepFindImage(obj: any, depth = 0): string | null {
     }
     return null;
   }
+
   if (typeof obj === 'object') {
+    // 优先常见图片字段
+    const PRIORITY_KEYS = [
+      'image', 'imgUrl', 'img_url', 'imageUrl', 'image_url',
+      'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src',
+      // 常见集合字段
+      'images', 'pictures', 'pics', 'photos', 'gallery', 'media', 'attachments',
+      // 有些后端把 HTML 放在描述里
+      'content', 'html', 'desc', 'description'
+    ];
+
+    for (const k of PRIORITY_KEYS) {
+      if (k in obj) {
+        const v = (obj as any)[k];
+        // 集合
+        if (Array.isArray(v)) {
+          for (const it of v) {
+            const viaObj =
+              (typeof it === 'object' && (it?.url || it?.src || it?.path)) ?
+                (it.url || it.src || it.path) : it;
+            const hit = deepFindImage(viaObj, depth + 1);
+            if (hit) return hit;
+          }
+        } else {
+          const hit = deepFindImage(v, depth + 1);
+          if (hit) return hit;
+        }
+      }
+    }
+
+    // 兜底：遍历所有 key
     for (const k of Object.keys(obj)) {
       const hit = deepFindImage(obj[k], depth + 1);
       if (hit) return hit;
     }
   }
+
   return null;
 }
 
+/** 在一个条目对象上挑出最可能的图片 URL（字符串或嵌套里） */
 function pickRawImageUrl(x: StockItem | CartItem): string | null {
   const anyx = x as any;
-  const keys = [
-    'image',
-    'imgUrl',
-    'picture',
-    'pic',
-    'imageUrl',
-    'pictureUrl',
-    'thumb',
-    'thumbnail',
-    'url',
-    // 仅在“像图片”时才用 img
-    'img',
-    // 某些后端把 HTML 放在这些字段
-    'content',
-    'html',
-    'desc',
-    'description',
+
+  // 直接字段（优先级最高）
+  const DIRECT_KEYS = [
+    'image', 'imgUrl', 'img_url', 'imageUrl', 'image_url',
+    'picture', 'pic', 'picUrl', 'pic_url', 'thumbnail', 'thumb', 'url', 'path', 'src'
   ];
-  for (const k of keys) {
+  for (const k of DIRECT_KEYS) {
     const v = anyx?.[k];
+    if (!v) continue;
     if (typeof v === 'string') {
-      const fromHtml = extractImgFromHtml(v);
-      if (fromHtml && isLikelyImageUrl(fromHtml)) return fromHtml.trim();
-      if (isLikelyImageUrl(v)) return v.trim();
+      const url = extractFirstUrl(v) || v;
+      if (url && isLikelyImageUrl(url)) return url;
+    } else {
+      const hit = deepFindImage(v);
+      if (hit) return hit;
     }
   }
-  const media = anyx?.media;
-  if (Array.isArray(media) && media[0]?.url && isLikelyImageUrl(media[0].url)) {
-    return media[0].url;
+
+  // 可能是集合
+  const LIST_KEYS = ['images', 'pictures', 'pics', 'photos', 'gallery', 'media', 'attachments'];
+  for (const k of LIST_KEYS) {
+    const v = anyx?.[k];
+    if (Array.isArray(v)) {
+      for (const it of v) {
+        // 既兼容字符串，又兼容 {url/src/path: xxx}
+        const url = typeof it === 'string'
+          ? (extractFirstUrl(it) || it)
+          : (it?.url || it?.src || it?.path || extractFirstUrl(JSON.stringify(it)));
+        if (url && isLikelyImageUrl(url)) return url;
+      }
+    }
   }
-  const deep = deepFindImage(anyx);
-  if (deep) return deep;
-  return null;
+
+  // 兜底：深度扫描整个对象
+  return deepFindImage(anyx);
 }
 
-function normalizeImageUrl(u: string | null): string | null {
-  if (!u) return null;
-  let s = u.trim();
-  if (s.startsWith('data:image')) return s;
-  if (s.startsWith('//')) s = 'https:' + s;
-  // 关键：强制 http -> https，避免 Mixed Content 被浏览器拦截
-  if (s.startsWith('http://')) s = 'https://' + s.slice(7);
-  if (/^https?:\/\//i.test(s)) return encodeURI(s);
-  if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
-  return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
-}
+/* ---------------------------------------------- */
 
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
@@ -150,11 +218,7 @@ function extractArrayPayload(json: any): any[] {
     const v = json?.[k];
     if (Array.isArray(v)) return v;
     if (v && typeof v === 'object') {
-      const deep =
-        (v as any).list ||
-        (v as any).items ||
-        (v as any).content ||
-        (v as any).records;
+      const deep = (v as any).list || (v as any).items || (v as any).content || (v as any).records;
       if (Array.isArray(deep)) return deep;
     }
   }
@@ -163,8 +227,7 @@ function extractArrayPayload(json: any): any[] {
 
 function mapToStockItem(x: any): StockItem {
   const num = x.num || x.sku || x.code || x.partNo || x.part || x.id || '';
-  const product =
-    x.product || x.name || x.title || x.desc || x.description || 'Part';
+  const product = x.product || x.name || x.title || x.desc || x.description || 'Part';
   const oe = x.oe || x.oeNo || x.oeNumber || x.oe_code || x.oem || '';
   const brand = x.brand || x.make || x.maker || '';
   const model = x.model || x.vehicleModel || x.carModel || '';
@@ -197,7 +260,6 @@ function encodeItemForUrl(item: StockItem): string {
   }
 }
 
-/* 读取 / 保存购物车（本地存储） */
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -333,7 +395,7 @@ function StockPageInner() {
       setFormMsg('请填写有效邮箱地址');
       return;
     }
-    if (tradeMode === 'B2B' && !company.trim()) {
+    if (tradeMode === 'B2B' && !公司名称有效(company)) {
       setFormMsg('B2B 模式下，公司名称为必填项');
       return;
     }
@@ -365,6 +427,10 @@ function StockPageInner() {
 
     setSubmitted(true);
   };
+
+  function 公司名称有效(v: string) {
+    return v && v.trim().length >= 2;
+  }
 
   const loadPage = useCallback(
     async (p: number) => {
@@ -555,7 +621,7 @@ function StockPageInner() {
 
       {err && <div className="mt-6 text-xs text-gray-400">Debug: {err}</div>}
 
-      {/* ======= 结算面板（基于 ?checkout=1 打开） ======= */}
+      {/* ======= 结算面板（?checkout=1） ======= */}
       {checkoutOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4 overflow-auto">
           <div className="w-full max-w-3xl rounded-2xl bg-white p-4 md:p-6 shadow-xl">
@@ -717,53 +783,17 @@ function StockPageInner() {
                       <input
                         className="border rounded-lg px-3 py-2 md:col-span-2"
                         placeholder="公司名称（必填）"
-                        value={company}
+                        value={公司名称有效(company) ? company : company}
                         onChange={(e) => setCompany(e.target.value)}
                       />
                     )}
-                    <input
-                      className="border rounded-lg px-3 py-2"
-                      placeholder="联系人姓名 *"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                    <input
-                      className="border rounded-lg px-3 py-2"
-                      placeholder="联系电话 *"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                    />
-                    <input
-                      className="border rounded-lg px-3 py-2 md:col-span-2"
-                      placeholder="邮箱（必填）"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-                    <input
-                      className="border rounded-lg px-3 py-2"
-                      placeholder="国家"
-                      value={country}
-                      onChange={(e) => setCountry(e.target.value)}
-                    />
-                    <input
-                      className="border rounded-lg px-3 py-2"
-                      placeholder="城市"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                    />
-                    <input
-                      className="border rounded-lg px-3 py-2 md:col-span-2"
-                      placeholder="详细地址"
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                    />
-                    <input
-                      className="border rounded-lg px-3 py-2"
-                      placeholder="邮编"
-                      value={postcode}
-                      onChange={(e) => setPostcode(e.target.value)}
-                    />
+                    <input className="border rounded-lg px-3 py-2" placeholder="联系人姓名 *" value={name} onChange={(e) => setName(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="联系电话 *" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="邮箱（必填）" required value={email} onChange={(e) => setEmail(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="国家" value={country} onChange={(e) => setCountry(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="城市" value={city} onChange={(e) => setCity(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="详细地址" value={address} onChange={(e) => setAddress(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2" placeholder="邮编" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
                   </div>
 
                   {/* 订单备注 */}
