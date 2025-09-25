@@ -43,24 +43,19 @@ const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
 const BASE_ORIGIN = new URL(API_BASE).origin;
 const PAGE_SIZE = 20;
 
-/** 判断字符串是否“像图片地址” */
+/** 判断字符串是否“像图片地址”（避免把品牌“IMG”等误判为 URL） */
 function isLikelyImageUrl(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
-  // 明确的 URL / 协议相对 / 站内相对
   if (/^https?:\/\//i.test(v) || v.startsWith('//') || v.startsWith('/')) return true;
-  // 常见图片后缀
   if (/\.(png|jpe?g|webp|gif|bmp|svg|jfif)(\?|#|$)/i.test(v)) return true;
-  // 常见下载式路由里带 file/fileId/path
   if (/file(id)?=|\/download\/|\/files?\//i.test(v)) return true;
   return false;
 }
 
 function deepFindImage(obj: any, depth = 0): string | null {
   if (!obj || depth > 3) return null;
-  if (typeof obj === 'string') {
-    return isLikelyImageUrl(obj) ? obj.trim() : null;
-  }
+  if (typeof obj === 'string') return isLikelyImageUrl(obj) ? obj.trim() : null;
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const hit = deepFindImage(v, depth + 1);
@@ -89,8 +84,7 @@ function pickRawImageUrl(x: StockItem | CartItem): string | null {
     'thumb',
     'thumbnail',
     'url',
-    // 注意：不直接信任 "img" 字段，除非它看起来像图片
-    'img',
+    'img', // 仅在像图片时才用
   ];
   for (const k of keys) {
     const v = anyx?.[k];
@@ -110,7 +104,6 @@ function normalizeImageUrl(u: string | null): string | null {
   let s = u.trim();
   if (s.startsWith('data:image')) return s;
   if (s.startsWith('//')) s = 'https:' + s;
-  // 不再强制 http -> https 升级，保持原协议；若为相对路径则拼接域名
   if (/^https?:\/\//i.test(s)) return encodeURI(s);
   if (s.startsWith('/')) return encodeURI(BASE_ORIGIN + s);
   return encodeURI(BASE_ORIGIN + '/' + s.replace(/^\.\//, ''));
@@ -171,7 +164,7 @@ function encodeItemForUrl(item: StockItem): string {
         (item as any).pic ??
         (item as any).picture ??
         (item as any).url ??
-        (item as any).img ?? // 只作为兜底传递，渲染时仍会再次校验
+        (item as any).img ??
         null,
     };
     const s = JSON.stringify(compact);
@@ -230,6 +223,11 @@ function StockPageInner() {
   const [city, setCity] = useState('');
   const [address, setAddress] = useState('');
   const [postcode, setPostcode] = useState('');
+  // 国际化新增
+  const [currency, setCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'CNY'>('USD');
+  const [incoterm, setIncoterm] = useState<'EXW' | 'FOB' | 'CIF' | 'DAP'>('EXW');
+  const [shipping, setShipping] = useState<'Express' | 'Air' | 'Sea'>('Express');
+  const [note, setNote] = useState('');
   const [formMsg, setFormMsg] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
@@ -303,6 +301,11 @@ function StockPageInner() {
     const order = {
       id: 'ORD-' + Date.now(),
       mode: tradeMode,
+      terms: {
+        currency,
+        incoterm,
+        shipping,
+      },
       contact: {
         company: tradeMode === 'B2B' ? company.trim() : undefined,
         name,
@@ -313,6 +316,7 @@ function StockPageInner() {
         address,
         postcode,
       },
+      note: note.trim() || undefined,
       items: cart,
       createdAt: new Date().toISOString(),
       origin: 'imgparts-preview',
@@ -576,6 +580,48 @@ function StockPageInner() {
                   </div>
                 </div>
 
+                {/* 国际化贸易条款 */}
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-600 shrink-0">货币：</span>
+                    <select
+                      className="border rounded-lg px-2 py-1 w-full"
+                      value={currency}
+                      onChange={(e) => setCurrency(e.target.value as any)}
+                    >
+                      <option value="USD">USD</option>
+                      <option value="EUR">EUR</option>
+                      <option value="GBP">GBP</option>
+                      <option value="CNY">CNY</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-600 shrink-0">Incoterms：</span>
+                    <select
+                      className="border rounded-lg px-2 py-1 w-full"
+                      value={incoterm}
+                      onChange={(e) => setIncoterm(e.target.value as any)}
+                    >
+                      <option value="EXW">EXW</option>
+                      <option value="FOB">FOB</option>
+                      <option value="CIF">CIF</option>
+                      <option value="DAP">DAP</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-600 shrink-0">运输：</span>
+                    <select
+                      className="border rounded-lg px-2 py-1 w-full"
+                      value={shipping}
+                      onChange={(e) => setShipping(e.target.value as any)}
+                    >
+                      <option value="Express">Express</option>
+                      <option value="Air">Air</option>
+                      <option value="Sea">Sea</option>
+                    </select>
+                  </div>
+                </div>
+
                 {/* 收货信息表单 */}
                 <form className="mt-4 space-y-3" onSubmit={submitOrder}>
                   <h3 className="font-medium">收货信息</h3>
@@ -596,6 +642,15 @@ function StockPageInner() {
                     <input className="border rounded-lg px-3 py-2 md:col-span-2" placeholder="详细地址" value={address} onChange={(e) => setAddress(e.target.value)} />
                     <input className="border rounded-lg px-3 py-2" placeholder="邮编" value={postcode} onChange={(e) => setPostcode(e.target.value)} />
                   </div>
+
+                  {/* 订单备注 */}
+                  <textarea
+                    className="border rounded-lg px-3 py-2 w-full"
+                    rows={3}
+                    placeholder="订单备注（选填：发票抬头/税号、收件时间、包装要求等）"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                  />
 
                   {formMsg && <div className="text-sm text-red-600">{formMsg}</div>}
 
@@ -621,7 +676,7 @@ function StockPageInner() {
               <div className="mt-6 text-center">
                 <div className="text-lg font-semibold">订单已提交（本地保存）</div>
                 <div className="text-sm text-gray-500 mt-2">
-                  你可在浏览器本地的 <code>lastOrder</code> 查看订单草稿，后续可接入后端接口。
+                  你可在浏览器本地的 <code>lastOrder</code> 查看订单草稿（包含货币、Incoterms、运输方式与备注），后续可接入后端接口。
                 </div>
                 <div className="mt-6">
                   <button
@@ -639,5 +694,4 @@ function StockPageInner() {
     </main>
   );
 }
-
 
