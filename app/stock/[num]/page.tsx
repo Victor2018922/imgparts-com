@@ -203,7 +203,6 @@ function DetailInner() {
 
   const compact = useMemo(() => decodeD(d), [d]);
 
-  // 构造展示用
   const product = compact?.product || 'IMG';
   const oe = compact?.oe || '';
   const num = compact?.num || '';
@@ -222,8 +221,31 @@ function DetailInner() {
     setImages(imgs.slice(0, 18));
   }, [compact]);
 
+  // 当前图 / 轮播控制
   const [active, setActive] = useState(0);
   useEffect(() => { setActive(0); }, [images]);
+  const prev = () => setActive((i) => (i - 1 + images.length) % images.length);
+  const next = () => setActive((i) => (i + 1) % images.length);
+
+  // 自动轮播（悬停暂停、打开 Lightbox 暂停）
+  const [hovering, setHovering] = useState(false);
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (show || hovering || images.length <= 1) return;
+    const id = setInterval(() => setActive((i) => (i + 1) % images.length), 5000);
+    return () => clearInterval(id);
+  }, [show, hovering, images]);
+
+  // 键盘切换（Lightbox 之外）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (show) return;
+      if (e.key === 'ArrowLeft') prev();
+      if (e.key === 'ArrowRight') next();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [show, images.length]);
 
   /* 放大镜：右侧放大窗口 */
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -241,10 +263,11 @@ function DetailInner() {
   };
   const onLeave = () => { if (zoomRef.current) zoomRef.current.style.display = 'none'; };
 
-  /* Lightbox */
-  const [show, setShow] = useState(false);
-  const prev = () => setActive((i) => (i - 1 + images.length) % images.length);
-  const next = () => setActive((i) => (i + 1) % images.length);
+  // 缩略图滚动
+  const thumbRef = useRef<HTMLDivElement | null>(null);
+  const scrollThumbs = (dir: number) => {
+    thumbRef.current?.scrollBy({ left: dir * 160, behavior: 'smooth' });
+  };
 
   /* 购物车 */
   const addToCart = () => {
@@ -263,9 +286,7 @@ function DetailInner() {
     saveCart(cur);
     alert('已加入购物车');
   };
-  const goCheckout = () => {
-    router.push('/stock?checkout=1');
-  };
+  const goCheckout = () => router.push('/stock?checkout=1');
 
   return (
     <main className="container mx-auto p-4">
@@ -292,8 +313,12 @@ function DetailInner() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-6">
         {/* 左侧：主图 + 缩略图 + 放大镜窗口 */}
         <div>
-          <div className="flex gap-4">
-            <div className="relative rounded-xl border bg-white p-2 flex-1 select-none">
+          <div className="relative flex gap-4">
+            <div
+              className="relative rounded-xl border bg-white p-2 flex-1 select-none"
+              onMouseEnter={() => setHovering(true)}
+              onMouseLeave={() => setHovering(false)}
+            >
               <img
                 ref={imgRef}
                 src={images[active] || FALLBACK_IMG}
@@ -305,6 +330,22 @@ function DetailInner() {
                 onClick={()=>setShow(true)}
                 style={{cursor:'zoom-in'}}
               />
+
+              {/* 轮播左右按钮 */}
+              {images.length > 1 && (
+                <>
+                  <button
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 text-white w-9 h-9 flex items-center justify-center"
+                    onClick={prev}
+                    aria-label={t('prev')}
+                  >‹</button>
+                  <button
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 text-white w-9 h-9 flex items-center justify-center"
+                    onClick={next}
+                    aria-label={t('next')}
+                  >›</button>
+                </>
+              )}
             </div>
 
             <div
@@ -314,17 +355,31 @@ function DetailInner() {
             />
           </div>
 
-          {/* thumbnails */}
-          <div className="mt-3 flex gap-2 overflow-auto">
-            {images.map((src, idx) => (
-              <button
-                key={src + idx}
-                className={`h-20 w-20 shrink-0 rounded-lg border ${idx===active?'ring-2 ring-blue-600':''}`}
-                onClick={()=>setActive(idx)}
-              >
-                <img src={src} alt="" className="h-full w-full object-contain" />
-              </button>
-            ))}
+          {/* thumbnails + 滚动按钮 */}
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              className="rounded-lg border w-8 h-8 text-sm hover:bg-gray-50"
+              onClick={()=>scrollThumbs(-1)}
+              aria-label="scroll-left"
+            >‹</button>
+
+            <div ref={thumbRef} className="flex gap-2 overflow-x-auto scroll-smooth">
+              {images.map((src, idx) => (
+                <button
+                  key={src + idx}
+                  className={`h-20 w-20 shrink-0 rounded-lg border ${idx===active?'ring-2 ring-blue-600':''}`}
+                  onClick={()=>setActive(idx)}
+                >
+                  <img src={src} alt="" className="h-full w-full object-contain" />
+                </button>
+              ))}
+            </div>
+
+            <button
+              className="rounded-lg border w-8 h-8 text-sm hover:bg-gray-50"
+              onClick={()=>scrollThumbs(1)}
+              aria-label="scroll-right"
+            >›</button>
           </div>
         </div>
 

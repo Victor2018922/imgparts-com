@@ -431,7 +431,7 @@ function StockInner() {
   const [toast, setToast] = useState<string | null>(null);
 
   // 结算表单 + 校验
-  const [form, setForm] = useState<CheckoutForm>({
+  const [form, setForm] = useState({
     company: '',
     taxId: '',
     contact: '',
@@ -567,8 +567,8 @@ function StockInner() {
   const setTradeMode = (m: TradeMode) => { setMode(m); saveMode(m); };
 
   /* 表单持久化 + 校验 */
-  useEffect(() => { saveForm(form); }, [form]);
-  const validate = (f: CheckoutForm) => {
+  useEffect(() => { saveForm(form as any); }, [form]);
+  const validate = (f: typeof form) => {
     const next: { email?: string; phone?: string } = {};
     if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) next.email = t('emailInvalid');
     if (f.phone && !/^[\d+\-\s()]{5,}$/.test(f.phone)) next.phone = t('phoneInvalid');
@@ -615,6 +615,7 @@ function StockInner() {
     if (miniOpen) document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [miniOpen]);
+  const miniRef = useRef<HTMLDivElement | null>(null);
 
   /* 清除筛选 */
   const clearOne = (k: 'brand' | 'model' | 'year') => {
@@ -639,6 +640,24 @@ function StockInner() {
     setQ('');
     syncUrl({ brand: '', model: '', year: '', q: '' });
   };
+
+  /* ========= 新增：无限滚动 ========= */
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const el = sentinelRef.current;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const e = entries[0];
+        if (e.isIntersecting && hasMore && !loading) {
+          loadPage(page);
+        }
+      },
+      { rootMargin: '600px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [page, hasMore, loading]); // 注意依赖
 
   /* ================== 渲染 ================== */
   return (
@@ -833,7 +852,7 @@ function StockInner() {
         })}
       </div>
 
-      {/* 加载更多 */}
+      {/* 加载更多 + 无限滚动哨兵 */}
       <div className="my-6 flex justify-center">
         {hasMore ? (
           <button
@@ -847,6 +866,8 @@ function StockInner() {
           <div className="text-sm text-gray-400">{t('loadedAll')}</div>
         )}
       </div>
+      {/* 哨兵：触底自动加载 */}
+      <div ref={sentinelRef} />
 
       {/* 轻提示 */}
       {toast && (
@@ -855,7 +876,7 @@ function StockInner() {
         </div>
       )}
 
-      {/* 结算弹窗 */}
+      {/* 结算弹窗（与之前一致） */}
       {cartOpen && (
         <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
           <div className="max-h-[90vh] w-[960px] overflow-auto rounded-2xl bg-white p-4">
@@ -891,7 +912,7 @@ function StockInner() {
               </div>
 
               <div className="rounded-xl border p-3">
-                <div className="mb-2 flex items-center gap-2">
+                <div className="mb-2 flex items中心 gap-2">
                   <span className="text-sm text-gray-500">{t('mode')}</span>
                   <button
                     onClick={() => setTradeMode('B2C')}
@@ -906,92 +927,48 @@ function StockInner() {
                 <div className="grid grid-cols-1 gap-2">
                   {mode === 'B2B' && (
                     <>
-                      <input
-                        className="rounded-lg border px-3 py-2 text-sm"
-                        placeholder={t('company')}
-                        value={form.company}
-                        onChange={(e)=>setForm({...form, company:e.target.value})}
-                      />
-                      <input
-                        className="rounded-lg border px-3 py-2 text-sm"
-                        placeholder={t('taxId')}
-                        value={form.taxId}
-                        onChange={(e)=>setForm({...form, taxId:e.target.value})}
-                      />
+                      <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('company')}
+                        value={form.company} onChange={(e)=>setForm({...form, company:e.target.value})}/>
+                      <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('taxId')}
+                        value={form.taxId} onChange={(e)=>setForm({...form, taxId:e.target.value})}/>
                     </>
                   )}
 
-                  <input
-                    className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder={t('contact')}
-                    value={form.contact}
-                    onChange={(e)=>setForm({...form, contact:e.target.value})}
-                  />
-                  <input
-                    className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder={t('phone')}
-                    value={form.phone}
-                    onChange={(e)=>{ const v=e.target.value; setForm({...form, phone:v}); validate({...form, phone:v});}}
-                  />
+                  <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('contact')}
+                    value={form.contact} onChange={(e)=>setForm({...form, contact:e.target.value})}/>
+                  <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('phone')}
+                    value={form.phone} onChange={(e)=>{ const v=e.target.value; setForm({...form, phone:v}); validate({...form, phone:v}); }}/>
                   {errors.phone && <div className="text-xs text-red-600">{errors.phone}</div>}
-                  <input
-                    className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder={t('email')}
-                    value={form.email}
-                    onChange={(e)=>{ const v=e.target.value; setForm({...form, email:v}); validate({...form, email:v});}}
-                  />
+                  <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('email')}
+                    value={form.email} onChange={(e)=>{ const v=e.target.value; setForm({...form, email:v}); validate({...form, email:v}); }}/>
                   {errors.email && <div className="text-xs text-red-600">{errors.email}</div>}
-                  <input
-                    className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder={t('country')}
-                    value={form.country}
-                    onChange={(e)=>setForm({...form, country:e.target.value})}
-                  />
+                  <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('country')}
+                    value={form.country} onChange={(e)=>setForm({...form, country:e.target.value})}/>
                   <div className="grid grid-cols-2 gap-2">
-                    <input
-                      className="rounded-lg border px-3 py-2 text-sm"
-                      placeholder={t('city')}
-                      value={form.city}
-                      onChange={(e)=>setForm({...form, city:e.target.value})}
-                    />
-                    <input
-                      className="rounded-lg border px-3 py-2 text-sm"
-                      placeholder={t('postcode')}
-                      value={form.postcode}
-                      onChange={(e)=>setForm({...form, postcode:e.target.value})}
-                    />
+                    <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('city')}
+                      value={form.city} onChange={(e)=>setForm({...form, city:e.target.value})}/>
+                    <input className="rounded-lg border px-3 py-2 text-sm" placeholder={t('postcode')}
+                      value={form.postcode} onChange={(e)=>setForm({...form, postcode:e.target.value})}/>
                   </div>
-                  <textarea
-                    className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder={t('address')}
-                    rows={3}
-                    value={form.address}
-                    onChange={(e)=>setForm({...form, address:e.target.value})}
-                  />
+                  <textarea className="rounded-lg border px-3 py-2 text-sm" placeholder={t('address')} rows={3}
+                    value={form.address} onChange={(e)=>setForm({...form, address:e.target.value})}/>
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button onClick={submitOrder} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">{t('submitOrder')}</button>
                   <button onClick={closeCheckout} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">{t('continueBrowse')}</button>
 
-                  {/* 导出 / 复制 / 邮件 */}
                   <button
                     onClick={async ()=>{
-                      const text=buildOrderText(mode, cart, form, t);
+                      const text=buildOrderText(mode, cart, form as any, t);
                       const ok = await copyText(text);
                       setToast(ok? t('copied'):t('copyFailed'));
                       setTimeout(()=>setToast(null),1200);
                     }}
                     className="ml-2 rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
                   >{t('copyOrder')}</button>
-                  <button
-                    onClick={()=>downloadCSV(cart)}
-                    className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  >{t('csvDownload')}</button>
-                  <button
-                    onClick={()=>openMailDraft(buildOrderText(mode, cart, form, t))}
-                    className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  >{t('emailDraft')}</button>
+                  <button onClick={()=>downloadCSV(cart)} className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50">{t('csvDownload')}</button>
+                  <button onClick={()=>openMailDraft(buildOrderText(mode, cart, form as any, t))} className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50">{t('emailDraft')}</button>
                 </div>
               </div>
             </div>
