@@ -1,12 +1,10 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-/* =============== 工具类型 =============== */
 type AnyObj = Record<string, any>;
-
 type ListItem = {
   id?: string;
   sn?: string;
@@ -22,7 +20,6 @@ type ListItem = {
 const API = (page: number, size = 20) =>
   `https://niuniuparts.com:6001/scm-product/v1/stock2?size=${size}&page=${page}`;
 
-/* =============== 工具函数 =============== */
 function extractArray(json: AnyObj): AnyObj[] {
   if (!json) return [];
   if (Array.isArray(json?.data?.content)) return json.data.content;
@@ -68,21 +65,28 @@ function normalizeItem(raw: AnyObj): ListItem {
   };
 }
 
-/** 在本文件内封装：把原始条目编码进 URL（不再从详情页导入） */
+/** 仅在本文件内：把原始条目编码进 URL 参数 `d` */
 function encodeItemForParam(item: AnyObj): string {
   try {
     const json = JSON.stringify(item);
-    // 兼容中文：先 encodeURIComponent 再 btoa，再整体 encodeURIComponent
     // @ts-ignore
-    const b64 = btoa(unescape(encodeURIComponent(json)));
+    const b64 = btoa(unescape(encodeURIComponent(json))); // 兼容中文
     return encodeURIComponent(b64);
   } catch {
     return encodeURIComponent(JSON.stringify(item));
   }
 }
 
-/* =============== 列表页主组件 =============== */
-export default function StockListPage() {
+/** 外壳：把使用 useSearchParams 的内容放进 Suspense */
+export default function StockPage() {
+  return (
+    <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
+      <StockInner />
+    </Suspense>
+  );
+}
+
+function StockInner() {
   const search = useSearchParams();
   const router = useRouter();
 
@@ -98,14 +102,13 @@ export default function StockListPage() {
   const [model, setModel] = useState('');
   const [year, setYear] = useState('');
 
-  // 购物车
+  // 购物车/结算
   const [cartOpen, setCartOpen] = useState<boolean>(() => search?.get('checkout') === '1');
   const [cart, setCart] = useState<AnyObj[]>(() => {
     try { return JSON.parse(localStorage.getItem('imgparts_cart') || '[]'); } catch { return []; }
   });
   useEffect(() => { try { localStorage.setItem('imgparts_cart', JSON.stringify(cart)); } catch {} }, [cart]);
 
-  // 结算表单
   const [mode, setMode] = useState<'B2C' | 'B2B'>('B2C');
   const [form, setForm] = useState({ name: '', phone: '', company: '', email: '', country: '', city: '', address: '', zip: '', note: '' });
 
@@ -189,7 +192,6 @@ export default function StockListPage() {
     setCartOpen(false);
   };
 
-  /* =============== 渲染 =============== */
   return (
     <main className="container mx-auto p-4">
       {/* 顶部 */}
@@ -281,7 +283,7 @@ export default function StockListPage() {
 
       {/* 结算弹窗 */}
       {cartOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3">
+        <div className="fixed inset-0 z-50 flex items-center justify中心 bg-black/60 p-3">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl bg-white p-4">
             <div className="mb-4 flex items-center justify-between">
               <div className="text-lg font-semibold">结算</div>
@@ -337,8 +339,6 @@ export default function StockListPage() {
                   )}
 
                   <input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="联系电话 *" className="w-full rounded border px-3 py-2" />
-
-                  {/* 邮箱必填 */}
                   <input value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="邮箱（必填） *" className="w-full rounded border px-3 py-2" />
 
                   <div className="grid grid-cols-2 gap-3">

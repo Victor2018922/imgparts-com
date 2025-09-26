@@ -1,12 +1,10 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 
-/* =============== 工具类型 =============== */
 type AnyObj = Record<string, any>;
-
 type DetailItem = {
   id?: string;
   sn?: string;
@@ -18,28 +16,28 @@ type DetailItem = {
   imageUrls?: string[];
 };
 
-/* =============== 常量 =============== */
 const FALLBACK_LIST_API = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
 
-/* =============== 解析工具 =============== */
+/** Page 外壳，满足 useSearchParams 必须在 Suspense 内的要求 */
+export default function DetailPage() {
+  return (
+    <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
+      <DetailInner />
+    </Suspense>
+  );
+}
+
+/* ================== 工具 ================== */
 function safeJsonParse<T = any>(s?: string | null): T | null {
   if (!s) return null;
-  // 1) 尝试直接 JSON
   try { return JSON.parse(s) as T; } catch {}
-
-  // 2) 尝试 URL 解码后 JSON
   try { return JSON.parse(decodeURIComponent(s)) as T; } catch {}
-
-  // 3) 尝试 base64(urlsafe) -> JSON
   try {
     const decoded = atob(decodeURIComponent(s));
     return JSON.parse(decoded) as T;
   } catch {}
-
   return null;
 }
-
-/** 从不同字段中收集图片 URL，支持逗号/分号/空格/换行分隔 */
 function extractImageUrls(obj: AnyObj): string[] {
   const candidates: Array<string | string[] | undefined> = [
     obj.imageUrls, obj.images, obj.imageList, obj.imgs, obj.pictures, obj.pics,
@@ -58,8 +56,6 @@ function extractImageUrls(obj: AnyObj): string[] {
   }
   return Array.from(new Set(urls));
 }
-
-/** 详情标准化 */
 function normalizeItem(raw?: AnyObj | null): DetailItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const oe = raw.oe ?? raw.OE ?? raw.oeNo ?? raw.oeCode ?? raw['OE号'] ?? '';
@@ -69,25 +65,14 @@ function normalizeItem(raw?: AnyObj | null): DetailItem | null {
   const model = raw.model ?? raw.vehicle ?? raw['车型'] ?? '';
   const year = raw.year ?? raw['年份'] ?? '';
   const imageUrls = extractImageUrls(raw);
-  return {
-    id: String(id || ''),
-    sn: String(raw.sn ?? ''),
-    oe: String(oe || ''),
-    name: String(name || 'IMG'),
-    brand: String(brand || 'IMG'),
-    model: String(model || ''),
-    year: String(year || ''),
-    imageUrls
-  };
+  return { id: String(id || ''), sn: String(raw.sn ?? ''), oe: String(oe || ''), name, brand, model, year, imageUrls };
 }
-
-/** 从 URL 参数 d 解出详情（JSON/base64/URL 编码均兼容） */
 function decodeItemFromParam(d?: string | null): DetailItem | null {
   const json = safeJsonParse<AnyObj>(d);
   return normalizeItem(json);
 }
 
-/* =============== 放大镜组件（纯前端） =============== */
+/* ================== 放大镜 ================== */
 const Magnifier: React.FC<{ src: string; zoom?: number; className?: string }> = ({ src, zoom = 2, className }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const lensRef = useRef<HTMLDivElement | null>(null);
@@ -96,7 +81,6 @@ const Magnifier: React.FC<{ src: string; zoom?: number; className?: string }> = 
   useEffect(() => {
     const wrap = wrapRef.current, lens = lensRef.current;
     if (!wrap || !lens) return;
-
     const onMove = (e: MouseEvent) => {
       const rect = wrap.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -113,7 +97,6 @@ const Magnifier: React.FC<{ src: string; zoom?: number; className?: string }> = 
     };
     const onEnter = () => setOver(true);
     const onLeave = () => setOver(false);
-
     wrap.addEventListener('mousemove', onMove);
     wrap.addEventListener('mouseenter', onEnter);
     wrap.addEventListener('mouseleave', onLeave);
@@ -136,8 +119,8 @@ const Magnifier: React.FC<{ src: string; zoom?: number; className?: string }> = 
   );
 };
 
-/* =============== 详情页主组件（默认导出，仅此一个导出） =============== */
-export default function StockDetailPage() {
+/* ================== 详情主体 ================== */
+function DetailInner() {
   const params = useParams<{ num: string }>();
   const search = useSearchParams();
   const d = search?.get('d') ?? null;
@@ -145,11 +128,12 @@ export default function StockDetailPage() {
   const [item, setItem] = useState<DetailItem | null>(() => decodeItemFromParam(d));
   const [banner, setBanner] = useState<string | null>(null);
 
+  const images = useMemo(() => item?.imageUrls ?? [], [item]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [autoPlay, setAutoPlay] = useState(true);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
-  // 如果 URL 不带 d，用兜底列表匹配
+  // 兜底：无 d 时按路由参数匹配
   useEffect(() => {
     (async () => {
       if (item) return;
@@ -168,9 +152,7 @@ export default function StockDetailPage() {
     })();
   }, [item, params?.num]);
 
-  const images = useMemo(() => item?.imageUrls ?? [], [item]);
-
-  // 自动轮播 + 键盘左右键
+  // 自动轮播 + 键盘
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!images.length) return;
@@ -187,23 +169,18 @@ export default function StockDetailPage() {
     return () => clearInterval(id);
   }, [autoPlay, images.length]);
 
-  const handleThumbScroll = (dir: 'left' | 'right') => {
+  const scrollThumbs = (dir: 'left' | 'right') => {
     const box = document.getElementById('thumb-strip');
     if (!box) return;
     box.scrollBy({ left: dir === 'left' ? -220 : 220, behavior: 'smooth' });
   };
 
   if (!item) {
-    return (
-      <main className="container mx-auto p-4">
-        <div className="text-gray-500">加载中…</div>
-      </main>
-    );
+    return <main className="container mx-auto p-4"><div className="text-gray-500">加载中…</div></main>;
   }
 
   return (
     <main className="container mx-auto p-4">
-      {/* 顶部导航 */}
       <div className="mb-4 flex items-center justify-between">
         <Link href="/stock" className="text-sm text-blue-600 hover:underline">← 返回库存预览</Link>
         <nav className="space-x-4 text-sm">
@@ -212,11 +189,10 @@ export default function StockDetailPage() {
         </nav>
       </div>
 
-      {/* 提示 */}
       {banner && <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 text-sm">{banner}</div>}
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-        {/* 主图（放大镜 + 轮播控制） */}
+        {/* 主图 */}
         <div onMouseEnter={() => setAutoPlay(false)} onMouseLeave={() => setAutoPlay(true)} className="relative">
           {images.length ? (
             <Magnifier src={images[activeIndex]} className="aspect-[4/3] w-full rounded-lg bg-white" />
@@ -263,8 +239,7 @@ export default function StockDetailPage() {
                   const key = 'imgparts_cart';
                   const old = JSON.parse(localStorage.getItem(key) || '[]') as AnyObj[];
                   const idx = old.findIndex((x) => (x.oe || x.id) === (item.oe || item.id));
-                  if (idx >= 0) old[idx].qty = (old[idx].qty || 1) + 1;
-                  else old.push({ ...(item as AnyObj), qty: 1 });
+                  if (idx >= 0) old[idx].qty = (old[idx].qty || 1) + 1; else old.push({ ...(item as AnyObj), qty: 1 });
                   localStorage.setItem(key, JSON.stringify(old));
                   alert('已加入购物车（本地保存）！');
                 } catch { alert('加入购物车失败：本地存储异常'); }
@@ -286,8 +261,8 @@ export default function StockDetailPage() {
           <div className="mb-2 flex items-center justify-between">
             <div className="font-medium text-gray-700">更多图片</div>
             <div className="space-x-2">
-              <button onClick={() => handleThumbScroll('left')} className="rounded border px-2 py-1 hover:bg-gray-50">←</button>
-              <button onClick={() => handleThumbScroll('right')} className="rounded border px-2 py-1 hover:bg-gray-50">→</button>
+              <button onClick={() => scrollThumbs('left')} className="rounded border px-2 py-1 hover:bg-gray-50">←</button>
+              <button onClick={() => scrollThumbs('right')} className="rounded border px-2 py-1 hover:bg-gray-50">→</button>
             </div>
           </div>
           <div id="thumb-strip" className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
