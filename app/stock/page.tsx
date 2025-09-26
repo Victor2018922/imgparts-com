@@ -186,6 +186,96 @@ function saveMode(v: TradeMode) {
   if (typeof window === 'undefined') return;
   localStorage.setItem('tradeMode', v);
 }
+function loadForm(): CheckoutForm | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const s = localStorage.getItem('checkoutForm');
+    return s ? (JSON.parse(s) as CheckoutForm) : null;
+  } catch {
+    return null;
+  }
+}
+function saveForm(f: CheckoutForm) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('checkoutForm', JSON.stringify(f));
+}
+
+/* ============== 订单导出/复制/邮件 ============== */
+type CheckoutForm = {
+  company: string;
+  taxId: string;
+  contact: string;
+  phone: string;
+  email: string;
+  country: string;
+  city: string;
+  address: string;
+  postcode: string;
+};
+function buildOrderText(mode: TradeMode, cart: CartItem[], form: CheckoutForm): string {
+  const lines = [
+    `【订单摘要】`,
+    `交易模式：${mode}`,
+    `商品明细（${cart.reduce((s, it) => s + it.qty, 0)} 件）：`,
+    ...cart.map(
+      (it, idx) =>
+        `${idx + 1}. x${it.qty} ｜ ${it.product}${it.oe ? ` ｜ OE: ${it.oe}` : ''}${
+          it.brand || it.model || it.year ? ` ｜ ${[it.brand, it.model, it.year].filter(Boolean).join(' · ')}` : ''
+        }`
+    ),
+    '',
+    `收货信息：`,
+    ...(form.company ? [`公司：${form.company}`] : []),
+    ...(form.taxId ? [`税号：${form.taxId}`] : []),
+    `联系人：${form.contact}`,
+    `电话：${form.phone}`,
+    `邮箱：${form.email}`,
+    `国家：${form.country}`,
+    `城市：${form.city}`,
+    `邮编：${form.postcode}`,
+    `地址：${form.address}`,
+  ];
+  return lines.join('\n');
+}
+async function copyText(txt: string) {
+  try {
+    await navigator.clipboard.writeText(txt);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+function downloadCSV(cart: CartItem[]) {
+  const header = ['Qty', 'Product', 'OE', 'Brand', 'Model', 'Year'].join(',');
+  const rows = cart.map((it) =>
+    [it.qty, `"${(it.product || '').replace(/"/g, '""')}"`, it.oe || '', it.brand || '', it.model || '', it.year || ''].join(',')
+  );
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'order.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function openMailDraft(text: string) {
+  const subject = encodeURIComponent('Order inquiry from ImgParts preview');
+  const body = encodeURIComponent(text);
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
 
 /* ============== 页面外壳 (Suspense) ============== */
 export default function StockPage() {
@@ -233,8 +323,8 @@ function StockInner() {
   // 轻提示
   const [toast, setToast] = useState<string | null>(null);
 
-  // 结算表单
-  const [form, setForm] = useState({
+  // 结算表单 + 校验
+  const [form, setForm] = useState<CheckoutForm>({
     company: '',
     taxId: '',
     contact: '',
@@ -245,11 +335,14 @@ function StockInner() {
     address: '',
     postcode: '',
   });
+  const [errors, setErrors] = useState<{ email?: string; phone?: string }>({});
 
   /* 初始化 */
   useEffect(() => {
     setMode(loadMode());
     setCart(loadCart());
+    const f = loadForm();
+    if (f) setForm(f);
   }, []);
   useEffect(() => {
     if (checkoutParam === '1') setCartOpen(true);
@@ -366,10 +459,21 @@ function StockInner() {
   /* 模式切换 */
   const setTradeMode = (m: TradeMode) => { setMode(m); saveMode(m); };
 
+  /* 表单持久化 + 校验 */
+  useEffect(() => { saveForm(form); }, [form]);
+  const validate = (f: CheckoutForm) => {
+    const next: { email?: string; phone?: string } = {};
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) next.email = '邮箱格式不正确';
+    if (f.phone && !/^[\d+\-\s()]{5,}$/.test(f.phone)) next.phone = '电话格式不太对';
+    setErrors(next);
+    return Object.keys(next).length === 0;
+  };
+
   /* 提交（演示） */
   const submitOrder = () => {
     if (!form.email.trim()) { alert('请填写邮箱（必填）'); return; }
     if (mode === 'B2B' && !form.company.trim()) { alert('公司名称为必填项（B2B）'); return; }
+    if (!validate(form)) { alert('请修正表单中的错误'); return; }
     const payload = { mode, cart, form };
     console.log('提交订单（演示）:', payload);
     alert('订单已提交（演示提交）。我们将尽快与您联系！');
@@ -406,7 +510,7 @@ function StockInner() {
     return () => document.removeEventListener('mousedown', onDown);
   }, [miniOpen]);
 
-  /* 清除筛选（确保已定义） */
+  /* 清除筛选 */
   const clearOne = (k: 'brand' | 'model' | 'year') => {
     if (k === 'brand') {
       setBrandFilter('');
@@ -469,7 +573,7 @@ function StockInner() {
               <div className="max-h-[50vh] overflow-auto divide-y">
                 {cart.slice(0, 5).map((it) => (
                   <div key={it.key} className="p-3 flex items-center gap-3">
-                    <img src={it.image || FALLBACK_IMG} alt="" className="h-12 w-12 rounded border object-contain" />
+                    <img loading="lazy" src={it.image || FALLBACK_IMG} alt="" className="h-12 w-12 rounded border object-contain" />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm line-clamp-1">{it.product}</div>
                       {it.oe && <div className="text-[12px] text-gray-500 mt-0.5">OE：{it.oe}</div>}
@@ -561,7 +665,7 @@ function StockInner() {
         </div>
       )}
 
-      {/* 列表（卡片含“加入”按钮；标题/图片仍可点进详情） */}
+      {/* 列表 */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.map((it) => {
           const d = encodeItemForUrl(it.raw);
@@ -580,6 +684,7 @@ function StockInner() {
               <div className="flex gap-4">
                 <Link href={href} className="h-24 w-24 shrink-0 rounded-lg bg-white overflow-hidden border">
                   <img
+                    loading="lazy"
                     src={it.image || FALLBACK_IMG}
                     alt={it.product}
                     className="h-full w-full object-contain"
@@ -642,7 +747,7 @@ function StockInner() {
                 <div className="divide-y">
                   {cart.map((it) => (
                     <div key={it.key} className="p-3 flex gap-3 items-center">
-                      <img src={it.image || FALLBACK_IMG} alt="" className="h-14 w-14 rounded border object-contain" />
+                      <img loading="lazy" src={it.image || FALLBACK_IMG} alt="" className="h-14 w-14 rounded border object-contain" />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm line-clamp-1">{it.product}</div>
                         {it.oe && <div className="text-xs text-gray-500 mt-0.5">OE：{it.oe}</div>}
@@ -664,11 +769,11 @@ function StockInner() {
                   <span className="text-sm text-gray-500">交易模式：</span>
                   <button
                     onClick={() => setTradeMode('B2C')}
-                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2C'?'bg-blue-600 text-white border-blue-600':'hover:bg灰-50'}`}
+                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2C'?'bg-blue-600 text-white border-blue-600':'hover:bg-gray-50'}`}
                   >B2C（个人）</button>
                   <button
                     onClick={() => setTradeMode('B2B')}
-                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2B'?'bg-blue-600 text白 border-blue-600':'hover:bg-gray-50'}`}
+                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2B'?'bg-blue-600 text-white border-blue-600':'hover:bg-gray-50'}`}
                   >B2B（公司）</button>
                 </div>
 
@@ -700,14 +805,16 @@ function StockInner() {
                     className="rounded-lg border px-3 py-2 text-sm"
                     placeholder="联系电话 *"
                     value={form.phone}
-                    onChange={(e)=>setForm({...form, phone:e.target.value})}
+                    onChange={(e)=>{ const v=e.target.value; setForm({...form, phone:v}); validate({...form, phone:v});}}
                   />
+                  {errors.phone && <div className="text-xs text-red-600">{errors.phone}</div>}
                   <input
                     className="rounded-lg border px-3 py-2 text-sm"
                     placeholder="邮箱（必填） *"
                     value={form.email}
-                    onChange={(e)=>setForm({...form, email:e.target.value})}
+                    onChange={(e)=>{ const v=e.target.value; setForm({...form, email:v}); validate({...form, email:v});}}
                   />
+                  {errors.email && <div className="text-xs text-red-600">{errors.email}</div>}
                   <input
                     className="rounded-lg border px-3 py-2 text-sm"
                     placeholder="国家"
@@ -737,9 +844,28 @@ function StockInner() {
                   />
                 </div>
 
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button onClick={submitOrder} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">提交订单</button>
                   <button onClick={closeCheckout} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">继续浏览</button>
+
+                  {/* 导出 / 复制 / 邮件 */}
+                  <button
+                    onClick={async ()=>{
+                      const text=buildOrderText(mode, cart, form);
+                      const ok = await copyText(text);
+                      setToast(ok? '订单已复制到剪贴板':'复制失败，请手动复制');
+                      setTimeout(()=>setToast(null),1200);
+                    }}
+                    className="ml-2 rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+                  >复制订单</button>
+                  <button
+                    onClick={()=>downloadCSV(cart)}
+                    className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+                  >下载 CSV</button>
+                  <button
+                    onClick={()=>openMailDraft(buildOrderText(mode, cart, form))}
+                    className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+                  >邮件草稿</button>
                 </div>
               </div>
             </div>
