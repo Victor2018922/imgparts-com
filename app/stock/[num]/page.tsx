@@ -1,291 +1,291 @@
 'use client';
 
-import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useState, useMemo } from 'react';
 
-type AnyObj = Record<string, any>;
-type DetailItem = {
-  id?: string;
-  sn?: string;
-  name?: string;
+type Item = {
+  num?: string;
   brand?: string;
-  model?: string;
-  year?: string;
+  product?: string;
   oe?: string;
+  model?: string;
+  year?: string | number;
+  price?: string | number;
+  stock?: string | number;
+  image?: string;
+  images?: string[];
+  pics?: string[];
+  gallery?: string[];
   imageUrls?: string[];
+  [k: string]: any;
 };
 
-const FALLBACK_LIST_API = 'https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0';
-
-/** Page 外壳，满足 useSearchParams 必须在 Suspense 内的要求 */
-export default function DetailPage() {
-  return (
-    <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
-      <DetailInner />
-    </Suspense>
-  );
-}
-
-/* ================== 工具 ================== */
-function safeJsonParse<T = any>(s?: string | null): T | null {
-  if (!s) return null;
-  try { return JSON.parse(s) as T; } catch {}
-  try { return JSON.parse(decodeURIComponent(s)) as T; } catch {}
+async function fetchItem(num: string): Promise<Item | null> {
   try {
-    const decoded = atob(decodeURIComponent(s));
-    return JSON.parse(decoded) as T;
-  } catch {}
+    const resp = await fetch(
+      'https://niuniuparts.com:6001/scm-product/v1/stock2?size=200&page=0',
+      { cache: 'no-store' }
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      const rows: Item[] = Array.isArray(data)
+        ? data
+        : Array.isArray((data as any)?.content)
+        ? (data as any).content
+        : [];
+      const found = rows.find((x) => String(x?.num ?? '') === String(num));
+      if (found) return found;
+    }
+  } catch {
+    // 忽略错误
+  }
   return null;
 }
-function extractImageUrls(obj: AnyObj): string[] {
-  const candidates: Array<string | string[] | undefined> = [
-    obj.imageUrls, obj.images, obj.imageList, obj.imgs, obj.pictures, obj.pics,
-    obj.urls, obj.img, obj.image, obj.pic, obj.photo
-  ];
-  const urls: string[] = [];
-  const push = (raw: string) => {
-    String(raw).split(/[\s,;\n]+/g).forEach((p) => {
-      const v = p.trim();
-      if (/^https?:\/\//i.test(v) && /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(v)) urls.push(v);
-    });
-  };
-  for (const c of candidates) {
-    if (!c) continue;
-    Array.isArray(c) ? c.forEach((x) => push(String(x))) : push(String(c));
-  }
-  return Array.from(new Set(urls));
-}
-function normalizeItem(raw?: AnyObj | null): DetailItem | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const oe = raw.oe ?? raw.OE ?? raw.oeNo ?? raw.oeCode ?? raw['OE号'] ?? '';
-  const id = raw.id ?? raw.sn ?? raw.code ?? raw.sku ?? raw.num ?? oe ?? '';
-  const name = raw.name ?? raw.title ?? raw.productName ?? raw.partName ?? raw['品名'] ?? raw['名称'] ?? 'IMG';
-  const brand = raw.brand ?? raw.maker ?? raw['品牌'] ?? 'IMG';
-  const model = raw.model ?? raw.vehicle ?? raw['车型'] ?? '';
-  const year = raw.year ?? raw['年份'] ?? '';
-  const imageUrls = extractImageUrls(raw);
-  return { id: String(id || ''), sn: String(raw.sn ?? ''), oe: String(oe || ''), name, brand, model, year, imageUrls };
-}
-function decodeItemFromParam(d?: string | null): DetailItem | null {
-  const json = safeJsonParse<AnyObj>(d);
-  return normalizeItem(json);
-}
 
-/* ================== 放大镜 ================== */
-const Magnifier: React.FC<{ src: string; zoom?: number; className?: string }> = ({ src, zoom = 2, className }) => {
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const lensRef = useRef<HTMLDivElement | null>(null);
-  const [over, setOver] = useState(false);
-
-  useEffect(() => {
-    const wrap = wrapRef.current, lens = lensRef.current;
-    if (!wrap || !lens) return;
-    const onMove = (e: MouseEvent) => {
-      const rect = wrap.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const L = 140;
-      const lx = Math.max(0, Math.min(x - L / 2, rect.width - L));
-      const ly = Math.max(0, Math.min(y - L / 2, rect.height - L));
-      lens.style.left = `${lx}px`;
-      lens.style.top = `${ly}px`;
-      lens.style.backgroundImage = `url(${src})`;
-      lens.style.backgroundRepeat = 'no-repeat';
-      lens.style.backgroundSize = `${rect.width * zoom}px ${rect.height * zoom}px`;
-      lens.style.backgroundPosition = `${-lx * zoom}px ${-ly * zoom}px`;
-    };
-    const onEnter = () => setOver(true);
-    const onLeave = () => setOver(false);
-    wrap.addEventListener('mousemove', onMove);
-    wrap.addEventListener('mouseenter', onEnter);
-    wrap.addEventListener('mouseleave', onLeave);
-    return () => {
-      wrap.removeEventListener('mousemove', onMove);
-      wrap.removeEventListener('mouseenter', onEnter);
-      wrap.removeEventListener('mouseleave', onLeave);
-    };
-  }, [src, zoom]);
-
-  return (
-    <div ref={wrapRef} className={`relative overflow-hidden ${className || ''}`}>
-      <img src={src} alt="product" className="block w-full rounded-lg" />
-      <div
-        ref={lensRef}
-        className="pointer-events-none absolute rounded-full border border-gray-300 shadow-lg opacity-95"
-        style={{ width: 140, height: 140, display: over ? 'block' : 'none' }}
-      />
-    </div>
+export async function generateMetadata({
+  params,
+}: {
+  params: { num: string };
+}) {
+  const item = await fetchItem(params.num);
+  const titleParts = [item?.brand, item?.product, item?.oe, params.num].filter(
+    Boolean
   );
-};
-
-/* ================== 详情主体 ================== */
-function DetailInner() {
-  const params = useParams<{ num: string }>();
-  const search = useSearchParams();
-  const d = search?.get('d') ?? null;
-
-  const [item, setItem] = useState<DetailItem | null>(() => decodeItemFromParam(d));
-  const [banner, setBanner] = useState<string | null>(null);
-
-  const images = useMemo(() => item?.imageUrls ?? [], [item]);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [autoPlay, setAutoPlay] = useState(true);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-
-  // 兜底：无 d 时按路由参数匹配
-  useEffect(() => {
-    (async () => {
-      if (item) return;
-      try {
-        const res = await fetch(FALLBACK_LIST_API, { cache: 'no-store' });
-        if (!res.ok) { setBanner(`⚠️ 详情未携带数据且兜底失败：HTTP ${res.status}`); return; }
-        const j = await res.json();
-        const arr = Array.isArray(j?.data?.content) ? j.data.content : Array.isArray(j?.content) ? j.content : Array.isArray(j?.data) ? j.data : [];
-        const found = arr.find((x: AnyObj) =>
-          String(x?.sn ?? x?.id ?? '').includes(params?.num ?? '') ||
-          String(x?.oe ?? '').includes(params?.num ?? '')
-        );
-        const normalized = normalizeItem(found || arr[0]);
-        normalized ? setItem(normalized) : setBanner('⚠️ 未找到详情条目');
-      } catch { setBanner('⚠️ 兜底抓取异常'); }
-    })();
-  }, [item, params?.num]);
-
-  // 自动轮播 + 键盘
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!images.length) return;
-      if (e.key === 'ArrowLeft') setActiveIndex((i) => (i - 1 + images.length) % images.length);
-      if (e.key === 'ArrowRight') setActiveIndex((i) => (i + 1) % images.length);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [images.length]);
-
-  useEffect(() => {
-    if (!autoPlay || images.length <= 1) return;
-    const id = setInterval(() => setActiveIndex((i) => (i + 1) % images.length), 5000);
-    return () => clearInterval(id);
-  }, [autoPlay, images.length]);
-
-  const scrollThumbs = (dir: 'left' | 'right') => {
-    const box = document.getElementById('thumb-strip');
-    if (!box) return;
-    box.scrollBy({ left: dir === 'left' ? -220 : 220, behavior: 'smooth' });
+  return {
+    title: titleParts.join(' | ') || `Item ${params.num}`,
   };
+}
+
+export default function StockDetailPage({
+  params,
+}: {
+  params: { num: string };
+}) {
+  const [item, setItem] = useState<Item | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const num = params.num;
+
+  useMemo(() => {
+    fetchItem(num).then((res) => {
+      setItem(res);
+      setLoading(false);
+    });
+  }, [num]);
+
+  if (loading) {
+    return <div style={{ padding: 32 }}>加载中...</div>;
+  }
 
   if (!item) {
-    return <main className="container mx-auto p-4"><div className="text-gray-500">加载中…</div></main>;
+    return (
+      <div style={{ padding: 32 }}>
+        <h1 style={{ fontSize: 20, fontWeight: 600 }}>未找到商品：{num}</h1>
+        <a
+          href="/stock"
+          style={{
+            display: 'inline-block',
+            marginTop: 16,
+            padding: '8px 16px',
+            background: '#111827',
+            color: '#fff',
+            borderRadius: 8,
+            textDecoration: 'none',
+          }}
+        >
+          返回列表
+        </a>
+      </div>
+    );
   }
 
+  // 处理图片：不足18张补齐，无图则用透明占位
+  const placeholder =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==';
+
+  const rawImgs: string[] =
+    item.images ||
+    item.pics ||
+    item.gallery ||
+    item.imageUrls ||
+    (item.image ? [item.image] : []) ||
+    [];
+
+  const cleaned = useMemo(() => {
+    const seen = new Set<string>();
+    return rawImgs
+      .filter(Boolean)
+      .map((s) => (typeof s === 'string' ? s.trim() : ''))
+      .filter((s) => s.length > 0)
+      .filter((u) => {
+        const key = u.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [rawImgs]);
+
+  const filled: string[] = useMemo(() => {
+    const MIN = 18;
+    let base = cleaned.length > 0 ? cleaned : [placeholder];
+    const out: string[] = [];
+    while (out.length < Math.max(MIN, base.length)) {
+      out.push(base[out.length % base.length]);
+    }
+    return out;
+  }, [cleaned]);
+
+  const [active, setActive] = useState(0);
+  const current = filled[active] ?? filled[0];
+
+  const titleParts = [item.brand, item.product, item.oe, num].filter(Boolean);
+  const safeTitle = titleParts.join(' | ');
+
   return (
-    <main className="container mx-auto p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <Link href="/stock" className="text-sm text-blue-600 hover:underline">← 返回库存预览</Link>
-        <nav className="space-x-4 text-sm">
-          <Link href="/" className="hover:underline">首页</Link>
-          <Link href="/stock" className="hover:underline">库存预览</Link>
-        </nav>
-      </div>
-
-      {banner && <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 text-sm">{banner}</div>}
-
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr',
+        gap: 24,
+        padding: '24px 0',
+      }}
+    >
+      <div>
         {/* 主图 */}
-        <div onMouseEnter={() => setAutoPlay(false)} onMouseLeave={() => setAutoPlay(true)} className="relative">
-          {images.length ? (
-            <Magnifier src={images[activeIndex]} className="aspect-[4/3] w-full rounded-lg bg-white" />
-          ) : (
-            <div className="flex aspect-[4/3] w-full items-center justify-center rounded-lg border bg-gray-50 text-gray-400">No Image</div>
-          )}
-
-          {images.length > 1 && (
-            <>
-              <button
-                aria-label="prev"
-                onClick={() => setActiveIndex((i) => (i - 1 + images.length) % images.length)}
-                className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white hover:bg-black/60"
-              >‹</button>
-              <button
-                aria-label="next"
-                onClick={() => setActiveIndex((i) => (i + 1) % images.length)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white hover:bg-black/60"
-              >›</button>
-            </>
-          )}
-
-          {images.length > 0 && (
-            <div className="mt-3 text-right">
-              <button onClick={() => setLightboxOpen(true)} className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50">查看大图</button>
-            </div>
-          )}
+        <div
+          style={{
+            width: '100%',
+            aspectRatio: '1 / 1',
+            overflow: 'hidden',
+            borderRadius: 16,
+            background: '#fff',
+            border: '1px solid #eee',
+          }}
+        >
+          <img
+            src={current}
+            alt="product"
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          />
         </div>
 
-        {/* 右侧信息 */}
-        <div>
-          <h1 className="mb-3 text-2xl font-semibold">{item.name || 'IMG'}</h1>
-          <div className="space-y-2 text-gray-700">
-            {!!item.brand && <div><span className="inline-block w-16 text-gray-500">品牌：</span><span>{item.brand}</span></div>}
-            {!!item.model && <div><span className="inline-block w-16 text-gray-500">车型：</span><span>{item.model}</span></div>}
-            {!!item.oe &&    <div><span className="inline-block w-16 text-gray-500">OE：</span><span>{item.oe}</span></div>}
-            {!!item.year &&  <div><span className="inline-block w-16 text-gray-500">年份：</span><span>{item.year}</span></div>}
-          </div>
-
-          <div className="mt-6 flex gap-3">
+        {/* 缩略图 */}
+        <div
+          style={{
+            marginTop: 12,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(9, 1fr)',
+            gap: 8,
+          }}
+        >
+          {filled.map((src, i) => (
             <button
-              onClick={() => {
-                try {
-                  const key = 'imgparts_cart';
-                  const old = JSON.parse(localStorage.getItem(key) || '[]') as AnyObj[];
-                  const idx = old.findIndex((x) => (x.oe || x.id) === (item.oe || item.id));
-                  if (idx >= 0) old[idx].qty = (old[idx].qty || 1) + 1; else old.push({ ...(item as AnyObj), qty: 1 });
-                  localStorage.setItem(key, JSON.stringify(old));
-                  alert('已加入购物车（本地保存）！');
-                } catch { alert('加入购物车失败：本地存储异常'); }
+              key={`${src}-${i}`}
+              onClick={() => setActive(i)}
+              aria-label={`thumbnail ${i + 1}`}
+              style={{
+                aspectRatio: '1 / 1',
+                overflow: 'hidden',
+                borderRadius: 8,
+                border:
+                  i === active ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                background: '#fff',
+                padding: 0,
+                cursor: 'pointer',
               }}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-            >加入购物车</button>
-            <Link href="/stock?checkout=1" className="rounded-lg border px-4 py-2 hover:bg-gray-50">去结算</Link>
-          </div>
-
-          <div className="mt-8 text-sm text-gray-400">
-            数据源： <a className="hover:underline" href="https://niuniuparts.com" target="_blank">niuniuparts.com</a>（测试预览用途）
-          </div>
+            >
+              <img
+                src={src}
+                alt={`thumb-${i + 1}`}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* 缩略图条 */}
-      {images.length > 1 && (
-        <div className="mt-8">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="font-medium text-gray-700">更多图片</div>
-            <div className="space-x-2">
-              <button onClick={() => scrollThumbs('left')} className="rounded border px-2 py-1 hover:bg-gray-50">←</button>
-              <button onClick={() => scrollThumbs('right')} className="rounded border px-2 py-1 hover:bg-gray-50">→</button>
-            </div>
-          </div>
-          <div id="thumb-strip" className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
-            {images.map((u, idx) => (
-              <button
-                key={u + idx}
-                onClick={() => setActiveIndex(idx)}
-                className={`relative h-28 min-w-[180px] flex-none overflow-hidden rounded-md border ${idx === activeIndex ? 'border-blue-500' : 'border-gray-200'}`}
-                title={`图 ${idx + 1}`}
-              >
-                <img src={u} alt={`thumb-${idx}`} className="h-full w-full object-cover" />
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <div>
+        <h1 style={{ fontSize: 24, fontWeight: 700 }}>{safeTitle}</h1>
 
-      {/* Lightbox */}
-      {lightboxOpen && images.length > 0 && (
-        <div onClick={() => setLightboxOpen(false)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <img src={images[activeIndex]} className="max-h-[92vh] max-w-[92vw] rounded-lg shadow-2xl" alt="preview" />
+        <dl
+          style={{
+            marginTop: 16,
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 12,
+            fontSize: 14,
+          }}
+        >
+          {item.brand && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>品牌</dt>
+              <dd style={{ fontWeight: 600 }}>{item.brand}</dd>
+            </div>
+          )}
+          {item.product && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>品名</dt>
+              <dd style={{ fontWeight: 600 }}>{item.product}</dd>
+            </div>
+          )}
+          {item.oe && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>OE</dt>
+              <dd style={{ fontWeight: 600 }}>{item.oe}</dd>
+            </div>
+          )}
+          {item.model && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>车型</dt>
+              <dd style={{ fontWeight: 600 }}>{item.model}</dd>
+            </div>
+          )}
+          {item.year && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>年份</dt>
+              <dd style={{ fontWeight: 600 }}>{item.year}</dd>
+            </div>
+          )}
+          {item.price !== undefined && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>价格</dt>
+              <dd style={{ fontWeight: 600 }}>{String(item.price)}</dd>
+            </div>
+          )}
+          {item.stock !== undefined && (
+            <div>
+              <dt style={{ color: '#6b7280' }}>库存</dt>
+              <dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd>
+            </div>
+          )}
+        </dl>
+
+        <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
+          <button
+            style={{
+              padding: '8px 16px',
+              borderRadius: 8,
+              background: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            加入购物车
+          </button>
+          <button
+            style={{
+              padding: '8px 16px',
+              borderRadius: 8,
+              background: '#fff',
+              color: '#111827',
+              border: '1px solid #e5e7eb',
+              cursor: 'pointer',
+            }}
+          >
+            立即购买
+          </button>
         </div>
-      )}
-    </main>
+      </div>
+    </div>
   );
 }
