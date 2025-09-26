@@ -45,7 +45,126 @@ type CartItem = {
 };
 
 type TradeMode = 'B2C' | 'B2B';
+type Lang = 'zh' | 'en';
 
+/* ================= i18n ================= */
+const STRINGS: Record<Lang, Record<string, string>> = {
+  zh: {
+    title: 'ImgParts 预览站',
+    mode: '交易模式：',
+    b2c: 'B2C（个人）',
+    b2b: 'B2B（公司）',
+    cartCheckout: '购物车 / 结算',
+    loading: '加载中…',
+    searchPh: '搜索：OE号 / 商品名 / 品牌 / 车型',
+    brandAll: '品牌（全部）',
+    modelAll: '车型（全部）',
+    yearAll: '年款（全部）',
+    clearFilters: '清空筛选',
+    selected: '已选：',
+    loadMore: '加载更多',
+    loadedAll: '已加载全部',
+    cartPreview: '购物车预览',
+    emptyCart: '购物车为空',
+    clearCart: '清空',
+    goCheckout: '去结算',
+    checkout: '结算',
+    close: '关闭',
+    cartN: '购物车',
+    continueBrowse: '继续浏览',
+    copyOrder: '复制订单',
+    csvDownload: '下载 CSV',
+    emailDraft: '邮件草稿',
+    submitOrder: '提交订单',
+    company: '公司名称 *',
+    taxId: '统一税号（可选）',
+    contact: '联系人姓名 *',
+    phone: '联系电话 *',
+    email: '邮箱（必填） *',
+    country: '国家',
+    city: '城市',
+    postcode: '邮编',
+    address: '详细地址',
+    emailInvalid: '邮箱格式不正确',
+    phoneInvalid: '电话格式不太对',
+    pleaseFillEmail: '请填写邮箱（必填）',
+    needCompanyB2B: '公司名称为必填项（B2B）',
+    fixForm: '请修正表单中的错误',
+    orderSubmitted: '订单已提交（演示提交）。我们将尽快与您联系！',
+    copied: '订单已复制到剪贴板',
+    copyFailed: '复制失败，请手动复制',
+    dataFrom: '数据源： niuniuparts.com（测试预览用途）',
+    lang: '语言：',
+    zh: '中文',
+    en: 'English',
+  },
+  en: {
+    title: 'ImgParts Preview',
+    mode: 'Mode:',
+    b2c: 'B2C (Personal)',
+    b2b: 'B2B (Business)',
+    cartCheckout: 'Cart / Checkout',
+    loading: 'Loading…',
+    searchPh: 'Search: OE / Product / Brand / Model',
+    brandAll: 'Brand (All)',
+    modelAll: 'Model (All)',
+    yearAll: 'Year (All)',
+    clearFilters: 'Clear',
+    selected: 'Selected:',
+    loadMore: 'Load more',
+    loadedAll: 'All loaded',
+    cartPreview: 'Cart Preview',
+    emptyCart: 'Cart is empty',
+    clearCart: 'Clear',
+    goCheckout: 'Checkout',
+    checkout: 'Checkout',
+    close: 'Close',
+    cartN: 'Cart',
+    continueBrowse: 'Continue',
+    copyOrder: 'Copy Order',
+    csvDownload: 'Download CSV',
+    emailDraft: 'Mail Draft',
+    submitOrder: 'Submit',
+    company: 'Company *',
+    taxId: 'Tax ID (optional)',
+    contact: 'Contact *',
+    phone: 'Phone *',
+    email: 'Email (required) *',
+    country: 'Country',
+    city: 'City',
+    postcode: 'Postcode',
+    address: 'Address',
+    emailInvalid: 'Invalid email format',
+    phoneInvalid: 'Phone number looks invalid',
+    pleaseFillEmail: 'Email is required',
+    needCompanyB2B: 'Company name is required (B2B)',
+    fixForm: 'Please fix errors in the form',
+    orderSubmitted: 'Order submitted (demo). We will contact you soon!',
+    copied: 'Order copied to clipboard',
+    copyFailed: 'Copy failed, please copy manually',
+    dataFrom: 'Data: niuniuparts.com (preview)',
+    lang: 'Language:',
+    zh: '中文',
+    en: 'English',
+  },
+};
+
+function useI18n() {
+  const [lang, setLang] = useState<Lang>('zh');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const v = (localStorage.getItem('lang') as Lang) || 'zh';
+    setLang(v);
+  }, []);
+  const setLangPersist = (v: Lang) => {
+    setLang(v);
+    if (typeof window !== 'undefined') localStorage.setItem('lang', v);
+  };
+  const t = (k: string) => STRINGS[lang][k] || STRINGS.zh[k] || k;
+  return { lang, setLang: setLangPersist, t };
+}
+
+/* ================= 工具函数 ================= */
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -55,7 +174,6 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ================= 工具函数 ================= */
 function extractArray(js: any): any[] {
   if (Array.isArray(js)) return js;
   const cand =
@@ -69,7 +187,6 @@ function extractArray(js: any): any[] {
     null;
   return Array.isArray(cand) ? cand : [];
 }
-
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
   const m1 = s.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -114,7 +231,7 @@ function deepFindImage(obj: any, depth = 0): string | null {
   if (typeof obj === 'string') {
     const url = extractFirstUrl(obj) || obj;
     return url && isImgUrl(url) ? url : null;
-  }
+    }
   if (Array.isArray(obj)) {
     for (const it of obj) {
       const hit = deepFindImage(it, depth + 1);
@@ -186,6 +303,17 @@ function saveMode(v: TradeMode) {
   if (typeof window === 'undefined') return;
   localStorage.setItem('tradeMode', v);
 }
+type CheckoutForm = {
+  company: string;
+  taxId: string;
+  contact: string;
+  phone: string;
+  email: string;
+  country: string;
+  city: string;
+  address: string;
+  postcode: string;
+};
 function loadForm(): CheckoutForm | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -201,39 +329,17 @@ function saveForm(f: CheckoutForm) {
 }
 
 /* ============== 订单导出/复制/邮件 ============== */
-type CheckoutForm = {
-  company: string;
-  taxId: string;
-  contact: string;
-  phone: string;
-  email: string;
-  country: string;
-  city: string;
-  address: string;
-  postcode: string;
-};
-function buildOrderText(mode: TradeMode, cart: CartItem[], form: CheckoutForm): string {
+function buildOrderText(mode: TradeMode, cart: CartItem[], form: CheckoutForm, t:(k:string)=>string): string {
   const lines = [
-    `【订单摘要】`,
-    `交易模式：${mode}`,
-    `商品明细（${cart.reduce((s, it) => s + it.qty, 0)} 件）：`,
-    ...cart.map(
-      (it, idx) =>
-        `${idx + 1}. x${it.qty} ｜ ${it.product}${it.oe ? ` ｜ OE: ${it.oe}` : ''}${
-          it.brand || it.model || it.year ? ` ｜ ${[it.brand, it.model, it.year].filter(Boolean).join(' · ')}` : ''
-        }`
-    ),
+    `【${t('checkout')}】`,
+    `${t('mode')}${mode}`,
+    `${t('cartN')}（${cart.reduce((s, it) => s + it.qty, 0)}）`,
+    ...cart.map((it, i) => `${i + 1}. x${it.qty} ｜ ${it.product}${it.oe ? ` ｜ OE: ${it.oe}` : ''}`),
     '',
-    `收货信息：`,
-    ...(form.company ? [`公司：${form.company}`] : []),
-    ...(form.taxId ? [`税号：${form.taxId}`] : []),
-    `联系人：${form.contact}`,
-    `电话：${form.phone}`,
-    `邮箱：${form.email}`,
-    `国家：${form.country}`,
-    `城市：${form.city}`,
-    `邮编：${form.postcode}`,
-    `地址：${form.address}`,
+    `${t('country')}/${t('city')}/${t('postcode')}: ${[form.country, form.city, form.postcode].filter(Boolean).join(' / ')}`,
+    `${t('address')}: ${form.address}`,
+    `${t('contact')}: ${form.contact}  ${t('phone')}: ${form.phone}  ${t('email')}: ${form.email}`,
+    ...(mode === 'B2B' ? [`${t('company')}: ${form.company}`, `${t('taxId')}: ${form.taxId || '-'}`] : []),
   ];
   return lines.join('\n');
 }
@@ -290,6 +396,7 @@ export default function StockPage() {
 function StockInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { lang, setLang, t } = useI18n();
 
   // URL 参数
   const checkoutParam = searchParams?.get('checkout');
@@ -463,20 +570,19 @@ function StockInner() {
   useEffect(() => { saveForm(form); }, [form]);
   const validate = (f: CheckoutForm) => {
     const next: { email?: string; phone?: string } = {};
-    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) next.email = '邮箱格式不正确';
-    if (f.phone && !/^[\d+\-\s()]{5,}$/.test(f.phone)) next.phone = '电话格式不太对';
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) next.email = t('emailInvalid');
+    if (f.phone && !/^[\d+\-\s()]{5,}$/.test(f.phone)) next.phone = t('phoneInvalid');
     setErrors(next);
     return Object.keys(next).length === 0;
   };
 
   /* 提交（演示） */
   const submitOrder = () => {
-    if (!form.email.trim()) { alert('请填写邮箱（必填）'); return; }
-    if (mode === 'B2B' && !form.company.trim()) { alert('公司名称为必填项（B2B）'); return; }
-    if (!validate(form)) { alert('请修正表单中的错误'); return; }
-    const payload = { mode, cart, form };
-    console.log('提交订单（演示）:', payload);
-    alert('订单已提交（演示提交）。我们将尽快与您联系！');
+    if (!form.email.trim()) { alert(t('pleaseFillEmail')); return; }
+    if (mode === 'B2B' && !form.company.trim()) { alert(t('needCompanyB2B')); return; }
+    if (!validate(form)) { alert(t('fixForm')); return; }
+    console.log('提交订单（演示）:', { mode, cart, form });
+    alert(t('orderSubmitted'));
     setCart([]);
     setCartOpen(false);
   };
@@ -496,7 +602,7 @@ function StockInner() {
       image: ci.image || null,
     };
     setCart((prev) => [...prev, next]);
-    setToast(`已加入：${ci.product}`);
+    setToast(`+ ${ci.product}`);
     setTimeout(() => setToast(null), 1200);
   };
 
@@ -537,63 +643,83 @@ function StockInner() {
   /* ================== 渲染 ================== */
   return (
     <main className="container mx-auto p-4">
-      {/* 顶部：标题 / 模式 / 购物车 + 迷你下拉 */}
+      {/* 顶部：标题 / 语言 / 模式 / 购物车 + 迷你下拉 */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 relative">
-        <div className="text-2xl font-bold">ImgParts 预览站</div>
+        <div className="text-2xl font-bold">{t('title')}</div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">交易模式：</span>
-          <button
-            onClick={() => setTradeMode('B2C')}
-            className={`rounded-lg border px-3 py-1 text-sm ${mode === 'B2C' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-gray-50'}`}
-          >
-            B2C（个人）
-          </button>
-          <button
-            onClick={() => setTradeMode('B2B')}
-            className={`rounded-lg border px-3 py-1 text-sm ${mode === 'B2B' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-gray-50'}`}
-          >
-            B2B（公司）
-          </button>
-        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 text-sm">
+            <span className="text-gray-500">{t('lang')}</span>
+            <button
+              onClick={() => setLang('zh')}
+              className={`rounded border px-2 py-1 text-xs ${lang === 'zh' ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
+            >
+              {t('zh')}
+            </button>
+            <button
+              onClick={() => setLang('en')}
+              className={`rounded border px-2 py-1 text-xs ${lang === 'en' ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
+            >
+              {t('en')}
+            </button>
+          </div>
 
-        <div className="relative" ref={miniRef}>
-          <button
-            onClick={() => setMiniOpen((v) => !v)}
-            className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
-            aria-expanded={miniOpen}
-          >
-            购物车 / 结算（{cartCount}）
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">{t('mode')}</span>
+            <button
+              onClick={() => setTradeMode('B2C')}
+              className={`rounded-lg border px-3 py-1 text-sm ${mode === 'B2C' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-gray-50'}`}
+            >
+              {t('b2c')}
+            </button>
+            <button
+              onClick={() => setTradeMode('B2B')}
+              className={`rounded-lg border px-3 py-1 text-sm ${mode === 'B2B' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-gray-50'}`}
+            >
+              {t('b2b')}
+            </button>
+          </div>
 
-          {/* 迷你购物车下拉 */}
-          {miniOpen && (
-            <div className="absolute right-0 mt-2 w-[360px] rounded-xl border bg-white shadow-lg z-50">
-              <div className="p-3 text-sm font-medium">购物车预览</div>
-              <div className="max-h-[50vh] overflow-auto divide-y">
-                {cart.slice(0, 5).map((it) => (
-                  <div key={it.key} className="p-3 flex items-center gap-3">
-                    <img loading="lazy" src={it.image || FALLBACK_IMG} alt="" className="h-12 w-12 rounded border object-contain" />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm line-clamp-1">{it.product}</div>
-                      {it.oe && <div className="text-[12px] text-gray-500 mt-0.5">OE：{it.oe}</div>}
-                      <div className="mt-1 flex items-center gap-2">
-                        <button className="rounded border px-2 text-xs" onClick={() => dec(it.key)}>-</button>
-                        <span className="text-xs w-5 text-center">{it.qty}</span>
-                        <button className="rounded border px-2 text-xs" onClick={() => inc(it.key)}>+</button>
-                        <button className="ml-2 rounded border px-2 text-xs text-red-600" onClick={() => rm(it.key)}>移除</button>
+          <div className="relative" ref={miniRef}>
+            <button
+              onClick={() => setMiniOpen((v) => !v)}
+              className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+              aria-expanded={miniOpen}
+            >
+              {t('cartCheckout')}（{cartCount}）
+            </button>
+
+            {/* 迷你购物车下拉 */}
+            {miniOpen && (
+              <div className="absolute right-0 mt-2 w-[360px] rounded-xl border bg-white shadow-lg z-50">
+                <div className="p-3 text-sm font-medium">{t('cartPreview')}</div>
+                <div className="max-h-[50vh] overflow-auto divide-y">
+                  {cart.slice(0, 5).map((it) => (
+                    <div key={it.key} className="p-3 flex items-center gap-3">
+                      <img loading="lazy" src={it.image || FALLBACK_IMG} alt="" className="h-12 w-12 rounded border object-contain" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm line-clamp-1">{it.product}</div>
+                        {it.oe && <div className="text-[12px] text-gray-500 mt-0.5">OE：{it.oe}</div>}
+                        <div className="mt-1 flex items-center gap-2">
+                          <button className="rounded border px-2 text-xs" onClick={() => dec(it.key)}>-</button>
+                          <span className="text-xs w-5 text-center">{it.qty}</span>
+                          <button className="rounded border px-2 text-xs" onClick={() => inc(it.key)}>+</button>
+                          <button className="ml-2 rounded border px-2 text-xs text-red-600" onClick={() => rm(it.key)}>移除</button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-                {cart.length === 0 && <div className="p-6 text-center text-sm text-gray-400">购物车为空</div>}
+                  ))}
+                  {cart.length === 0 && <div className="p-6 text-center text-sm text-gray-400">{t('emptyCart')}</div>}
+                </div>
+                <div className="p-3 flex items-center justify-between">
+                  <button className="text-xs text-gray-500 hover:text-gray-700" onClick={clearCart}>{t('clearCart')}</button>
+                  <button className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white" onClick={() => { setMiniOpen(false); setCartOpen(true); }}>
+                    {t('goCheckout')}
+                  </button>
+                </div>
               </div>
-              <div className="p-3 flex items-center justify-between">
-                <button className="text-xs text-gray-500 hover:text-gray-700" onClick={clearCart}>清空</button>
-                <button className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white" onClick={openCheckout}>去结算</button>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
 
@@ -602,7 +728,7 @@ function StockInner() {
         <input
           value={q}
           onChange={(e) => { setQ(e.target.value); syncUrl({ q: e.target.value }); }}
-          placeholder="搜索：OE号 / 商品名 / 品牌 / 车型"
+          placeholder={t('searchPh')}
           className="w-full rounded-lg border px-3 py-2 text-sm"
         />
         <select
@@ -610,7 +736,7 @@ function StockInner() {
           onChange={(e) => { setBrandFilter(e.target.value); setModelFilter(''); setYearFilter(''); syncUrl({ brand: e.target.value, model: '', year: '' }); }}
           className="rounded-lg border px-3 py-2 text-sm"
         >
-          <option value="">品牌（全部）</option>
+          <option value="">{t('brandAll')}</option>
           {brandOptions.map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
         <select
@@ -618,7 +744,7 @@ function StockInner() {
           onChange={(e) => { setModelFilter(e.target.value); setYearFilter(''); syncUrl({ model: e.target.value, year: '' }); }}
           className="rounded-lg border px-3 py-2 text-sm"
         >
-          <option value="">车型（全部）</option>
+          <option value="">{t('modelAll')}</option>
           {modelOptions.map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
         <select
@@ -626,39 +752,39 @@ function StockInner() {
           onChange={(e) => { setYearFilter(e.target.value); syncUrl({ year: e.target.value }); }}
           className="rounded-lg border px-3 py-2 text-sm"
         >
-          <option value="">年款（全部）</option>
+          <option value="">{t('yearAll')}</option>
           {yearOptions.map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
         <button onClick={clearAllFilters} className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50">
-          清空筛选
+          {t('clearFilters')}
         </button>
       </div>
 
       {/* 活动筛选 Chip */}
       {(brandFilter || modelFilter || yearFilter || q) && (
         <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-gray-500">已选：</span>
+          <span className="text-gray-500">{t('selected')}</span>
           {q && (
             <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
-              关键词：{q}
+              {q}
               <button className="text-gray-400 hover:text-gray-600" onClick={() => { setQ(''); syncUrl({ q: '' }); }}>✕</button>
             </span>
           )}
           {brandFilter && (
             <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
-              品牌：{brandFilter}
+              {brandFilter}
               <button className="text-gray-400 hover:text-gray-600" onClick={() => clearOne('brand')}>✕</button>
             </span>
           )}
           {modelFilter && (
             <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
-              车型：{modelFilter}
+              {modelFilter}
               <button className="text-gray-400 hover:text-gray-600" onClick={() => clearOne('model')}>✕</button>
             </span>
           )}
           {yearFilter && (
             <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1">
-              年款：{yearFilter}
+              {yearFilter}
               <button className="text-gray-400 hover:text-gray-600" onClick={() => clearOne('year')}>✕</button>
             </span>
           )}
@@ -678,7 +804,7 @@ function StockInner() {
                 className="absolute right-3 top-3 rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
                 title="加入购物车"
               >
-                加入
+                +
               </button>
 
               <div className="flex gap-4">
@@ -715,10 +841,10 @@ function StockInner() {
             onClick={() => loadPage(page)}
             className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-60"
           >
-            {loading ? '加载中…' : '加载更多'}
+            {loading ? t('loading') : t('loadMore')}
           </button>
         ) : (
-          <div className="text-sm text-gray-400">已加载全部</div>
+          <div className="text-sm text-gray-400">{t('loadedAll')}</div>
         )}
       </div>
 
@@ -734,15 +860,15 @@ function StockInner() {
         <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
           <div className="max-h-[90vh] w-[960px] overflow-auto rounded-2xl bg-white p-4">
             <div className="flex items-center justify-between">
-              <div className="text-lg font-semibold">结算</div>
-              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={closeCheckout}>关闭</button>
+              <div className="text-lg font-semibold">{t('checkout')}</div>
+              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={closeCheckout}>{t('close')}</button>
             </div>
 
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="rounded-xl border">
                 <div className="p-3 text-sm text-gray-500 flex items-center justify-between">
-                  <div>购物车（{cartCount}）</div>
-                  <button className="text-xs text-gray-400 hover:text-gray-600" onClick={clearCart}>清空购物车</button>
+                  <div>{t('cartN')}（{cartCount}）</div>
+                  <button className="text-xs text-gray-400 hover:text-gray-600" onClick={clearCart}>{t('clearCart')}</button>
                 </div>
                 <div className="divide-y">
                   {cart.map((it) => (
@@ -760,21 +886,21 @@ function StockInner() {
                       </div>
                     </div>
                   ))}
-                  {cart.length === 0 && <div className="p-6 text-center text-sm text-gray-400">购物车为空</div>}
+                  {cart.length === 0 && <div className="p-6 text-center text-sm text-gray-400">{t('emptyCart')}</div>}
                 </div>
               </div>
 
               <div className="rounded-xl border p-3">
                 <div className="mb-2 flex items-center gap-2">
-                  <span className="text-sm text-gray-500">交易模式：</span>
+                  <span className="text-sm text-gray-500">{t('mode')}</span>
                   <button
                     onClick={() => setTradeMode('B2C')}
                     className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2C'?'bg-blue-600 text-white border-blue-600':'hover:bg-gray-50'}`}
-                  >B2C（个人）</button>
+                  >{t('b2c')}</button>
                   <button
                     onClick={() => setTradeMode('B2B')}
                     className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2B'?'bg-blue-600 text-white border-blue-600':'hover:bg-gray-50'}`}
-                  >B2B（公司）</button>
+                  >{t('b2b')}</button>
                 </div>
 
                 <div className="grid grid-cols-1 gap-2">
@@ -782,13 +908,13 @@ function StockInner() {
                     <>
                       <input
                         className="rounded-lg border px-3 py-2 text-sm"
-                        placeholder="公司名称 *"
+                        placeholder={t('company')}
                         value={form.company}
                         onChange={(e)=>setForm({...form, company:e.target.value})}
                       />
                       <input
                         className="rounded-lg border px-3 py-2 text-sm"
-                        placeholder="统一税号（可选）"
+                        placeholder={t('taxId')}
                         value={form.taxId}
                         onChange={(e)=>setForm({...form, taxId:e.target.value})}
                       />
@@ -797,47 +923,47 @@ function StockInner() {
 
                   <input
                     className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder="联系人姓名 *"
+                    placeholder={t('contact')}
                     value={form.contact}
                     onChange={(e)=>setForm({...form, contact:e.target.value})}
                   />
                   <input
                     className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder="联系电话 *"
+                    placeholder={t('phone')}
                     value={form.phone}
                     onChange={(e)=>{ const v=e.target.value; setForm({...form, phone:v}); validate({...form, phone:v});}}
                   />
                   {errors.phone && <div className="text-xs text-red-600">{errors.phone}</div>}
                   <input
                     className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder="邮箱（必填） *"
+                    placeholder={t('email')}
                     value={form.email}
                     onChange={(e)=>{ const v=e.target.value; setForm({...form, email:v}); validate({...form, email:v});}}
                   />
                   {errors.email && <div className="text-xs text-red-600">{errors.email}</div>}
                   <input
                     className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder="国家"
+                    placeholder={t('country')}
                     value={form.country}
                     onChange={(e)=>setForm({...form, country:e.target.value})}
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       className="rounded-lg border px-3 py-2 text-sm"
-                      placeholder="城市"
+                      placeholder={t('city')}
                       value={form.city}
                       onChange={(e)=>setForm({...form, city:e.target.value})}
                     />
                     <input
                       className="rounded-lg border px-3 py-2 text-sm"
-                      placeholder="邮编"
+                      placeholder={t('postcode')}
                       value={form.postcode}
                       onChange={(e)=>setForm({...form, postcode:e.target.value})}
                     />
                   </div>
                   <textarea
                     className="rounded-lg border px-3 py-2 text-sm"
-                    placeholder="详细地址"
+                    placeholder={t('address')}
                     rows={3}
                     value={form.address}
                     onChange={(e)=>setForm({...form, address:e.target.value})}
@@ -845,32 +971,32 @@ function StockInner() {
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <button onClick={submitOrder} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">提交订单</button>
-                  <button onClick={closeCheckout} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">继续浏览</button>
+                  <button onClick={submitOrder} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">{t('submitOrder')}</button>
+                  <button onClick={closeCheckout} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">{t('continueBrowse')}</button>
 
                   {/* 导出 / 复制 / 邮件 */}
                   <button
                     onClick={async ()=>{
-                      const text=buildOrderText(mode, cart, form);
+                      const text=buildOrderText(mode, cart, form, t);
                       const ok = await copyText(text);
-                      setToast(ok? '订单已复制到剪贴板':'复制失败，请手动复制');
+                      setToast(ok? t('copied'):t('copyFailed'));
                       setTimeout(()=>setToast(null),1200);
                     }}
                     className="ml-2 rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  >复制订单</button>
+                  >{t('copyOrder')}</button>
                   <button
                     onClick={()=>downloadCSV(cart)}
                     className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  >下载 CSV</button>
+                  >{t('csvDownload')}</button>
                   <button
-                    onClick={()=>openMailDraft(buildOrderText(mode, cart, form))}
+                    onClick={()=>openMailDraft(buildOrderText(mode, cart, form, t))}
                     className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  >邮件草稿</button>
+                  >{t('emailDraft')}</button>
                 </div>
               </div>
             </div>
 
-            <div className="mt-3 text-xs text-gray-400">数据源： niuniuparts.com（测试预览用途）</div>
+            <div className="mt-3 text-xs text-gray-400">{t('dataFrom')}</div>
           </div>
         </div>
       )}

@@ -1,27 +1,22 @@
 'use client';
 
-import React, { useEffect, useMemo, useState, Suspense } from 'react';
-import { useRouter, useSearchParams, useParams } from 'next/navigation';
+import React, { useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-type DetailItem = {
+/* ========= 常量 & 类型 ========= */
+const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
+const BASE_ORIGIN = new URL(API_BASE).origin;
+type Lang = 'zh' | 'en';
+
+type Compact = {
   num?: string;
   product?: string;
-  name?: string;
-  title?: string;
   oe?: string;
   brand?: string;
   model?: string;
   year?: string;
   image?: string | null;
-  img?: string | null;
-  imgUrl?: string | null;
-  pic?: string | null;
-  picture?: string | null;
-  url?: string | null;
-  images?: any[];
-  media?: any[];
-  [k: string]: any;
 };
 
 type CartItem = {
@@ -36,19 +31,79 @@ type CartItem = {
   image?: string | null;
 };
 
-const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
-const BASE_ORIGIN = new URL(API_BASE).origin;
-const PAGE_SIZE = 20;
-const MAX_PAGES_TO_SCAN = 30;
+/* ========= i18n ========= */
+const STRINGS: Record<Lang, Record<string, string>> = {
+  zh: {
+    back: '← 返回库存预览',
+    addToCart: '加入购物车',
+    checkout: '去结算',
+    brand: '品牌',
+    model: '车型',
+    year: '年款',
+    oe: 'OE号',
+    lang: '语言：',
+    zh: '中文',
+    en: 'English',
+    dataFrom: '数据源： niuniuparts.com（测试预览用途）',
+    noImage: '无图片',
+    prev: '上一张',
+    next: '下一张',
+    close: '关闭',
+  },
+  en: {
+    back: '← Back to list',
+    addToCart: 'Add to cart',
+    checkout: 'Checkout',
+    brand: 'Brand',
+    model: 'Model',
+    year: 'Year',
+    oe: 'OE',
+    lang: 'Language:',
+    zh: '中文',
+    en: 'English',
+    dataFrom: 'Data: niuniuparts.com (preview)',
+    noImage: 'No Image',
+    prev: 'Prev',
+    next: 'Next',
+    close: 'Close',
+  },
+};
+function useI18n() {
+  const [lang, setLang] = useState<Lang>('zh');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const v = (localStorage.getItem('lang') as Lang) || 'zh';
+    setLang(v);
+  }, []);
+  const setLangPersist = (v: Lang) => {
+    setLang(v);
+    if (typeof window !== 'undefined') localStorage.setItem('lang', v);
+  };
+  const t = (k: string) => STRINGS[lang][k] || STRINGS.zh[k] || k;
+  return { lang, setLang: setLangPersist, t };
+}
 
+/* ========= 工具 ========= */
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">
+    `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450">
       <rect width="100%" height="100%" fill="#f3f4f6"/>
-      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#9ca3af" font-size="16">No Image</text>
+      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#9ca3af" font-size="14">No Image</text>
     </svg>`
   );
+
+function decodeD(d: string | null): Compact | null {
+  if (!d) return null;
+  try {
+    // @ts-ignore
+    const json = decodeURIComponent(escape(atob(decodeURIComponent(d))));
+    const obj = JSON.parse(json);
+    return obj;
+  } catch {
+    return null;
+  }
+}
 
 function extractFirstUrl(s: string): string | null {
   if (!s || typeof s !== 'string') return null;
@@ -89,231 +144,237 @@ function toProxy(u: string): string {
   const clean = u.replace(/^https?:\/\//i, '');
   return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}`;
 }
-function collectUrlsFromAny(v: any): string[] {
-  const out: string[] = [];
-  const push = (s: string | null) => {
-    const url = s && (extractFirstUrl(s) || s);
+function deepCollectImages(obj: any, out: string[], depth = 0) {
+  if (!obj || depth > 5) return;
+  if (typeof obj === 'string') {
+    const url = extractFirstUrl(obj) || obj;
     if (url && isImgUrl(url)) out.push(url);
-  };
-  if (!v) return out;
-  if (typeof v === 'string') { push(v); return out; }
-  if (Array.isArray(v)) { v.forEach((it) => out.push(...collectUrlsFromAny(it))); return out; }
-  if (typeof v === 'object') {
-    for (const k of Object.keys(v)) out.push(...collectUrlsFromAny(v[k]));
+    return;
   }
-  return out;
+  if (Array.isArray(obj)) {
+    for (const it of obj) deepCollectImages(it, out, depth + 1);
+    return;
+  }
+  if (typeof obj === 'object') {
+    for (const k of Object.keys(obj)) deepCollectImages(obj[k], out, depth + 1);
+  }
 }
-function pickMultiImages(x: any, max = 18): string[] {
-  if (!x) return [];
-  const FIELDS = [
-    'image','imgUrl','img_url','imageUrl','image_url','picture','pic','picUrl','pic_url','thumbnail','thumb','url','path','src',
-    'images','pictures','pics','photos','gallery','media','attachments','content','html','desc','description'
-  ];
-  const bag: string[] = [];
-  for (const k of FIELDS) if (k in x) bag.push(...collectUrlsFromAny((x as any)[k]));
-  if (bag.length < max) bag.push(...collectUrlsFromAny(x));
-  const uniq: string[] = [];
-  for (const raw of bag) {
-    const abs = absolutize(raw);
+function uniqueAbsUrls(list: string[]): string[] {
+  const s = new Set<string>();
+  const ret: string[] = [];
+  for (const x of list) {
+    const abs = absolutize(x);
     if (!abs) continue;
     const final = abs.startsWith('http://') ? toProxy(abs) : abs;
-    if (!uniq.includes(final)) uniq.push(final);
-    if (uniq.length >= max) break;
+    if (!s.has(final)) { s.add(final); ret.push(final); }
   }
-  return uniq;
+  return ret;
 }
 
+/* ========= 本地购物车（与列表页兼容） ========= */
 function loadCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
-  try { const raw = localStorage.getItem('cart') || '[]'; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; }
-  catch { return []; }
-}
-function saveCart(arr: CartItem[]) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem('cart', JSON.stringify(arr));
-}
-function safeDecodeItem(encoded: string | null): DetailItem | null {
-  if (!encoded) return null;
   try {
-    const b64 = decodeURIComponent(encoded);
-    const json = decodeURIComponent(escape(atob(b64)));
-    const obj = JSON.parse(json);
-    return (obj && typeof obj === 'object') ? (obj as DetailItem) : null;
-  } catch { return null; }
+    const v = localStorage.getItem('cart') || '[]';
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
 }
-function extractArray(js: any): any[] {
-  if (Array.isArray(js)) return js;
-  const cand =
-    js?.content ??
-    js?.data?.content ??
-    js?.data?.records ??
-    js?.data?.list ??
-    js?.data ??
-    js?.records ??
-    js?.list ??
-    null;
-  return Array.isArray(cand) ? cand : [];
+function saveCart(v: CartItem[]) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('cart', JSON.stringify(v));
 }
 
-export default function StockDetailPage() {
+/* ========= 页面外壳 ========= */
+export default function DetailPage() {
   return (
-    <Suspense fallback={<div className="p-4 text-sm text-gray-500">加载中…</div>}>
-      <Inner />
+    <Suspense fallback={<div className="p-4 text-sm text-gray-500">Loading…</div>}>
+      <DetailInner />
     </Suspense>
   );
 }
 
-function Inner() {
+/* ========= 主体 ========= */
+function DetailInner() {
   const router = useRouter();
-  const params = useParams<{ num: string }>();
-  const search = useSearchParams();
+  const sp = useSearchParams();
+  const d = sp?.get('d') ?? null;
+  const { lang, setLang, t } = useI18n();
 
-  const d = useMemo(() => search?.get('d') ?? null, [search]);
-  const [item, setItem] = useState<DetailItem | null>(() => safeDecodeItem(d));
-  const [images, setImages] = useState<string[]>(() => pickMultiImages(safeDecodeItem(d) || {}, 18));
+  const compact = useMemo(() => decodeD(d), [d]);
+
+  // 构造展示用
+  const product = compact?.product || 'IMG';
+  const oe = compact?.oe || '';
+  const num = compact?.num || '';
+
+  // 图片收集（最多 18 张）
+  const [images, setImages] = useState<string[]>([]);
+  useEffect(() => {
+    const bucket: string[] = [];
+    deepCollectImages(compact, bucket, 0);
+    let imgs = uniqueAbsUrls(bucket);
+    if ((!imgs || imgs.length === 0) && compact?.image) {
+      const abs = absolutize(compact.image);
+      imgs = abs ? [abs.startsWith('http://') ? toProxy(abs) : abs] : [];
+    }
+    if (imgs.length === 0) imgs = [FALLBACK_IMG];
+    setImages(imgs.slice(0, 18));
+  }, [compact]);
+
   const [active, setActive] = useState(0);
-  const [added, setAdded] = useState<string | null>(null);
+  useEffect(() => { setActive(0); }, [images]);
 
-  useEffect(() => {
-    const obj = safeDecodeItem(d);
-    setItem(obj);
-    const fromD = pickMultiImages(obj || {}, 18);
-    if (fromD.length) { setImages(fromD); setActive(0); }
-  }, [d]);
+  /* 放大镜：右侧放大窗口 */
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const zoomRef = useRef<HTMLDivElement | null>(null);
+  const onMove = (e: React.MouseEvent) => {
+    const img = imgRef.current, pane = zoomRef.current;
+    if (!img || !pane) return;
+    const rect = img.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    pane.style.backgroundImage = `url(${images[active]})`;
+    pane.style.backgroundSize = '200% 200%';
+    pane.style.backgroundPosition = `${x}% ${y}%`;
+    pane.style.display = 'block';
+  };
+  const onLeave = () => { if (zoomRef.current) zoomRef.current.style.display = 'none'; };
 
-  // 兜底：按 num 扫描 API，并在拿到更多图时覆盖
-  useEffect(() => {
-    const num = params?.num;
-    if (!num) return;
+  /* Lightbox */
+  const [show, setShow] = useState(false);
+  const prev = () => setActive((i) => (i - 1 + images.length) % images.length);
+  const next = () => setActive((i) => (i + 1) % images.length);
 
-    let cancelled = false;
-    (async () => {
-      try {
-        for (let page = 0; page < MAX_PAGES_TO_SCAN; page++) {
-          const url = `${API_BASE}?size=${PAGE_SIZE}&page=${page}`;
-          const res = await fetch(url, { cache: 'no-store' });
-          if (!res.ok) break;
-          const json = await res.json();
-          const arr = extractArray(json);
-          if (!arr?.length) break;
-
-          const found = arr.find((x: any) => String(x?.num || '').trim() === String(num).trim());
-          if (found) {
-            if (cancelled) return;
-            const imgs = pickMultiImages(found, 18);
-
-            // ★ 修复点：只有当兜底查到的数量“多于当前数量”时，才覆盖，保证缩略图能出现
-            setImages((prev) => (imgs.length > prev.length ? imgs : prev));
-            if (imgs.length > 0) setActive(0);
-
-            setItem((prev) => ({
-              ...prev,
-              num: found.num ?? prev?.num,
-              product: found.product ?? found.name ?? found.title ?? prev?.product,
-              oe: found.oe ?? prev?.oe,
-              brand: found.brand ?? prev?.brand,
-              model: found.model ?? prev?.model,
-              year: found.year ?? prev?.year,
-              image: found.image ?? prev?.image ?? null,
-              ...found,
-            }));
-            break;
-          }
-        }
-      } catch {}
-    })();
-
-    return () => { cancelled = true; };
-  }, [params?.num]);
-
-  const title = item?.product || item?.name || item?.title || '未命名配件';
-  const sub = [item?.brand, item?.model, item?.year].filter(Boolean).join(' · ') || 'IMG';
-  const oe  = item?.oe;
-
-  const mainSrc = images[active] || FALLBACK_IMG;
-  const prev = () => setActive((i) => (images.length ? (i - 1 + images.length) % images.length : 0));
-  const next = () => setActive((i) => (images.length ? (i + 1) % images.length : 0));
-
+  /* 购物车 */
   const addToCart = () => {
-    const firstImg = images[0] || null;
-    const key = `${item?.num || ''}|${item?.oe || ''}|${Date.now()}`;
-    const nextItem: CartItem = {
-      key, num: item?.num, product: title, oe: item?.oe,
-      brand: item?.brand, model: item?.model, year: item?.year,
-      qty: 1, image: firstImg,
-    };
-    const list = loadCart();
-    list.push(nextItem);
-    saveCart(list);
-    setAdded('已加入购物车（本地保存）！');
-    setTimeout(() => setAdded(null), 1500);
+    const cur = loadCart();
+    cur.push({
+      key: `${num}|${oe}|${Date.now()}`,
+      num,
+      product,
+      oe,
+      brand: compact?.brand,
+      model: compact?.model,
+      year: compact?.year,
+      qty: 1,
+      image: images[0] || null,
+    });
+    saveCart(cur);
+    alert('已加入购物车');
+  };
+  const goCheckout = () => {
+    router.push('/stock?checkout=1');
   };
 
   return (
     <main className="container mx-auto p-4">
-      <div className="mb-4 text-sm text-gray-500">
-        <Link href="/stock" className="underline hover:text-gray-700">← 返回库存预览</Link>
+      <div className="mb-4 flex items-center justify-between">
+        <Link href="/stock" className="text-sm text-blue-600 hover:underline">{t('back')}</Link>
+
+        <div className="flex items-center gap-1 text-sm">
+          <span className="text-gray-500">{t('lang')}</span>
+          <button
+            onClick={() => setLang('zh')}
+            className={`rounded border px-2 py-1 text-xs ${lang === 'zh' ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
+          >
+            {t('zh')}
+          </button>
+          <button
+            onClick={() => setLang('en')}
+            className={`rounded border px-2 py-1 text-xs ${lang === 'en' ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
+          >
+            {t('en')}
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 多图画廊 */}
-        <div className="rounded-2xl border bg-white p-3">
-          <div className="relative rounded-xl overflow-hidden bg-white" style={{ width: '100%', height: 480 }}>
-            <img
-              src={mainSrc}
-              alt={title}
-              style={{ objectFit: 'contain', width: '100%', height: '100%' }}
-              onError={(e) => { const el = e.currentTarget as HTMLImageElement; if (el.src !== FALLBACK_IMG) el.src = FALLBACK_IMG; }}
-            />
-            {images.length > 1 && (
-              <>
-                <button aria-label="上一张" onClick={prev}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow">‹</button>
-                <button aria-label="下一张" onClick={next}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-gray-700 hover:bg-white shadow">›</button>
-              </>
-            )}
-          </div>
-
-          {/* 缩略图 */}
-          {images.length > 1 && (
-            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-              {images.map((src, idx) => (
-                <button
-                  key={src + idx}
-                  onClick={() => setActive(idx)}
-                  className={`h-16 w-16 shrink-0 rounded border ${idx === active ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'}`}
-                  title={`图片 ${idx + 1}`}
-                >
-                  <img
-                    src={src}
-                    alt={`thumb-${idx + 1}`}
-                    className="h-full w-full object-contain"
-                    onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }}
-                  />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* 文案与操作 */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-6">
+        {/* 左侧：主图 + 缩略图 + 放大镜窗口 */}
         <div>
-          <h1 className="text-2xl font-bold">{title}</h1>
-          <div className="text-gray-500 mt-1">{sub}</div>
-          {item?.num && <div className="text-gray-500 mt-1">编号：{item.num}</div>}
-          {oe && <div className="text-gray-500 mt-1">OE：{oe}</div>}
+          <div className="flex gap-4">
+            <div className="relative rounded-xl border bg-white p-2 flex-1 select-none">
+              <img
+                ref={imgRef}
+                src={images[active] || FALLBACK_IMG}
+                alt={product}
+                className="w-full h-[420px] object-contain"
+                onError={(e)=>{ (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }}
+                onMouseMove={onMove}
+                onMouseLeave={onLeave}
+                onClick={()=>setShow(true)}
+                style={{cursor:'zoom-in'}}
+              />
+            </div>
 
-          <div className="mt-6 flex gap-3">
-            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={addToCart}>加入购物车</button>
-            <button className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50" onClick={() => router.push('/stock?checkout=1')}>去结算</button>
+            <div
+              ref={zoomRef}
+              className="hidden lg:block w-[380px] h-[280px] rounded-xl border bg-white bg-no-repeat"
+              style={{ display:'none' }}
+            />
           </div>
 
-          {added && <div className="mt-3 text-green-600 text-sm">{added}</div>}
+          {/* thumbnails */}
+          <div className="mt-3 flex gap-2 overflow-auto">
+            {images.map((src, idx) => (
+              <button
+                key={src + idx}
+                className={`h-20 w-20 shrink-0 rounded-lg border ${idx===active?'ring-2 ring-blue-600':''}`}
+                onClick={()=>setActive(idx)}
+              >
+                <img src={src} alt="" className="h-full w-full object-contain" />
+              </button>
+            ))}
+          </div>
+        </div>
 
-          <div className="mt-8 text-xs text-gray-400">数据源：niuniuparts.com（测试预览用途）</div>
+        {/* 右侧：信息 + 操作 */}
+        <div className="rounded-2xl border p-4 bg-white">
+          <div className="text-2xl font-semibold break-all">{product}</div>
+          <div className="mt-2 text-sm text-gray-600 space-y-1">
+            {compact?.brand && <div>{t('brand')}: {compact.brand}</div>}
+            {compact?.model && <div>{t('model')}: {compact.model}</div>}
+            {compact?.year  && <div>{t('year')}: {compact.year}</div>}
+            {oe && <div>{t('oe')}: {oe}</div>}
+            {num && <div>SKU: {num}</div>}
+          </div>
+
+          <div className="mt-4 flex items-center gap-2">
+            <button onClick={addToCart} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">
+              {t('addToCart')}
+            </button>
+            <button onClick={goCheckout} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">
+              {t('checkout')}
+            </button>
+          </div>
+
+          <div className="mt-4 text-xs text-gray-400">{t('dataFrom')}</div>
         </div>
       </div>
+
+      {/* Lightbox */}
+      {show && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex flex-col">
+          <div className="flex items-center justify-between p-3 text-white">
+            <div className="text-sm">{product}</div>
+            <div className="flex items-center gap-2">
+              <button className="rounded border border-white/40 px-2 py-1 text-xs" onClick={()=>setShow(false)}>{t('close')}</button>
+            </div>
+          </div>
+          <div className="flex-1 flex items-center justify-center">
+            <button className="mx-4 text-white text-2xl" onClick={prev} aria-label={t('prev')}>‹</button>
+            <img src={images[active]} alt="" className="max-h-[85vh] max-w-[85vw] object-contain" />
+            <button className="mx-4 text-white text-2xl" onClick={next} aria-label={t('next')}>›</button>
+          </div>
+          <div className="p-3 flex gap-2 overflow-auto bg-black/50">
+            {images.map((src, idx) => (
+              <button key={src+idx} className={`h-16 w-16 rounded border ${idx===active?'ring-2 ring-white':''}`} onClick={()=>setActive(idx)}>
+                <img src={src} alt="" className="h-full w-full object-contain" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
