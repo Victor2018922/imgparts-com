@@ -231,7 +231,6 @@ function StockInner() {
   const miniRef = useRef<HTMLDivElement | null>(null);
 
   // 轻提示
-  the: any;
   const [toast, setToast] = useState<string | null>(null);
 
   // 结算表单
@@ -407,7 +406,7 @@ function StockInner() {
     return () => document.removeEventListener('mousedown', onDown);
   }, [miniOpen]);
 
-  /* 清除筛选（缺失补回） */
+  /* 清除筛选（确保已定义） */
   const clearOne = (k: 'brand' | 'model' | 'year') => {
     if (k === 'brand') {
       setBrandFilter('');
@@ -665,11 +664,11 @@ function StockInner() {
                   <span className="text-sm text-gray-500">交易模式：</span>
                   <button
                     onClick={() => setTradeMode('B2C')}
-                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2C'?'bg-blue-600 text-white border-blue-600':'hover:bg-gray-50'}`}
+                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2C'?'bg-blue-600 text-white border-blue-600':'hover:bg灰-50'}`}
                   >B2C（个人）</button>
                   <button
                     onClick={() => setTradeMode('B2B')}
-                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2B'?'bg-blue-600 text-white border-blue-600':'hover:bg-gray-50'}`}
+                    className={`rounded-lg border px-2 py-1 text-xs ${mode==='B2B'?'bg-blue-600 text白 border-blue-600':'hover:bg-gray-50'}`}
                   >B2B（公司）</button>
                 </div>
 
