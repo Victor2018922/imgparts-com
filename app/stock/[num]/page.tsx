@@ -1,5 +1,7 @@
-// 详情页：只查 p 页（±1 兜底）→ 秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
-// 增强：标准术语/描述展示；加入购物车按钮即时“已加入”；内置结算弹窗（去结算/提交订单/交易模式）
+// 详情页：只查 p 页（±1兜底）→ 秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
+// 修复：加入购物车按钮点击后即时显示“已加入”（脚本在DOM后执行，纯JS无TS语法）
+// 新增：展示“配件标准术语（中/英）+ Summary + Description（若API提供）”
+// 新增：内置结算弹窗（去结算/提交订单/交易模式），本地 localStorage 闭环
 import Link from "next/link";
 
 type Item = {
@@ -297,7 +299,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
       <style dangerouslySetInnerHTML={{ __html: css }} />
 
-      {/* 行为脚本：放在按钮与弹窗之后，确保能正确绑定（解决“已加入”不生效的问题） */}
+      {/* 放在DOM后执行，纯JS（无TS语法），保证按钮绑定与“已加入”提示生效 */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
@@ -313,12 +315,8 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     radios.forEach(function(r,i){ r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); }); });
   })();
 
-  function readCart(){
-    try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; }
-  }
-  function writeCart(cart){
-    try{ localStorage.setItem('cart', JSON.stringify(cart)); }catch(e){}
-  }
+  function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
+  function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
   function addCurrentToCart(){
     var cart=readCart();
     var num=${JSON.stringify(num)};
@@ -331,8 +329,9 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     else{ cart[idx].qty=(cart[idx].qty||1)+1; }
     writeCart(cart);
   }
+  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
 
-  // 按钮：加入购物车（修复：点击后即时显示“已加入”）
+  // 加入购物车（即时“已加入”）
   var addBtn=document.getElementById('add-cart');
   if(addBtn){
     addBtn.addEventListener('click', function(){
@@ -343,18 +342,20 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     });
   }
 
-  // 结算弹窗相关
+  // 结算弹窗
   var mask=document.getElementById('modal-mask');
   var modal=document.getElementById('checkout-modal');
   function openModal(){
-    // 确保当前商品在购物车里
     addCurrentToCart();
-    // 渲染购物车列表
+    // 渲染购物车
     var el=document.getElementById('cart-items');
     var cart=readCart();
     if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; }
     else{
-      var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+      var html='<table style="width:100%;border-collapse:collapse;font-size:13px">'+
+               '<thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th>'+
+               '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th>'+
+               '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
       cart.forEach(function(it){
         html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+
               [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+
@@ -367,32 +368,26 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     if(mask) mask.style.display='block';
     if(modal) modal.style.display='block';
   }
-  function closeModal(){
-    if(mask) mask.style.display='none';
-    if(modal) modal.style.display='none';
-  }
+  function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
 
-  var goBtn=document.getElementById('go-checkout');
-  if(goBtn){ goBtn.addEventListener('click', openModal); }
+  var goBtn=document.getElementById('go-checkout'); if(goBtn){ goBtn.addEventListener('click', openModal); }
   if(mask){ mask.addEventListener('click', closeModal); }
-  var cancel=document.getElementById('o-cancel');
-  if(cancel){ cancel.addEventListener('click', closeModal); }
+  var cancel=document.getElementById('o-cancel'); if(cancel){ cancel.addEventListener('click', closeModal); }
 
-  // 提交订单（保存到 localStorage.orders 演示闭环）
   var submit=document.getElementById('o-submit');
   if(submit){
     submit.addEventListener('click', function(){
       var order={
         items: readCart(),
         contact: {
-          name: (document.getElementById('o-name') as any)?.value || '',
-          phone: (document.getElementById('o-phone') as any)?.value || '',
-          email: (document.getElementById('o-email') as any)?.value || '',
-          company: (document.getElementById('o-company') as any)?.value || '',
-          country: (document.getElementById('o-country') as any)?.value || '',
-          address: (document.getElementById('o-address') as any)?.value || '',
-          mode: (document.getElementById('o-mode') as any)?.value || 'B2C',
-          notes: (document.getElementById('o-notes') as any)?.value || ''
+          name: gv('o-name'),
+          phone: gv('o-phone'),
+          email: gv('o-email'),
+          company: gv('o-company'),
+          country: gv('o-country'),
+          address: gv('o-address'),
+          mode: gv('o-mode') || 'B2C',
+          notes: gv('o-notes')
         },
         createdAt: new Date().toISOString()
       };
@@ -401,8 +396,6 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
         var tip=document.getElementById('o-tip'); if(tip){ tip.textContent='提交成功（演示）：已保存到本地订单列表'; }
-        // 提交后可清空购物车（可选）
-        // localStorage.removeItem('cart');
       }catch(e){}
     });
   }

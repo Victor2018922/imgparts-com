@@ -1,6 +1,5 @@
 // 库存页（SSR）：极速搜索 + 排序 + 标准术语展示 + 本地购物车 + 内置结算弹窗
-// - 保持当前浏览/搜索的速度优化与详情秒开逻辑
-// - 每个卡片：加入购物车（即时“已加入”）与去结算
+// 维持：列表⇄详情秒开（链接附带 ?p=&s=）；返回列表即时
 import Link from "next/link";
 
 type Item = {
@@ -222,7 +221,7 @@ export default async function StockPage({
               const dataPayload = JSON.stringify({
                 num: it.num ?? "", price: it.price ?? "", brand: it.brand ?? "",
                 product: it.product ?? "", oe: it.oe ?? ""
-              }).replace(/"/g, "&quot;"); // 放进 data- 属性
+              }).replace(/"/g, "&quot;");
               return (
                 <div key={String(it.num)}
                      style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -238,7 +237,6 @@ export default async function StockPage({
                     {title}
                   </Link>
 
-                  {/* 标准术语（若有） */}
                   {(scn || sen) && (
                     <div style={{ fontSize: 12, color: "#374151" }}>
                       {scn && <div>标准术语：{scn}</div>}
@@ -252,7 +250,7 @@ export default async function StockPage({
                     {typeof it.stock !== "undefined" && <div>库存：{String(it.stock)}</div>}
                   </div>
 
-                  <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
+                  <div style={{ marginTop: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button className="btn-add" data-payload={dataPayload}
                             style={{ flex: 1, padding: "8px 12px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
                       加入购物车
@@ -288,50 +286,75 @@ export default async function StockPage({
         )}
       </main>
 
-      {/* 结算弹窗（列表页内置） */}
-      <div id="list-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;z-index:50;"></div>
-      <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
-           style="position:fixed;left:50%;top:8vh;transform:translateX(-50%);width:min(720px,92vw);background:#fff;border:1px solid #e5e7eb;border-radius:12px;display:none;z-index:51;">
-        <div id="list-title" style="padding:12px 16px;font-weight:700;border-bottom:1px solid #e5e7eb;">提交订单</div>
-        <div style="padding:16px;display:grid;gap:12px;">
-          <div id="list-cart-items" style="font-size:13px;color:#374151;"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div><label>姓名 / Name</label><input id="l-name" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
-            <div><label>电话 / Phone</label><input id="l-phone" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+      {/* 结算弹窗（列表页内置，React 风格 style 对象，避免字符串 style 报错） */}
+      <div
+        id="list-mask"
+        style={{
+          position: "fixed", top: 0, right: 0, bottom: 0, left: 0,
+          background: "rgba(0,0,0,.35)", display: "none", zIndex: 50
+        }}
+      />
+      <div
+        id="list-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="list-title"
+        style={{
+          position: "fixed",
+          left: "50%",
+          top: "8vh",
+          transform: "translateX(-50%)",
+          width: "min(720px, 92vw)",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          display: "none",
+          zIndex: 51,
+        }}
+      >
+        <div id="list-title" style={{ padding: "12px 16px", fontWeight: 700, borderBottom: "1px solid #e5e7eb" }}>
+          提交订单
+        </div>
+        <div style={{ padding: 16, display: "grid", gap: 12 }}>
+          <div id="list-cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label>姓名 / Name</label><input id="l-name" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>电话 / Phone</label><input id="l-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div><label>邮箱 / Email</label><input id="l-email" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
-            <div><label>公司（可选）</label><input id="l-company" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label>邮箱 / Email</label><input id="l-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>公司（可选）</label><input id="l-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div><label>国家 / Country</label><input id="l-country" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label>国家 / Country</label><input id="l-country" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
             <div><label>交易模式</label>
-              <select id="l-mode" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;">
+              <select id="l-mode" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
                 <option value="B2C">B2C</option>
                 <option value="B2B">B2B</option>
               </select>
             </div>
           </div>
-          <div><label>地址 / Address</label><input id="l-address" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
-          <div><label>备注 / Notes</label><textarea id="l-notes" rows="3" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;"></textarea></div>
-          <div id="l-tip" style="font-size:12px;color:#059669;"></div>
+          <div><label>地址 / Address</label><input id="l-address" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+          <div><label>备注 / Notes</label><textarea id="l-notes" rows={3} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+          <div id="l-tip" style={{ fontSize: 12, color: "#059669" }}></div>
         </div>
-        <div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
-          <button id="l-cancel" style="padding:8px 14px;border-radius:8px;background:#fff;border:1px solid #e5e7eb;cursor:pointer;">取消</button>
-          <button id="l-submit" style="padding:8px 14px;border-radius:8px;background:#111827;color:#fff;border:1px solid #111827;cursor:pointer;">提交订单</button>
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #e5e7eb", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button id="l-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>取消</button>
+          <button id="l-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>提交订单</button>
         </div>
       </div>
 
-      {/* 列表页行为脚本：加入购物车 + 去结算（本地闭环） */}
+      {/* 列表页行为脚本（纯JS）：加入购物车即时“已加入” + 去结算弹窗 + 提交订单 */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
+  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
 
   // 绑定“加入购物车”（即时显示已加入）
-  Array.prototype.slice.call(document.querySelectorAll('.btn-add')).forEach(function(btn){
+  [].slice.call(document.querySelectorAll('.btn-add')).forEach(function(btn){
     btn.addEventListener('click', function(){
       try{
         var payload = btn.getAttribute('data-payload');
@@ -357,12 +380,15 @@ export default async function StockPage({
     var cart=readCart();
     if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; }
     else{
-      var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+      var html='<table style="width:100%;border-collapse:collapse;font-size:13px">'+
+               '<thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th>'+
+               '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th>'+
+               '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
       cart.forEach(function(it){
         html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+
               [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+
               '</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
-              '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.price||'')+'</td></tr>';
+              '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
       });
       html+='</tbody></table>';
       el.innerHTML=html;
@@ -372,7 +398,7 @@ export default async function StockPage({
   }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
 
-  Array.prototype.slice.call(document.querySelectorAll('.btn-checkout')).forEach(function(btn){
+  [].slice.call(document.querySelectorAll('.btn-checkout')).forEach(function(btn){
     btn.addEventListener('click', openModal);
   });
   var cancel=document.getElementById('l-cancel'); if(cancel) cancel.addEventListener('click', closeModal);
@@ -384,14 +410,14 @@ export default async function StockPage({
       var order={
         items: readCart(),
         contact:{
-          name:(document.getElementById('l-name') as any)?.value||'',
-          phone:(document.getElementById('l-phone') as any)?.value||'',
-          email:(document.getElementById('l-email') as any)?.value||'',
-          company:(document.getElementById('l-company') as any)?.value||'',
-          country:(document.getElementById('l-country') as any)?.value||'',
-          address:(document.getElementById('l-address') as any)?.value||'',
-          mode:(document.getElementById('l-mode') as any)?.value||'B2C',
-          notes:(document.getElementById('l-notes') as any)?.value||'',
+          name: gv('l-name'),
+          phone: gv('l-phone'),
+          email: gv('l-email'),
+          company: gv('l-company'),
+          country: gv('l-country'),
+          address: gv('l-address'),
+          mode: gv('l-mode') || 'B2C',
+          notes: gv('l-notes')
         },
         createdAt:new Date().toISOString()
       };
@@ -400,7 +426,6 @@ export default async function StockPage({
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
         var tip=document.getElementById('l-tip'); if(tip) tip.textContent='提交成功（演示）：已保存到本地订单列表';
-        // 可选择清空购物车： localStorage.removeItem('cart');
       }catch(e){}
     });
   }
