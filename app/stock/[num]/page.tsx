@@ -1,7 +1,7 @@
-// 详情页：只查 p 页（±1兜底）→ 秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
-// 修复：加入购物车按钮点击后即时显示“已加入”（脚本在DOM后执行，纯JS无TS语法）
-// 新增：展示“配件标准术语（中/英）+ Summary + Description（若API提供）”
-// 新增：内置结算弹窗（去结算/提交订单/交易模式），本地 localStorage 闭环
+// 详情页：只查 p 页（±1 兜底）→ 秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
+// 修复：按钮用事件委托，避免首次后失效；每次点击“加入购物车”都有反馈
+// 增强：标准配件术语（中文/英文）显示，含动态兜底；Summary/Description 显示
+// 结算：内置弹窗（去结算/提交订单/交易模式），localStorage 闭环
 import Link from "next/link";
 
 type Item = {
@@ -18,7 +18,7 @@ type Item = {
   pics?: string[];
   gallery?: string[];
   imageUrls?: string[];
-  // 可能存在的标准术语与描述字段（接口若有则显示）
+  // 可能的标准术语/描述键
   productCn?: string; productEn?: string;
   productNameCn?: string; productNameEn?: string;
   partNameCn?: string; partNameEn?: string;
@@ -72,13 +72,50 @@ async function fetchItemNear(num: string, p: number, size: number): Promise<Item
   return a || b || null;
 }
 
+// —— 标准术语抽取（含动态兜底） ——
+function hasZh(s: string) {
+  return /[\u4e00-\u9fff]/.test(s);
+}
 function getStdNames(it: Item) {
-  const cn =
-    it.stdNameCn || it.productCn || it.productNameCn || it.partNameCn || "";
-  const en =
-    it.stdNameEn || it.productEn || it.productNameEn || it.partNameEn || "";
+  // 先按已知字段
+  const candidatesCn = [
+    it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn,
+  ].filter(Boolean) as string[];
+  const candidatesEn = [
+    it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn,
+  ].filter(Boolean) as string[];
+
+  let cn = candidatesCn.find((x) => String(x).trim().length > 0) || "";
+  let en = candidatesEn.find((x) => String(x).trim().length > 0) || "";
+
+  // 动态兜底：自动扫描对象里“可能是术语”的键
+  if (!cn) {
+    for (const [k, v] of Object.entries(it)) {
+      if (typeof v === "string" && v && hasZh(v)) {
+        const key = k.toLowerCase();
+        if (/(std|standard|name|product|part|desc)/.test(key)) {
+          cn = v;
+          break;
+        }
+      }
+    }
+  }
+  // 英文兜底（可选）
+  if (!en) {
+    for (const [k, v] of Object.entries(it)) {
+      if (typeof v === "string" && v && !hasZh(v)) {
+        const key = k.toLowerCase();
+        if (/(std|standard|name|product|part|desc|en)/.test(key)) {
+          en = v;
+          break;
+        }
+      }
+    }
+  }
+
   const summary = it.summary || "";
   const description = it.description || it.desc || it.remark || "";
+
   return { cn, en, summary, description };
 }
 
@@ -242,53 +279,31 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         </div>
       </div>
 
-      {/* 结算弹窗（不新建页面，保持闭环） */}
+      {/* 结算弹窗（不新建页面） */}
       <div id="modal-mask" className="modal-mask"></div>
       <div id="checkout-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
         <header id="checkout-title">提交订单</header>
         <div className="body">
           <div id="cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
           <div className="row">
-            <div>
-              <label>姓名 / Name</label>
-              <input id="o-name" placeholder="联系人" />
-            </div>
-            <div>
-              <label>电话 / Phone</label>
-              <input id="o-phone" placeholder="+86..." />
-            </div>
+            <div><label>姓名 / Name</label><input id="o-name" placeholder="联系人" /></div>
+            <div><label>电话 / Phone</label><input id="o-phone" placeholder="+86..." /></div>
           </div>
           <div className="row">
-            <div>
-              <label>邮箱 / Email</label>
-              <input id="o-email" placeholder="you@example.com" />
-            </div>
-            <div>
-              <label>公司（可选）</label>
-              <input id="o-company" placeholder="Company" />
-            </div>
+            <div><label>邮箱 / Email</label><input id="o-email" placeholder="you@example.com" /></div>
+            <div><label>公司（可选）</label><input id="o-company" placeholder="Company" /></div>
           </div>
           <div className="row">
-            <div>
-              <label>国家 / Country</label>
-              <input id="o-country" placeholder="China / ..." />
-            </div>
-            <div>
-              <label>交易模式</label>
+            <div><label>国家 / Country</label><input id="o-country" placeholder="China / ..." /></div>
+            <div><label>交易模式</label>
               <select id="o-mode">
                 <option value="B2C">B2C</option>
                 <option value="B2B">B2B</option>
               </select>
             </div>
           </div>
-          <div>
-            <label>地址 / Address</label>
-            <input id="o-address" placeholder="详细地址" />
-          </div>
-          <div>
-            <label>备注 / Notes</label>
-            <textarea id="o-notes" placeholder="补充信息..." rows={3}></textarea>
-          </div>
+          <div><label>地址 / Address</label><input id="o-address" placeholder="详细地址" /></div>
+          <div><label>备注 / Notes</label><textarea id="o-notes" placeholder="补充信息..." rows={3}></textarea></div>
           <div id="o-tip" style={{ fontSize: 12, color: "#059669" }}></div>
         </div>
         <footer>
@@ -299,11 +314,20 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
       <style dangerouslySetInnerHTML={{ __html: css }} />
 
-      {/* 放在DOM后执行，纯JS（无TS语法），保证按钮绑定与“已加入”提示生效 */}
+      {/* 统一事件委托脚本（纯JS），保证多次点击始终有效 */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
+  // 简易 closest 兼容
+  function closest(el, sel){
+    while(el && el.nodeType === 1){
+      if (el.matches && el.matches(sel)) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+
   // 轮播：5s 自动
   (function(){
     var name='${gal}';
@@ -312,82 +336,66 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     var idx=radios.findIndex(function(r){return r.checked;}); if(idx<0) idx=0;
     function tick(){ idx=(idx+1)%radios.length; radios[idx].checked=true; }
     var timer=setInterval(tick,5000);
-    radios.forEach(function(r,i){ r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); }); });
+    radios.forEach(function(r,i){
+      r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); });
+    });
   })();
 
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
   function addCurrentToCart(){
     var cart=readCart();
-    var num=${JSON.stringify(num)};
-    var price=${JSON.stringify(item.price ?? '')};
-    var brand=${JSON.stringify(item.brand ?? '')};
-    var product=${JSON.stringify(item.product ?? '')};
-    var oe=${JSON.stringify(item.oe ?? '')};
-    var idx=cart.findIndex(function(x){return String(x.num)===String(num);});
-    if(idx===-1){ cart.push({num:num, qty:1, price:price, brand:brand, product:product, oe:oe}); }
-    else{ cart[idx].qty=(cart[idx].qty||1)+1; }
+    var item={ num:${JSON.stringify(item.num ?? "")}, price:${JSON.stringify(item.price ?? "")}, brand:${JSON.stringify(item.brand ?? "")}, product:${JSON.stringify(item.product ?? "")}, oe:${JSON.stringify(item.oe ?? "")} };
+    var i=cart.findIndex(function(x){ return String(x.num)===String(item.num); });
+    if(i===-1){ cart.push({ num:item.num, qty:1, price:item.price, brand:item.brand, product:item.product, oe:item.oe }); }
+    else{ cart[i].qty=(cart[i].qty||1)+1; }
     writeCart(cart);
   }
-  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
-
-  // 加入购物车（即时“已加入”）
-  var addBtn=document.getElementById('add-cart');
-  if(addBtn){
-    addBtn.addEventListener('click', function(){
-      addCurrentToCart();
-      var txt=addBtn.innerText;
-      addBtn.innerText='已加入';
-      setTimeout(function(){ addBtn.innerText=txt; }, 1200);
+  function renderCart(tableId){
+    var el=document.getElementById(tableId);
+    var cart=readCart();
+    if(!el) return;
+    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; return; }
+    var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+    cart.forEach(function(it){
+      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
     });
+    html+='</tbody></table>';
+    el.innerHTML=html;
   }
 
-  // 结算弹窗
   var mask=document.getElementById('modal-mask');
   var modal=document.getElementById('checkout-modal');
-  function openModal(){
-    addCurrentToCart();
-    // 渲染购物车
-    var el=document.getElementById('cart-items');
-    var cart=readCart();
-    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; }
-    else{
-      var html='<table style="width:100%;border-collapse:collapse;font-size:13px">'+
-               '<thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th>'+
-               '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th>'+
-               '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
-      cart.forEach(function(it){
-        html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+
-              [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+
-              '</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
-              '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
-      });
-      html+='</tbody></table>';
-      el.innerHTML=html;
-    }
-    if(mask) mask.style.display='block';
-    if(modal) modal.style.display='block';
-  }
+  function openModal(){ addCurrentToCart(); renderCart('cart-items'); if(mask) mask.style.display='block'; if(modal) modal.style.display='block'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
 
-  var goBtn=document.getElementById('go-checkout'); if(goBtn){ goBtn.addEventListener('click', openModal); }
-  if(mask){ mask.addEventListener('click', closeModal); }
-  var cancel=document.getElementById('o-cancel'); if(cancel){ cancel.addEventListener('click', closeModal); }
+  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
 
-  var submit=document.getElementById('o-submit');
-  if(submit){
-    submit.addEventListener('click', function(){
+  // —— 事件委托：确保多次点击始终有效 ——
+  document.addEventListener('click', function(ev){
+    var t = ev.target as HTMLElement;
+    // 加入购物车
+    if (closest(t, '#add-cart')) {
+      addCurrentToCart();
+      var btn=closest(t, '#add-cart');
+      if(btn){ var txt=btn.innerText; btn.innerText='已加入'; setTimeout(function(){ btn.innerText=txt; }, 1200); }
+    }
+    // 去结算
+    if (closest(t, '#go-checkout')) {
+      openModal();
+    }
+    // 关闭弹窗
+    if (closest(t, '#o-cancel') || (mask && t===mask)) {
+      closeModal();
+    }
+    // 提交订单
+    if (closest(t, '#o-submit')) {
       var order={
         items: readCart(),
         contact: {
-          name: gv('o-name'),
-          phone: gv('o-phone'),
-          email: gv('o-email'),
-          company: gv('o-company'),
-          country: gv('o-country'),
-          address: gv('o-address'),
-          mode: gv('o-mode') || 'B2C',
-          notes: gv('o-notes')
+          name: gv('o-name'), phone: gv('o-phone'), email: gv('o-email'),
+          company: gv('o-company'), country: gv('o-country'),
+          address: gv('o-address'), mode: gv('o-mode')||'B2C', notes: gv('o-notes')
         },
         createdAt: new Date().toISOString()
       };
@@ -395,10 +403,10 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('o-tip'); if(tip){ tip.textContent='提交成功（演示）：已保存到本地订单列表'; }
+        var tip=document.getElementById('o-tip'); if(tip) tip.textContent='提交成功（演示）：已保存到本地订单列表';
       }catch(e){}
-    });
-  }
+    }
+  });
 })();`,
         }}
       />
