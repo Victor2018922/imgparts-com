@@ -1,6 +1,6 @@
-'use client';
-
-import { useState, useMemo } from 'react';
+// 注意：本文件为「服务端组件」，没有 'use client'。
+// 这样 generateMetadata 能在服务端正确运行，标题按 UTF-8 正常输出（避免乱码）。
+// 同时使用纯 CSS（radio + label）实现可点击缩略图切换主图，无需客户端 JS。
 
 type Item = {
   num?: string;
@@ -35,46 +35,20 @@ async function fetchItem(num: string): Promise<Item | null> {
       const found = rows.find((x) => String(x?.num ?? '') === String(num));
       if (found) return found;
     }
-  } catch {
-    // 忽略错误
-  }
+  } catch {}
   return null;
 }
 
-export async function generateMetadata({
-  params,
-}: {
-  params: { num: string };
-}) {
+export async function generateMetadata({ params }: { params: { num: string } }) {
+  // 仅拼接，不做任何 decode，避免中文被错误处理
   const item = await fetchItem(params.num);
-  const titleParts = [item?.brand, item?.product, item?.oe, params.num].filter(
-    Boolean
-  );
-  return {
-    title: titleParts.join(' | ') || `Item ${params.num}`,
-  };
+  const parts = [item?.brand, item?.product, item?.oe, params.num].filter(Boolean);
+  return { title: parts.join(' | ') || `Item ${params.num}` };
 }
 
-export default function StockDetailPage({
-  params,
-}: {
-  params: { num: string };
-}) {
-  const [item, setItem] = useState<Item | null>(null);
-  const [loading, setLoading] = useState(true);
-
+export default async function Page({ params }: { params: { num: string } }) {
   const num = params.num;
-
-  useMemo(() => {
-    fetchItem(num).then((res) => {
-      setItem(res);
-      setLoading(false);
-    });
-  }, [num]);
-
-  if (loading) {
-    return <div style={{ padding: 32 }}>加载中...</div>;
-  }
+  const item = await fetchItem(num);
 
   if (!item) {
     return (
@@ -98,11 +72,11 @@ export default function StockDetailPage({
     );
   }
 
-  // 处理图片：不足18张补齐，无图则用透明占位
+  // 组装图片列表；保持缩略图数量 ≥ 18；无图则用透明占位
   const placeholder =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==';
 
-  const rawImgs: string[] =
+  const raw: string[] =
     item.images ||
     item.pics ||
     item.gallery ||
@@ -110,32 +84,73 @@ export default function StockDetailPage({
     (item.image ? [item.image] : []) ||
     [];
 
-  const cleaned = useMemo(() => {
-    const seen = new Set<string>();
-    return rawImgs
-      .filter(Boolean)
-      .map((s) => (typeof s === 'string' ? s.trim() : ''))
-      .filter((s) => s.length > 0)
-      .filter((u) => {
-        const key = u.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }, [rawImgs]);
+  const seen = new Set<string>();
+  const cleaned = raw
+    .filter(Boolean)
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter((s) => s.length > 0)
+    .filter((u) => {
+      const key = u.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 
-  const filled: string[] = useMemo(() => {
-    const MIN = 18;
-    let base = cleaned.length > 0 ? cleaned : [placeholder];
-    const out: string[] = [];
-    while (out.length < Math.max(MIN, base.length)) {
-      out.push(base[out.length % base.length]);
-    }
-    return out;
-  }, [cleaned]);
+  const MIN = 18;
+  const base = cleaned.length > 0 ? cleaned : [placeholder];
+  const images: string[] = [];
+  while (images.length < Math.max(MIN, base.length)) {
+    images.push(base[images.length % base.length]);
+  }
 
-  const [active, setActive] = useState(0);
-  const current = filled[active] ?? filled[0];
+  // 纯 CSS 轮播：用 radio 控制显示的主图
+  const css =
+    `
+.gallery { width: 100%; }
+.gallery .main {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid #eee;
+  position: relative;
+}
+.gallery .main img {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: none;
+}
+.gallery .thumbs {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 8px;
+}
+.gallery .thumbs label {
+  display: block;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+}
+.gallery .thumbs img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.gallery input[type="radio"] { display: none; }
+`.trim() +
+    '\n' +
+    images
+      .map(
+        (_s, i) =>
+          `#g-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
+#g-${i}:checked ~ .thumbs label[for="g-${i}"]{border:2px solid #2563eb}`
+      )
+      .join('\n');
 
   const titleParts = [item.brand, item.product, item.oe, num].filter(Boolean);
   const safeTitle = titleParts.join(' | ');
@@ -149,60 +164,34 @@ export default function StockDetailPage({
         padding: '24px 0',
       }}
     >
-      <div>
-        {/* 主图 */}
-        <div
-          style={{
-            width: '100%',
-            aspectRatio: '1 / 1',
-            overflow: 'hidden',
-            borderRadius: 16,
-            background: '#fff',
-            border: '1px solid #eee',
-          }}
-        >
-          <img
-            src={current}
-            alt="product"
-            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-          />
-        </div>
+      {/* 左侧：图片画廊（纯 CSS 可点击缩略图切换） */}
+      <div className="gallery">
+        {/* Radio 开关（第一张默认选中） */}
+        {images.map((_, i) => (
+          <input key={`r-${i}`} type="radio" name="gallery" id={`g-${i}`} defaultChecked={i === 0} />
+        ))}
 
-        {/* 缩略图 */}
-        <div
-          style={{
-            marginTop: 12,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(9, 1fr)',
-            gap: 8,
-          }}
-        >
-          {filled.map((src, i) => (
-            <button
-              key={`${src}-${i}`}
-              onClick={() => setActive(i)}
-              aria-label={`thumbnail ${i + 1}`}
-              style={{
-                aspectRatio: '1 / 1',
-                overflow: 'hidden',
-                borderRadius: 8,
-                border:
-                  i === active ? '2px solid #2563eb' : '1px solid #e5e7eb',
-                background: '#fff',
-                padding: 0,
-                cursor: 'pointer',
-              }}
-            >
-              <img
-                src={src}
-                alt={`thumb-${i + 1}`}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            </button>
+        {/* 主图区域 */}
+        <div className="main">
+          {images.map((src, i) => (
+            <img key={`main-${i}`} data-idx={i} src={src} alt="product" />
           ))}
         </div>
+
+        {/* 缩略图区域（≥18） */}
+        <div className="thumbs">
+          {images.map((src, i) => (
+            <label key={`thumb-${i}`} htmlFor={`g-${i}`} title={`第 ${i + 1} 张`}>
+              <img src={src} alt={`thumb-${i + 1}`} />
+            </label>
+          ))}
+        </div>
+
+        {/* 动态样式 */}
+        <style dangerouslySetInnerHTML={{ __html: css }} />
       </div>
 
+      {/* 右侧：商品信息 */}
       <div>
         <h1 style={{ fontSize: 24, fontWeight: 700 }}>{safeTitle}</h1>
 
