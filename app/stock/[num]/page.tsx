@@ -1,4 +1,7 @@
-// 详情页：只查 p 页（±1 兜底），两栏布局 + 缩略图轮播，5s 自动切换，图片预加载
+// 详情页：只查 p 页（±1 兜底），两栏布局 + 缩略图轮播（5s自动），图片预加载
+// 增强：返回列表使用 Link 预取，加入“加入购物车”（本地 localStorage）
+import Link from "next/link";
+
 type Item = {
   num?: string;
   brand?: string;
@@ -14,7 +17,7 @@ type Item = {
   [k: string]: any;
 };
 
-const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
+const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
 
 export async function generateMetadata({ params }: { params: { num: string } }) {
   return { title: `Item ${params.num}` };
@@ -30,7 +33,7 @@ async function fetchPageOnce(page: number, size: number, timeoutMs = 5000): Prom
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const resp = await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+    const resp = await fetch(url, { cache: "no-store", signal: ctrl.signal });
     if (!resp.ok) return [];
     const data = await resp.json();
     if (Array.isArray(data)) return data as Item[];
@@ -46,11 +49,10 @@ async function fetchPageOnce(page: number, size: number, timeoutMs = 5000): Prom
 
 async function findInPage(num: string, page: number, size: number): Promise<Item | null> {
   const rows = await fetchPageOnce(page, size, 5000);
-  return rows.find((x) => String(x?.num ?? '') === String(num)) || null;
+  return rows.find((x) => String(x?.num ?? "") === String(num)) || null;
 }
 
 async function fetchItemNear(num: string, p: number, size: number): Promise<Item | null> {
-  // 先查 p，再并发查 p-1 与 p+1（最多 3 页）
   const cur = await findInPage(num, p, size);
   if (cur) return cur;
   const [a, b] = await Promise.all([
@@ -68,8 +70,8 @@ export default async function Page({
   searchParams?: { [k: string]: string | string[] | undefined };
 }) {
   const num = params.num;
-  const p = toInt((searchParams?.p as string) ?? '0', 0);
-  const size = toInt((searchParams?.s as string) ?? '20', 20);
+  const p = toInt((searchParams?.p as string) ?? "0", 0);
+  const size = toInt((searchParams?.s as string) ?? "20", 20);
 
   const item = await fetchItemNear(num, p, size);
 
@@ -77,41 +79,28 @@ export default async function Page({
     return (
       <div style={{ padding: 32 }}>
         <h1 style={{ fontSize: 20, fontWeight: 600 }}>未找到商品：{num}</h1>
-        <a
+        <Link
           href={`/stock?p=${p}`}
-          style={{
-            display: 'inline-block',
-            marginTop: 16,
-            padding: '8px 16px',
-            background: '#111827',
-            color: '#fff',
-            borderRadius: 8,
-            textDecoration: 'none',
-          }}
+          prefetch
+          style={{ display: "inline-block", marginTop: 16, padding: "8px 16px", background: "#111827", color: "#fff", borderRadius: 8, textDecoration: "none" }}
         >
           返回列表
-        </a>
+        </Link>
       </div>
     );
   }
 
   // 图片准备：≥18，去空/去重，无图占位
   const placeholder =
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==';
-
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
   const raw: string[] =
     item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
   const seen = new Set<string>();
   const cleaned = raw
     .filter(Boolean)
-    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
     .filter((s) => s.length > 0)
-    .filter((u) => {
-      const key = u.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
 
   const MIN = 18;
   const base = cleaned.length > 0 ? cleaned : [placeholder];
@@ -121,8 +110,9 @@ export default async function Page({
   }
 
   const preloadCount = Math.min(8, images.length);
-  const title = [item.brand, item.product, item.oe, num].filter(Boolean).join(' | ');
+  const title = [item.brand, item.product, item.oe, num].filter(Boolean).join(" | ");
   const gal = `gal-${num}`;
+  const backHref = `/stock?p=${p}`;
 
   const css =
     `
@@ -136,33 +126,57 @@ export default async function Page({
 .thumbs img{ width:100%; height:100%; object-fit:cover; }
 .gallery input[type="radio"]{ display:none; }
 `.trim() +
-    '\n' +
+    "\n" +
     images
       .map(
         (_s, i) =>
           `#${gal}-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
 #${gal}-${i}:checked ~ .thumbs label[for="${gal}-${i}"]{border:2px solid #2563eb}`
       )
-      .join('\n');
+      .join("\n");
 
-  // 无点击时 5 秒自动切换；点击后重置计时
+  // 轮播 + 加入购物车
   const script = `
 (function(){
+  // 5秒自动轮播（点击后重置计时）
   var name = ${JSON.stringify(gal)};
   var radios = Array.prototype.slice.call(document.querySelectorAll('input[name="'+name+'"]'));
-  if (!radios.length) return;
-  var idx = radios.findIndex(function(r){return r.checked;});
-  if (idx < 0) idx = 0;
-  function tick(){ idx = (idx + 1) % radios.length; radios[idx].checked = true; }
-  var timer = setInterval(tick, 5000);
-  radios.forEach(function(r, i){
-    r.addEventListener('change', function(){ idx = i; clearInterval(timer); timer = setInterval(tick, 5000); });
-  });
+  if (radios.length){
+    var idx = radios.findIndex(function(r){return r.checked;}); if (idx < 0) idx = 0;
+    function tick(){ idx = (idx + 1) % radios.length; radios[idx].checked = true; }
+    var timer = setInterval(tick, 5000);
+    radios.forEach(function(r, i){
+      r.addEventListener('change', function(){ idx = i; clearInterval(timer); timer = setInterval(tick, 5000); });
+    });
+  }
+  // 加入购物车（localStorage）
+  var btn = document.getElementById('add-cart');
+  if (btn){
+    btn.addEventListener('click', function(){
+      try{
+        var key='cart';
+        var raw=localStorage.getItem(key);
+        var cart = raw ? JSON.parse(raw) : [];
+        var num=${JSON.stringify(num)};
+        var price=${JSON.stringify(item.price ?? '')};
+        var brand=${JSON.stringify(item.brand ?? '')};
+        var product=${JSON.stringify(item.product ?? '')};
+        var oe=${JSON.stringify(item.oe ?? '')};
+        var idx = cart.findIndex(function(x){ return String(x.num)===String(num); });
+        if (idx===-1){ cart.push({num:num, qty:1, price:price, brand:brand, product:product, oe:oe}); }
+        else { cart[idx].qty = (cart[idx].qty||1)+1; }
+        localStorage.setItem(key, JSON.stringify(cart));
+        btn.innerText='已加入';
+        setTimeout(function(){ btn.innerText='加入购物车'; }, 1200);
+      }catch(e){}
+    });
+  }
 })();`.trim();
 
   return (
     <>
-      {/* 预加载首屏图，保证与页面同步出现 */}
+      {/* 预取“返回列表”并预加载首图，保证返回即时 */}
+      <link rel="prefetch" href={backHref} />
       {images.slice(0, preloadCount).map((src, i) => (
         <link key={`preload-${i}`} rel="preload" as="image" href={src} />
       ))}
@@ -176,15 +190,8 @@ export default async function Page({
 
           <div className="main">
             {images.map((src, i) => (
-              <img
-                key={`main-${i}`}
-                data-idx={i}
-                src={src}
-                alt="product"
-                loading={i === 0 ? 'eager' : 'lazy'}
-                fetchPriority={i === 0 ? 'high' : 'auto'}
-                decoding={i === 0 ? 'sync' : 'async'}
-              />
+              <img key={`main-${i}`} data-idx={i} src={src} alt="product"
+                   loading={i === 0 ? "eager" : "lazy"} fetchPriority={i === 0 ? "high" : "auto"} decoding={i === 0 ? "sync" : "async"} />
             ))}
           </div>
 
@@ -200,65 +207,27 @@ export default async function Page({
           <script dangerouslySetInnerHTML={{ __html: script }} />
         </div>
 
-        {/* 右：信息 */}
+        {/* 右：信息与操作 */}
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
 
-          <dl
-            style={{
-              marginTop: 16,
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 12,
-              fontSize: 14,
-            }}
-          >
-            {item.brand && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>品牌</dt>
-                <dd style={{ fontWeight: 600 }}>{item.brand}</dd>
-              </div>
-            )}
-            {item.product && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>品名</dt>
-                <dd style={{ fontWeight: 600 }}>{item.product}</dd>
-              </div>
-            )}
-            {item.oe && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>OE</dt>
-                <dd style={{ fontWeight: 600 }}>{item.oe}</dd>
-              </div>
-            )}
-            {item.price !== undefined && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>价格</dt>
-                <dd style={{ fontWeight: 600 }}>{String(item.price)}</dd>
-              </div>
-            )}
-            {item.stock !== undefined && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>库存</dt>
-                <dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd>
-              </div>
-            )}
+          <dl style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 14 }}>
+            {item.brand && (<div><dt style={{ color: "#6b7280" }}>品牌</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
+            {item.product && (<div><dt style={{ color: "#6b7280" }}>品名</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
+            {item.oe && (<div><dt style={{ color: "#6b7280" }}>OE</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
+            {typeof item.price !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>价格</dt><dd style={{ fontWeight: 600 }}>{String(item.price)}</dd></div>)}
+            {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>库存</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
           </dl>
 
-          <div style={{ marginTop: 24 }}>
-            <a
-              href={`/stock?p=${p}`}
-              style={{
-                padding: '8px 16px',
-                borderRadius: 8,
-                background: '#fff',
-                color: '#111827',
-                border: '1px solid #e5e7eb',
-                textDecoration: 'none',
-              }}
-            >
+          <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
+            <button id="add-cart"
+              style={{ padding: "8px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
+              加入购物车
+            </button>
+            <Link href={backHref} prefetch
+              style={{ padding: "8px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none", textAlign: "center" }}>
               返回列表
-            </a>
+            </Link>
           </div>
         </div>
       </div>
