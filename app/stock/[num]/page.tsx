@@ -1,6 +1,5 @@
-// 详情页：两栏布局（左大图+下方缩略图轮播，右侧信息）
-// 无点击时每 5 秒自动切图；预加载图片以减少延迟；并行跨页检索加速命中 num
-// 保持服务端渲染，保证页面与图片“同步出现”（配合预加载与高优先级）
+// 详情页：只查携带的页号 p（和每页 s），必要时查相邻 ±2 页；移除 metadata 内取数。
+// 两栏布局：左侧大图 + 下方缩略图轮播；右侧信息；首图/缩略图预加载与高优先级以消除延迟。
 
 type Item = {
   num?: string;
@@ -20,48 +19,61 @@ type Item = {
 };
 
 const API_BASE = 'https://niuniuparts.com:6001/scm-product/v1/stock2';
-const PAGE_SIZE = 200;
-const MAX_PAGES = 40;
-const BATCH = 8; // 并发批量数
 
-async function fetchPage(page: number): Promise<Item[]> {
-  const url = `${API_BASE}?size=${PAGE_SIZE}&page=${page}`;
-  const resp = await fetch(url, { cache: 'no-store' });
-  if (!resp.ok) return [];
-  const data = await resp.json();
-  if (Array.isArray(data)) return data as Item[];
-  if (Array.isArray((data as any)?.content)) return (data as any).content as Item[];
-  if (Array.isArray((data as any)?.data)) return (data as any).data as Item[];
-  return [];
+export async function generateMetadata({ params }: { params: { num: string } }) {
+  return { title: `Item ${params.num}` };
 }
 
-async function fetchItemAcrossPages(num: string): Promise<Item | null> {
-  for (let start = 0; start < MAX_PAGES; start += BATCH) {
-    const pages = Array.from({ length: Math.min(BATCH, MAX_PAGES - start) }, (_, i) => start + i);
-    const results = await Promise.all(pages.map((p) => fetchPage(p)));
-    let lastReached = false;
+function toInt(v: unknown, def: number) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
+}
 
-    for (let i = 0; i < results.length; i++) {
-      const rows = results[i];
+async function fetchPage(page: number, size: number, timeoutMs = 6000): Promise<Item[]> {
+  const url = `${API_BASE}?size=${size}&page=${page}`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    if (Array.isArray(data)) return data as Item[];
+    if (Array.isArray((data as any)?.content)) return (data as any).content as Item[];
+    if (Array.isArray((data as any)?.data)) return (data as any).data as Item[];
+    return [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function fetchItemNear(num: string, p: number, size: number): Promise<Item | null> {
+  // 先查 p页；未命中再并发查 p-1, p+1；仍未命中，再查 p-2, p+2（最多 5 页）
+  const tryPages: number[] = [p, p - 1, p + 1, p - 2, p + 2].filter((x, i, arr) => x >= 0 && arr.indexOf(x) === i);
+  for (let i = 0; i < tryPages.length; i += 2) {
+    const batch = tryPages.slice(i, i + 2); // 小批并发
+    const lists = await Promise.all(batch.map((pg) => fetchPage(pg, size)));
+    for (const rows of lists) {
       const found = rows.find((x) => String(x?.num ?? '') === String(num));
       if (found) return found;
-      if (rows.length < PAGE_SIZE) lastReached = true;
     }
-    if (lastReached) break;
   }
   return null;
 }
 
-export async function generateMetadata({ params }: { params: { num: string } }) {
-  // 稳定标题（避免乱码）：不做 decode，仅拼接
-  const item = await fetchItemAcrossPages(params.num).catch(() => null);
-  const parts = [item?.brand, item?.product, item?.oe, params.num].filter(Boolean);
-  return { title: parts.join(' | ') || `Item ${params.num}` };
-}
-
-export default async function Page({ params }: { params: { num: string } }) {
+export default async function Page({
+  params,
+  searchParams,
+}: {
+  params: { num: string };
+  searchParams?: { [k: string]: string | string[] | undefined };
+}) {
   const num = params.num;
-  const item = await fetchItemAcrossPages(num);
+  const p = toInt((searchParams?.p as string) ?? '0', 0);
+  const size = toInt((searchParams?.s as string) ?? '20', 20);
+
+  const item = await fetchItemNear(num, p, size);
 
   if (!item) {
     return (
@@ -90,12 +102,7 @@ export default async function Page({ params }: { params: { num: string } }) {
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==';
 
   const raw: string[] =
-    item.images ||
-    item.pics ||
-    item.gallery ||
-    item.imageUrls ||
-    (item.image ? [item.image] : []) ||
-    [];
+    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
 
   const seen = new Set<string>();
   const cleaned = raw
@@ -116,39 +123,19 @@ export default async function Page({ params }: { params: { num: string } }) {
     images.push(base[images.length % base.length]);
   }
 
-  // 预加载前 8 张，保证图片与页面无明显时间差
   const preloadCount = Math.min(8, images.length);
-
   const titleParts = [item.brand, item.product, item.oe, num].filter(Boolean);
   const safeTitle = titleParts.join(' | ');
-
-  // 唯一画廊名（防止多画廊冲突）
   const galleryName = `gal-${num}`;
 
-  // 样式：两栏布局 + 轮播缩略图 + 自适应
   const css = `
-.detail-wrap{
-  display:grid; gap:24px; padding:24px 0;
-  grid-template-columns:1fr; align-items:start;
-}
-@media (min-width: 960px){
-  .detail-wrap{ grid-template-columns: minmax(0,1fr) 1fr; }
-}
+.detail-wrap{ display:grid; gap:24px; padding:24px 0; grid-template-columns:1fr; align-items:start; }
+@media (min-width: 960px){ .detail-wrap{ grid-template-columns:minmax(0,1fr) 1fr; } }
 .gallery{ width:100%; }
-.gallery .main{
-  width:100%; aspect-ratio:1/1; overflow:hidden;
-  border-radius:16px; background:#fff; border:1px solid #eee; position:relative;
-}
-.gallery .main img{
-  position:absolute; inset:0; width:100%; height:100%; object-fit:contain; display:none;
-}
-.thumbs{
-  margin-top:12px; display:grid; gap:8px; grid-template-columns: repeat(9, 1fr);
-}
-.thumbs label{
-  display:block; aspect-ratio:1/1; overflow:hidden; border-radius:8px;
-  border:1px solid #e5e7eb; background:#fff; cursor:pointer;
-}
+.gallery .main{ width:100%; aspect-ratio:1/1; overflow:hidden; border-radius:16px; background:#fff; border:1px solid #eee; position:relative; }
+.gallery .main img{ position:absolute; inset:0; width:100%; height:100%; object-fit:contain; display:none; }
+.thumbs{ margin-top:12px; display:grid; gap:8px; grid-template-columns: repeat(9, 1fr); }
+.thumbs label{ display:block; aspect-ratio:1/1; overflow:hidden; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
 .thumbs img{ width:100%; height:100%; object-fit:cover; }
 .gallery input[type="radio"]{ display:none; }
 `.trim() + '\n' +
@@ -158,7 +145,6 @@ export default async function Page({ params }: { params: { num: string } }) {
 #${galleryName}-${i}:checked ~ .thumbs label[for="${galleryName}-${i}"]{border:2px solid #2563eb}`
     ).join('\n');
 
-  // 自动轮播脚本（无点击时每 5 秒切换；点击后重置计时）
   const script = `
 (function(){
   var name = ${JSON.stringify(galleryName)};
@@ -170,24 +156,21 @@ export default async function Page({ params }: { params: { num: string } }) {
   var timer = setInterval(tick, 5000);
   radios.forEach(function(r, i){
     r.addEventListener('change', function(){
-      idx = i;
-      clearInterval(timer);
-      timer = setInterval(tick, 5000);
+      idx = i; clearInterval(timer); timer = setInterval(tick, 5000);
     });
   });
 })();`.trim();
 
   return (
     <>
-      {/* 预加载若干图片，提升首屏同步度 */}
+      {/* 预加载首屏图片，确保“页面与图片同步出现” */}
       {images.slice(0, preloadCount).map((src, i) => (
         <link key={`preload-${i}`} rel="preload" as="image" href={src} />
       ))}
 
       <div className="detail-wrap">
-        {/* 左侧：大图 + 缩略图（轮播） */}
+        {/* 左：大图 + 缩略图轮播 */}
         <div className="gallery">
-          {/* Radio（第一张选中） */}
           {images.map((_, i) => (
             <input key={`r-${i}`} type="radio" name={galleryName} id={`${galleryName}-${i}`} defaultChecked={i === 0} />
           ))}
@@ -218,7 +201,7 @@ export default async function Page({ params }: { params: { num: string } }) {
           <script dangerouslySetInnerHTML={{ __html: script }} />
         </div>
 
-        {/* 右侧：产品信息 */}
+        {/* 右：信息 */}
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>{safeTitle}</h1>
 
@@ -276,18 +259,6 @@ export default async function Page({ params }: { params: { num: string } }) {
           </dl>
 
           <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
-            <button
-              style={{
-                padding: '8px 16px',
-                borderRadius: 8,
-                background: '#2563eb',
-                color: '#fff',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              加入购物车
-            </button>
             <a
               href="/stock"
               style={{

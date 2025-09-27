@@ -85,11 +85,11 @@ export default function StockPage() {
         cart[idx].qty = (cart[idx].qty || 1) + 1;
       }
       localStorage.setItem(key, JSON.stringify(cart));
-      setAddedHint(`已加入购物车：${formatTitle(item)}`);
-      setTimeout(() => setAddedHint(''), 1600);
+      setAddedHint(`[已加入] ${formatTitle(item)}`);
+      setTimeout(() => setAddedHint(''), 1500);
     } catch {
       setAddedHint('加入购物车失败，请重试');
-      setTimeout(() => setAddedHint(''), 1600);
+      setTimeout(() => setAddedHint(''), 1500);
     }
   }
 
@@ -131,7 +131,7 @@ export default function StockPage() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16 }}>
           {items.map((it) => (
-            <Card key={String(it.num)} item={it} onAdd={() => addToCart(it)} />
+            <Card key={String(it.num)} item={it} onAdd={() => addToCart(it)} page={page} />
           ))}
         </div>
       )}
@@ -180,14 +180,17 @@ function getPrimaryImage(item: Item): string {
   return cleaned[0] || placeholder;
 }
 
-function Card({ item, onAdd }: { item: Item; onAdd: () => void }) {
-  const href = useMemo(() => `/stock/${encodeURIComponent(String(item.num ?? ''))}`, [item.num]);
+function Card({ item, onAdd, page }: { item: Item; onAdd: () => void; page: number }) {
+  const href = useMemo(() => {
+    const num = encodeURIComponent(String(item.num ?? ''));
+    return `/stock/${num}?p=${page}&s=${PAGE_SIZE}`;
+  }, [item.num, page]);
+
   const primary = getPrimaryImage(item);
   const title = formatTitle(item);
 
   return (
     <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {/* 图片（高优先级，减少进入详情页时的延迟感） */}
       <Link href={href} prefetch title="查看详情">
         <div style={{ width: '100%', aspectRatio: '1 / 1', overflow: 'hidden', borderRadius: 10, background: '#fff', border: '1px solid #f3f4f6' }}>
           <img
@@ -201,12 +204,10 @@ function Card({ item, onAdd }: { item: Item; onAdd: () => void }) {
         </div>
       </Link>
 
-      {/* 标题（可点击，预取页面，加速跳转） */}
       <Link href={href} prefetch title={title} style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.35, textDecoration: 'none', color: '#111827' }}>
         {title}
       </Link>
 
-      {/* 关键信息 */}
       <div style={{ fontSize: 12, color: '#4b5563', display: 'grid', gap: 4 }}>
         {item.model && <div>车型：{item.model}</div>}
         {item.year && <div>年份：{String(item.year)}</div>}
@@ -215,7 +216,6 @@ function Card({ item, onAdd }: { item: Item; onAdd: () => void }) {
         {item.price !== undefined && <div>价格：{String(item.price)}</div>}
       </div>
 
-      {/* 操作 */}
       <div style={{ marginTop: 'auto', display: 'flex', gap: 8 }}>
         <button
           onClick={(e) => { e.preventDefault(); onAdd(); }}
