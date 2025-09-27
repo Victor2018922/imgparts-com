@@ -1,4 +1,4 @@
-// 服务端渲染版本（不含 'use client'）：避免浏览器 CORS，恢复快速加载与快速跳转
+// SSR 列表页：稳定取数（超时+重试）、携带页号跳详情、预加载图片
 import Link from 'next/link';
 
 type Item = {
@@ -26,7 +26,7 @@ function toInt(v: unknown, def: number) {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
 }
 
-async function fetchPage(page: number, size: number, timeoutMs = 6000): Promise<Item[]> {
+async function fetchPageOnce(page: number, size: number, timeoutMs = 5000): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -45,9 +45,18 @@ async function fetchPage(page: number, size: number, timeoutMs = 6000): Promise<
   }
 }
 
-function primaryImage(item: Item): string {
+async function fetchPageStable(page: number, size: number): Promise<Item[]> {
+  // 最多 3 次快速重试，单次 5s 超时
+  for (let i = 0; i < 3; i++) {
+    const rows = await fetchPageOnce(page, size, 5000);
+    if (rows.length) return rows;
+  }
+  return [];
+}
+
+function primaryImage(it: Item): string {
   const raw: string[] =
-    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
+    it.images || it.pics || it.gallery || it.imageUrls || (it.image ? [it.image] : []) || [];
   const seen = new Set<string>();
   const cleaned = raw
     .filter(Boolean)
@@ -59,7 +68,6 @@ function primaryImage(item: Item): string {
       seen.add(key);
       return true;
     });
-
   const placeholder =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==';
   return cleaned[0] || placeholder;
@@ -76,10 +84,10 @@ export default async function StockPage({
 }) {
   const p = toInt((searchParams?.p as string) ?? '0', 0);
 
-  // 服务端取数，避免浏览器 CORS；同时页面首屏直出更快
-  const rows = await fetchPage(p, SIZE);
+  // 服务端取数（带重试），首屏稳定
+  const rows = await fetchPageStable(p, SIZE);
 
-  // 预加载首屏若干图片，减少进入详情页的感知延迟
+  // 预加载若干首屏图，进入详情更顺滑
   const preloadImgs = rows.slice(0, 8).map(primaryImage);
 
   const hasNext = rows.length === SIZE;
@@ -132,7 +140,7 @@ export default async function StockPage({
 
         {/* 列表 */}
         {rows.length === 0 ? (
-          <div style={{ padding: 24 }}>暂无数据或加载失败</div>
+          <div style={{ padding: 24 }}>暂无数据或加载失败，请刷新重试</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16 }}>
             {rows.map((it) => {
@@ -184,21 +192,18 @@ export default async function StockPage({
                   </Link>
 
                   <div style={{ fontSize: 12, color: '#4b5563', display: 'grid', gap: 4 }}>
-                    {it.model && <div>车型：{it.model}</div>}
-                    {it.year && <div>年份：{String(it.year)}</div>}
                     {it.oe && <div>OE：{it.oe}</div>}
-                    {it.stock !== undefined && <div>库存：{String(it.stock)}</div>}
                     {it.price !== undefined && <div>价格：{String(it.price)}</div>}
                   </div>
 
-                  <div style={{ marginTop: 'auto', display: 'flex', gap: 8 }}>
+                  <div style={{ marginTop: 'auto' }}>
                     <Link
                       href={href}
                       prefetch
                       aria-label="查看详情"
                       title="查看详情"
                       style={{
-                        flex: 1,
+                        display: 'inline-block',
                         padding: '8px 12px',
                         borderRadius: 8,
                         background: '#fff',
@@ -206,6 +211,7 @@ export default async function StockPage({
                         border: '1px solid #e5e7eb',
                         textAlign: 'center',
                         textDecoration: 'none',
+                        width: '100%',
                       }}
                     >
                       查看详情
@@ -255,3 +261,4 @@ export default async function StockPage({
     </>
   );
 }
+

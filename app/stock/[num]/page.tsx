@@ -1,13 +1,9 @@
-// 详情页：只查携带的页号 p（和每页 s），必要时查相邻 ±2 页；移除 metadata 内取数。
-// 两栏布局：左侧大图 + 下方缩略图轮播；右侧信息；首图/缩略图预加载与高优先级以消除延迟。
-
+// 详情页：只查 p 页（±1 兜底），两栏布局 + 缩略图轮播，5s 自动切换，图片预加载
 type Item = {
   num?: string;
   brand?: string;
   product?: string;
   oe?: string;
-  model?: string;
-  year?: string | number;
   price?: string | number;
   stock?: string | number;
   image?: string;
@@ -29,7 +25,7 @@ function toInt(v: unknown, def: number) {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
 }
 
-async function fetchPage(page: number, size: number, timeoutMs = 6000): Promise<Item[]> {
+async function fetchPageOnce(page: number, size: number, timeoutMs = 5000): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -48,18 +44,20 @@ async function fetchPage(page: number, size: number, timeoutMs = 6000): Promise<
   }
 }
 
+async function findInPage(num: string, page: number, size: number): Promise<Item | null> {
+  const rows = await fetchPageOnce(page, size, 5000);
+  return rows.find((x) => String(x?.num ?? '') === String(num)) || null;
+}
+
 async function fetchItemNear(num: string, p: number, size: number): Promise<Item | null> {
-  // 先查 p页；未命中再并发查 p-1, p+1；仍未命中，再查 p-2, p+2（最多 5 页）
-  const tryPages: number[] = [p, p - 1, p + 1, p - 2, p + 2].filter((x, i, arr) => x >= 0 && arr.indexOf(x) === i);
-  for (let i = 0; i < tryPages.length; i += 2) {
-    const batch = tryPages.slice(i, i + 2); // 小批并发
-    const lists = await Promise.all(batch.map((pg) => fetchPage(pg, size)));
-    for (const rows of lists) {
-      const found = rows.find((x) => String(x?.num ?? '') === String(num));
-      if (found) return found;
-    }
-  }
-  return null;
+  // 先查 p，再并发查 p-1 与 p+1（最多 3 页）
+  const cur = await findInPage(num, p, size);
+  if (cur) return cur;
+  const [a, b] = await Promise.all([
+    p > 0 ? findInPage(num, p - 1, size) : Promise.resolve(null),
+    findInPage(num, p + 1, size),
+  ]);
+  return a || b || null;
 }
 
 export default async function Page({
@@ -80,7 +78,7 @@ export default async function Page({
       <div style={{ padding: 32 }}>
         <h1 style={{ fontSize: 20, fontWeight: 600 }}>未找到商品：{num}</h1>
         <a
-          href="/stock"
+          href={`/stock?p=${p}`}
           style={{
             display: 'inline-block',
             marginTop: 16,
@@ -97,13 +95,12 @@ export default async function Page({
     );
   }
 
-  // 组装图片：≥18，去空/去重，无图用透明占位
+  // 图片准备：≥18，去空/去重，无图占位
   const placeholder =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==';
 
   const raw: string[] =
     item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
-
   const seen = new Set<string>();
   const cleaned = raw
     .filter(Boolean)
@@ -124,11 +121,11 @@ export default async function Page({
   }
 
   const preloadCount = Math.min(8, images.length);
-  const titleParts = [item.brand, item.product, item.oe, num].filter(Boolean);
-  const safeTitle = titleParts.join(' | ');
-  const galleryName = `gal-${num}`;
+  const title = [item.brand, item.product, item.oe, num].filter(Boolean).join(' | ');
+  const gal = `gal-${num}`;
 
-  const css = `
+  const css =
+    `
 .detail-wrap{ display:grid; gap:24px; padding:24px 0; grid-template-columns:1fr; align-items:start; }
 @media (min-width: 960px){ .detail-wrap{ grid-template-columns:minmax(0,1fr) 1fr; } }
 .gallery{ width:100%; }
@@ -138,16 +135,20 @@ export default async function Page({
 .thumbs label{ display:block; aspect-ratio:1/1; overflow:hidden; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
 .thumbs img{ width:100%; height:100%; object-fit:cover; }
 .gallery input[type="radio"]{ display:none; }
-`.trim() + '\n' +
-    images.map(
-      (_s, i) =>
-        `#${galleryName}-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
-#${galleryName}-${i}:checked ~ .thumbs label[for="${galleryName}-${i}"]{border:2px solid #2563eb}`
-    ).join('\n');
+`.trim() +
+    '\n' +
+    images
+      .map(
+        (_s, i) =>
+          `#${gal}-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
+#${gal}-${i}:checked ~ .thumbs label[for="${gal}-${i}"]{border:2px solid #2563eb}`
+      )
+      .join('\n');
 
+  // 无点击时 5 秒自动切换；点击后重置计时
   const script = `
 (function(){
-  var name = ${JSON.stringify(galleryName)};
+  var name = ${JSON.stringify(gal)};
   var radios = Array.prototype.slice.call(document.querySelectorAll('input[name="'+name+'"]'));
   if (!radios.length) return;
   var idx = radios.findIndex(function(r){return r.checked;});
@@ -155,24 +156,22 @@ export default async function Page({
   function tick(){ idx = (idx + 1) % radios.length; radios[idx].checked = true; }
   var timer = setInterval(tick, 5000);
   radios.forEach(function(r, i){
-    r.addEventListener('change', function(){
-      idx = i; clearInterval(timer); timer = setInterval(tick, 5000);
-    });
+    r.addEventListener('change', function(){ idx = i; clearInterval(timer); timer = setInterval(tick, 5000); });
   });
 })();`.trim();
 
   return (
     <>
-      {/* 预加载首屏图片，确保“页面与图片同步出现” */}
+      {/* 预加载首屏图，保证与页面同步出现 */}
       {images.slice(0, preloadCount).map((src, i) => (
         <link key={`preload-${i}`} rel="preload" as="image" href={src} />
       ))}
 
       <div className="detail-wrap">
-        {/* 左：大图 + 缩略图轮播 */}
+        {/* 左：大图 + 缩略图（轮播） */}
         <div className="gallery">
           {images.map((_, i) => (
-            <input key={`r-${i}`} type="radio" name={galleryName} id={`${galleryName}-${i}`} defaultChecked={i === 0} />
+            <input key={`r-${i}`} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />
           ))}
 
           <div className="main">
@@ -191,7 +190,7 @@ export default async function Page({
 
           <div className="thumbs">
             {images.map((src, i) => (
-              <label key={`thumb-${i}`} htmlFor={`${galleryName}-${i}`} title={`第 ${i + 1} 张`}>
+              <label key={`thumb-${i}`} htmlFor={`${gal}-${i}`} title={`第 ${i + 1} 张`}>
                 <img src={src} alt={`thumb-${i + 1}`} loading="eager" decoding="sync" />
               </label>
             ))}
@@ -203,7 +202,7 @@ export default async function Page({
 
         {/* 右：信息 */}
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700 }}>{safeTitle}</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
 
           <dl
             style={{
@@ -232,18 +231,6 @@ export default async function Page({
                 <dd style={{ fontWeight: 600 }}>{item.oe}</dd>
               </div>
             )}
-            {item.model && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>车型</dt>
-                <dd style={{ fontWeight: 600 }}>{item.model}</dd>
-              </div>
-            )}
-            {item.year && (
-              <div>
-                <dt style={{ color: '#6b7280' }}>年份</dt>
-                <dd style={{ fontWeight: 600 }}>{item.year}</dd>
-              </div>
-            )}
             {item.price !== undefined && (
               <div>
                 <dt style={{ color: '#6b7280' }}>价格</dt>
@@ -258,9 +245,9 @@ export default async function Page({
             )}
           </dl>
 
-          <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
+          <div style={{ marginTop: 24 }}>
             <a
-              href="/stock"
+              href={`/stock?p=${p}`}
               style={{
                 padding: '8px 16px',
                 borderRadius: 8,
@@ -268,7 +255,6 @@ export default async function Page({
                 color: '#111827',
                 border: '1px solid #e5e7eb',
                 textDecoration: 'none',
-                textAlign: 'center',
               }}
             >
               返回列表
