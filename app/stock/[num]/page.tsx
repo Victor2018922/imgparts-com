@@ -1,5 +1,5 @@
-// 详情页：只查 p 页（±1 兜底），两栏布局 + 缩略图轮播（5s自动），图片预加载
-// 增强：返回列表使用 Link 预取，加入“加入购物车”（本地 localStorage）
+// 详情页：只查 p 页（±1 兜底）→ 秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
+// 增强：标准术语/描述展示；加入购物车按钮即时“已加入”；内置结算弹窗（去结算/提交订单/交易模式）
 import Link from "next/link";
 
 type Item = {
@@ -7,6 +7,8 @@ type Item = {
   brand?: string;
   product?: string;
   oe?: string;
+  model?: string;
+  year?: string | number;
   price?: string | number;
   stock?: string | number;
   image?: string;
@@ -14,6 +16,12 @@ type Item = {
   pics?: string[];
   gallery?: string[];
   imageUrls?: string[];
+  // 可能存在的标准术语与描述字段（接口若有则显示）
+  productCn?: string; productEn?: string;
+  productNameCn?: string; productNameEn?: string;
+  partNameCn?: string; partNameEn?: string;
+  stdNameCn?: string; stdNameEn?: string;
+  summary?: string; description?: string; desc?: string; remark?: string;
   [k: string]: any;
 };
 
@@ -62,6 +70,34 @@ async function fetchItemNear(num: string, p: number, size: number): Promise<Item
   return a || b || null;
 }
 
+function getStdNames(it: Item) {
+  const cn =
+    it.stdNameCn || it.productCn || it.productNameCn || it.partNameCn || "";
+  const en =
+    it.stdNameEn || it.productEn || it.productNameEn || it.partNameEn || "";
+  const summary = it.summary || "";
+  const description = it.description || it.desc || it.remark || "";
+  return { cn, en, summary, description };
+}
+
+function buildImages(item: Item) {
+  const placeholder =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
+  const raw: string[] =
+    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
+  const seen = new Set<string>();
+  const cleaned = raw
+    .filter(Boolean)
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter((s) => s.length > 0)
+    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  const MIN = 18;
+  const base = cleaned.length > 0 ? cleaned : [placeholder];
+  const images: string[] = [];
+  while (images.length < Math.max(MIN, base.length)) images.push(base[images.length % base.length]);
+  return images;
+}
+
 export default async function Page({
   params,
   searchParams,
@@ -79,40 +115,19 @@ export default async function Page({
     return (
       <div style={{ padding: 32 }}>
         <h1 style={{ fontSize: 20, fontWeight: 600 }}>未找到商品：{num}</h1>
-        <Link
-          href={`/stock?p=${p}`}
-          prefetch
-          style={{ display: "inline-block", marginTop: 16, padding: "8px 16px", background: "#111827", color: "#fff", borderRadius: 8, textDecoration: "none" }}
-        >
+        <Link href={`/stock?p=${p}`} prefetch style={{ display: "inline-block", marginTop: 16, padding: "8px 16px", background: "#111827", color: "#fff", borderRadius: 8, textDecoration: "none" }}>
           返回列表
         </Link>
       </div>
     );
   }
 
-  // 图片准备：≥18，去空/去重，无图占位
-  const placeholder =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
-  const raw: string[] =
-    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
-  const seen = new Set<string>();
-  const cleaned = raw
-    .filter(Boolean)
-    .map((s) => (typeof s === "string" ? s.trim() : ""))
-    .filter((s) => s.length > 0)
-    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-
-  const MIN = 18;
-  const base = cleaned.length > 0 ? cleaned : [placeholder];
-  const images: string[] = [];
-  while (images.length < Math.max(MIN, base.length)) {
-    images.push(base[images.length % base.length]);
-  }
-
+  const images = buildImages(item);
   const preloadCount = Math.min(8, images.length);
   const title = [item.brand, item.product, item.oe, num].filter(Boolean).join(" | ");
   const gal = `gal-${num}`;
   const backHref = `/stock?p=${p}`;
+  const { cn: stdCn, en: stdEn, summary, description } = getStdNames(item);
 
   const css =
     `
@@ -125,6 +140,14 @@ export default async function Page({
 .thumbs label{ display:block; aspect-ratio:1/1; overflow:hidden; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
 .thumbs img{ width:100%; height:100%; object-fit:cover; }
 .gallery input[type="radio"]{ display:none; }
+
+.modal-mask{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; z-index:50; }
+.modal{ position:fixed; inset:auto; left:50%; top:10vh; transform:translateX(-50%); width:min(720px, 92vw); background:#fff; border:1px solid #e5e7eb; border-radius:12px; display:none; z-index:51; }
+.modal header{ padding:12px 16px; font-weight:700; border-bottom:1px solid #e5e7eb; }
+.modal .body{ padding:16px; display:grid; gap:12px; }
+.modal .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.modal footer{ padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end; }
+input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; }
 `.trim() +
     "\n" +
     images
@@ -135,47 +158,9 @@ export default async function Page({
       )
       .join("\n");
 
-  // 轮播 + 加入购物车
-  const script = `
-(function(){
-  // 5秒自动轮播（点击后重置计时）
-  var name = ${JSON.stringify(gal)};
-  var radios = Array.prototype.slice.call(document.querySelectorAll('input[name="'+name+'"]'));
-  if (radios.length){
-    var idx = radios.findIndex(function(r){return r.checked;}); if (idx < 0) idx = 0;
-    function tick(){ idx = (idx + 1) % radios.length; radios[idx].checked = true; }
-    var timer = setInterval(tick, 5000);
-    radios.forEach(function(r, i){
-      r.addEventListener('change', function(){ idx = i; clearInterval(timer); timer = setInterval(tick, 5000); });
-    });
-  }
-  // 加入购物车（localStorage）
-  var btn = document.getElementById('add-cart');
-  if (btn){
-    btn.addEventListener('click', function(){
-      try{
-        var key='cart';
-        var raw=localStorage.getItem(key);
-        var cart = raw ? JSON.parse(raw) : [];
-        var num=${JSON.stringify(num)};
-        var price=${JSON.stringify(item.price ?? '')};
-        var brand=${JSON.stringify(item.brand ?? '')};
-        var product=${JSON.stringify(item.product ?? '')};
-        var oe=${JSON.stringify(item.oe ?? '')};
-        var idx = cart.findIndex(function(x){ return String(x.num)===String(num); });
-        if (idx===-1){ cart.push({num:num, qty:1, price:price, brand:brand, product:product, oe:oe}); }
-        else { cart[idx].qty = (cart[idx].qty||1)+1; }
-        localStorage.setItem(key, JSON.stringify(cart));
-        btn.innerText='已加入';
-        setTimeout(function(){ btn.innerText='加入购物车'; }, 1200);
-      }catch(e){}
-    });
-  }
-})();`.trim();
-
   return (
     <>
-      {/* 预取“返回列表”并预加载首图，保证返回即时 */}
+      {/* 预取返回列表 + 预加载首图，确保“同步出现/即时返回” */}
       <link rel="prefetch" href={backHref} />
       {images.slice(0, preloadCount).map((src, i) => (
         <link key={`preload-${i}`} rel="preload" as="image" href={src} />
@@ -202,16 +187,35 @@ export default async function Page({
               </label>
             ))}
           </div>
-
-          <style dangerouslySetInnerHTML={{ __html: css }} />
-          <script dangerouslySetInnerHTML={{ __html: script }} />
         </div>
 
         {/* 右：信息与操作 */}
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
 
-          <dl style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 14 }}>
+          {/* 标准术语与描述（若接口提供） */}
+          {(stdCn || stdEn) && (
+            <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.5 }}>
+              {stdCn && <div><strong>配件标准术语：</strong>{stdCn}</div>}
+              {stdEn && <div><strong>Standard Term:</strong> {stdEn}</div>}
+            </div>
+          )}
+          {(summary || description) && (
+            <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>
+              {summary && <div><strong>Summary：</strong>{summary}</div>}
+              {description && <div><strong>Description：</strong>{description}</div>}
+            </div>
+          )}
+
+          <dl
+            style={{
+              marginTop: 16,
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 12,
+              fontSize: 14,
+            }}
+          >
             {item.brand && (<div><dt style={{ color: "#6b7280" }}>品牌</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
             {item.product && (<div><dt style={{ color: "#6b7280" }}>品名</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
             {item.oe && (<div><dt style={{ color: "#6b7280" }}>OE</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
@@ -219,10 +223,14 @@ export default async function Page({
             {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>库存</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
           </dl>
 
-          <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
+          <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <button id="add-cart"
               style={{ padding: "8px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
               加入购物车
+            </button>
+            <button id="go-checkout"
+              style={{ padding: "8px 16px", borderRadius: 8, background: "#10b981", color: "#fff", border: "none", cursor: "pointer" }}>
+              去结算
             </button>
             <Link href={backHref} prefetch
               style={{ padding: "8px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none", textAlign: "center" }}>
@@ -231,6 +239,176 @@ export default async function Page({
           </div>
         </div>
       </div>
+
+      {/* 结算弹窗（不新建页面，保持闭环） */}
+      <div id="modal-mask" className="modal-mask"></div>
+      <div id="checkout-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
+        <header id="checkout-title">提交订单</header>
+        <div className="body">
+          <div id="cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
+          <div className="row">
+            <div>
+              <label>姓名 / Name</label>
+              <input id="o-name" placeholder="联系人" />
+            </div>
+            <div>
+              <label>电话 / Phone</label>
+              <input id="o-phone" placeholder="+86..." />
+            </div>
+          </div>
+          <div className="row">
+            <div>
+              <label>邮箱 / Email</label>
+              <input id="o-email" placeholder="you@example.com" />
+            </div>
+            <div>
+              <label>公司（可选）</label>
+              <input id="o-company" placeholder="Company" />
+            </div>
+          </div>
+          <div className="row">
+            <div>
+              <label>国家 / Country</label>
+              <input id="o-country" placeholder="China / ..." />
+            </div>
+            <div>
+              <label>交易模式</label>
+              <select id="o-mode">
+                <option value="B2C">B2C</option>
+                <option value="B2B">B2B</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>地址 / Address</label>
+            <input id="o-address" placeholder="详细地址" />
+          </div>
+          <div>
+            <label>备注 / Notes</label>
+            <textarea id="o-notes" placeholder="补充信息..." rows={3}></textarea>
+          </div>
+          <div id="o-tip" style={{ fontSize: 12, color: "#059669" }}></div>
+        </div>
+        <footer>
+          <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>取消</button>
+          <button id="o-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>提交订单</button>
+        </footer>
+      </div>
+
+      <style dangerouslySetInnerHTML={{ __html: css }} />
+
+      {/* 行为脚本：放在按钮与弹窗之后，确保能正确绑定（解决“已加入”不生效的问题） */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+(function(){
+  // 轮播：5s 自动
+  (function(){
+    var name='${gal}';
+    var radios=[].slice.call(document.querySelectorAll('input[name="'+name+'"]'));
+    if(!radios.length) return;
+    var idx=radios.findIndex(function(r){return r.checked;}); if(idx<0) idx=0;
+    function tick(){ idx=(idx+1)%radios.length; radios[idx].checked=true; }
+    var timer=setInterval(tick,5000);
+    radios.forEach(function(r,i){ r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); }); });
+  })();
+
+  function readCart(){
+    try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; }
+  }
+  function writeCart(cart){
+    try{ localStorage.setItem('cart', JSON.stringify(cart)); }catch(e){}
+  }
+  function addCurrentToCart(){
+    var cart=readCart();
+    var num=${JSON.stringify(num)};
+    var price=${JSON.stringify(item.price ?? '')};
+    var brand=${JSON.stringify(item.brand ?? '')};
+    var product=${JSON.stringify(item.product ?? '')};
+    var oe=${JSON.stringify(item.oe ?? '')};
+    var idx=cart.findIndex(function(x){return String(x.num)===String(num);});
+    if(idx===-1){ cart.push({num:num, qty:1, price:price, brand:brand, product:product, oe:oe}); }
+    else{ cart[idx].qty=(cart[idx].qty||1)+1; }
+    writeCart(cart);
+  }
+
+  // 按钮：加入购物车（修复：点击后即时显示“已加入”）
+  var addBtn=document.getElementById('add-cart');
+  if(addBtn){
+    addBtn.addEventListener('click', function(){
+      addCurrentToCart();
+      var txt=addBtn.innerText;
+      addBtn.innerText='已加入';
+      setTimeout(function(){ addBtn.innerText=txt; }, 1200);
+    });
+  }
+
+  // 结算弹窗相关
+  var mask=document.getElementById('modal-mask');
+  var modal=document.getElementById('checkout-modal');
+  function openModal(){
+    // 确保当前商品在购物车里
+    addCurrentToCart();
+    // 渲染购物车列表
+    var el=document.getElementById('cart-items');
+    var cart=readCart();
+    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; }
+    else{
+      var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+      cart.forEach(function(it){
+        html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+
+              [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+
+              '</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
+              '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
+      });
+      html+='</tbody></table>';
+      el.innerHTML=html;
+    }
+    if(mask) mask.style.display='block';
+    if(modal) modal.style.display='block';
+  }
+  function closeModal(){
+    if(mask) mask.style.display='none';
+    if(modal) modal.style.display='none';
+  }
+
+  var goBtn=document.getElementById('go-checkout');
+  if(goBtn){ goBtn.addEventListener('click', openModal); }
+  if(mask){ mask.addEventListener('click', closeModal); }
+  var cancel=document.getElementById('o-cancel');
+  if(cancel){ cancel.addEventListener('click', closeModal); }
+
+  // 提交订单（保存到 localStorage.orders 演示闭环）
+  var submit=document.getElementById('o-submit');
+  if(submit){
+    submit.addEventListener('click', function(){
+      var order={
+        items: readCart(),
+        contact: {
+          name: (document.getElementById('o-name') as any)?.value || '',
+          phone: (document.getElementById('o-phone') as any)?.value || '',
+          email: (document.getElementById('o-email') as any)?.value || '',
+          company: (document.getElementById('o-company') as any)?.value || '',
+          country: (document.getElementById('o-country') as any)?.value || '',
+          address: (document.getElementById('o-address') as any)?.value || '',
+          mode: (document.getElementById('o-mode') as any)?.value || 'B2C',
+          notes: (document.getElementById('o-notes') as any)?.value || ''
+        },
+        createdAt: new Date().toISOString()
+      };
+      try{
+        var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
+        arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
+        localStorage.setItem('lastOrder', JSON.stringify(order));
+        var tip=document.getElementById('o-tip'); if(tip){ tip.textContent='提交成功（演示）：已保存到本地订单列表'; }
+        // 提交后可清空购物车（可选）
+        // localStorage.removeItem('cart');
+      }catch(e){}
+    });
+  }
+})();`,
+        }}
+      />
     </>
   );
 }

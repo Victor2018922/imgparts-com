@@ -1,7 +1,6 @@
-// 库存页：SSR + 极速搜索 + 排序
-// - 浏览模式：?p=（每页20，稳定）
-// - 搜索模式：?q=（并发批量、单页200、以当前页为中心扫描、2.5s超时、早停）
-// - 结果链接带来源页 ?p=&s=（搜索时 s=200；浏览时 s=20），确保详情页继续秒开
+// 库存页（SSR）：极速搜索 + 排序 + 标准术语展示 + 本地购物车 + 内置结算弹窗
+// - 保持当前浏览/搜索的速度优化与详情秒开逻辑
+// - 每个卡片：加入购物车（即时“已加入”）与去结算
 import Link from "next/link";
 
 type Item = {
@@ -18,17 +17,22 @@ type Item = {
   pics?: string[];
   gallery?: string[];
   imageUrls?: string[];
+  productCn?: string; productEn?: string;
+  productNameCn?: string; productNameEn?: string;
+  partNameCn?: string; partNameEn?: string;
+  stdNameCn?: string; stdNameEn?: string;
+  summary?: string; description?: string; desc?: string; remark?: string;
   [k: string]: any;
 };
 type Row = Item & { _page?: number };
 
 const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
-const SIZE = 20;           // 浏览模式 size
-const SEARCH_SIZE = 200;   // 搜索模式单页 size（减少请求次数）
-const MAX_SCAN_PAGES = 12; // 最多扫描 12 页
-const BATCH = 6;           // 并发 6 个请求
-const REQ_TIMEOUT = 2500;  // 单页 2.5s 超时
-const EARLY_STOP = 48;     // 找到足够多结果后提前停止
+const SIZE = 20;
+const SEARCH_SIZE = 200;
+const MAX_SCAN_PAGES = 12;
+const BATCH = 6;
+const REQ_TIMEOUT = 2500;
+const EARLY_STOP = 48;
 
 function toInt(v: unknown, def: number) {
   const n = Number(v);
@@ -55,7 +59,6 @@ async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT
 }
 
 async function fetchPageStable(page: number, size: number): Promise<Item[]> {
-  // 最多 2 次快速重试
   for (let i = 0; i < 2; i++) {
     const rows = await fetchPageOnce(page, size, REQ_TIMEOUT);
     if (rows.length) return rows;
@@ -99,20 +102,19 @@ function primaryImage(it: Item): string {
   return cleaned[0] || placeholder;
 }
 function titleOf(it: Item) { return [it.brand, it.product, it.oe, it.num].filter(Boolean).join(" | "); }
+function stdCn(it: Item) { return it.stdNameCn || it.productCn || it.productNameCn || it.partNameCn || ""; }
+function stdEn(it: Item) { return it.stdNameEn || it.productEn || it.productNameEn || it.partNameEn || ""; }
 
-// 生成“以当前页为中心”的扫描顺序：p, p+1, p-1, p+2, p-2, ...
+// 居中扫描顺序
 function centeredOrder(p: number, max: number) {
   const out: number[] = [];
   let step = 0;
   while (out.length < max) {
-    const a = p + step;
-    if (a >= 0 && !out.includes(a)) out.push(a);
+    const a = p + step; if (a >= 0 && !out.includes(a)) out.push(a);
     if (out.length >= max) break;
-    const b = p - step;
-    if (b >= 0 && !out.includes(b)) out.push(b);
+    const b = p - step; if (b >= 0 && !out.includes(b)) out.push(b);
     step++;
   }
-  // 确保 0 在队列里
   if (!out.includes(0)) out.push(0);
   return out.slice(0, max);
 }
@@ -130,12 +132,10 @@ export default async function StockPage({
   let hasNext = false;
 
   if (!q) {
-    // 浏览模式（每页20）
     const pageRows = await fetchPageStable(p, SIZE);
     rows = pageRows.map((r) => ({ ...r, _page: p }));
     hasNext = pageRows.length === SIZE;
   } else {
-    // 搜索模式（单页200，并发更大，以当前页为中心扫描，早停）
     const order = centeredOrder(p, MAX_SCAN_PAGES);
     let found: Row[] = [];
     let reachedEnd = false;
@@ -148,20 +148,16 @@ export default async function StockPage({
         const list = lists[j];
         const filtered = list.filter((it) => matchQuery(it, q)).map((it) => ({ ...it, _page: pg }));
         found.push(...filtered);
-        if (list.length < SEARCH_SIZE) reachedEnd = true; // 到末页了
+        if (list.length < SEARCH_SIZE) reachedEnd = true;
       }
     }
     rows = found;
-    hasNext = false; // 搜索结果不展示“下一页”
+    hasNext = false;
   }
 
-  // 排序
   rows = sortRows(rows, sort);
-
-  // 预加载首屏若干图片
   const preloadImgs = rows.slice(0, 8).map(primaryImage);
 
-  // 构建链接
   const baseQuery = (extra: Record<string, string | number | undefined>) => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
@@ -174,37 +170,23 @@ export default async function StockPage({
 
   return (
     <>
-      {preloadImgs.map((src, i) => (
-        <link key={`preload-${i}`} rel="preload" as="image" href={src} />
-      ))}
+      {preloadImgs.map((src, i) => (<link key={'preload-'+i} rel="preload" as="image" href={src} />))}
 
       <main style={{ padding: "24px 0" }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>库存预览</h1>
 
-        {/* 搜索 + 排序（GET 提交，SSR渲染） */}
+        {/* 搜索 + 排序 */}
         <form method="GET" action="/stock" style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, marginBottom: 12 }}>
-          <input
-            name="q"
-            defaultValue={q}
-            placeholder="输入 OE / 品名 / 品牌 / 车型 进行搜索"
-            aria-label="搜索"
-            style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #e5e7eb" }}
-          />
-          <select
-            name="sort"
-            defaultValue={sort}
-            aria-label="排序"
-            style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#fff" }}
-          >
+          <input name="q" defaultValue={q} placeholder="输入 OE / 品名 / 品牌 / 车型 进行搜索" aria-label="搜索"
+                 style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #e5e7eb" }} />
+          <select name="sort" defaultValue={sort} aria-label="排序"
+                  style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#fff" }}>
             <option value="">默认排序</option>
             <option value="price_asc">价格从低到高</option>
             <option value="price_desc">价格从高到低</option>
             <option value="stock_desc">库存从高到低</option>
           </select>
-          <button
-            type="submit"
-            style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #111827", background: "#111827", color: "#fff", cursor: "pointer" }}
-          >
+          <button type="submit" style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #111827", background: "#111827", color: "#fff", cursor: "pointer" }}>
             搜索
           </button>
         </form>
@@ -212,16 +194,14 @@ export default async function StockPage({
         {/* 浏览模式分页条 */}
         {!q && (
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, fontSize: 14 }}>
-            <Link
-              href={prevHref}
-              aria-disabled={p === 0}
-              style={{ pointerEvents: p === 0 ? "none" : "auto", padding: "6px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: p === 0 ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}
-            >上一页</Link>
-            <Link
-              href={nextHref}
-              aria-disabled={!hasNext}
-              style={{ pointerEvents: !hasNext ? "none" : "auto", padding: "6px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: !hasNext ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}
-            >下一页</Link>
+            <Link href={prevHref} aria-disabled={p === 0}
+                  style={{ pointerEvents: p === 0 ? "none" : "auto", padding: "6px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: p === 0 ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}>
+              上一页
+            </Link>
+            <Link href={nextHref} aria-disabled={!hasNext}
+                  style={{ pointerEvents: !hasNext ? "none" : "auto", padding: "6px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: !hasNext ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}>
+              下一页
+            </Link>
             <span style={{ color: "#6b7280" }}>当前第 {p + 1} 页</span>
           </div>
         )}
@@ -237,17 +217,34 @@ export default async function StockPage({
               const href = `/stock/${encodeURIComponent(String(it.num ?? ""))}?p=${srcPage}&s=${sParam}`;
               const img = primaryImage(it);
               const title = titleOf(it);
+              const scn = stdCn(it);
+              const sen = stdEn(it);
+              const dataPayload = JSON.stringify({
+                num: it.num ?? "", price: it.price ?? "", brand: it.brand ?? "",
+                product: it.product ?? "", oe: it.oe ?? ""
+              }).replace(/"/g, "&quot;"); // 放进 data- 属性
               return (
-                <div key={String(it.num)} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div key={String(it.num)}
+                     style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                   <Link href={href} title="查看详情" prefetch>
                     <div style={{ width: "100%", aspectRatio: "1 / 1", overflow: "hidden", borderRadius: 10, background: "#fff", border: "1px solid #f3f4f6" }}>
-                      <img src={img} alt={String(it.product ?? "product")} loading="eager" fetchPriority="high" decoding="sync" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                      <img src={img} alt={String(it.product ?? "product")} loading="eager" fetchPriority="high" decoding="sync"
+                           style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                     </div>
                   </Link>
 
-                  <Link href={href} title={title} prefetch style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.35, textDecoration: "none", color: "#111827" }}>
+                  <Link href={href} title={title} prefetch
+                        style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.35, textDecoration: "none", color: "#111827" }}>
                     {title}
                   </Link>
+
+                  {/* 标准术语（若有） */}
+                  {(scn || sen) && (
+                    <div style={{ fontSize: 12, color: "#374151" }}>
+                      {scn && <div>标准术语：{scn}</div>}
+                      {sen && <div>Standard: {sen}</div>}
+                    </div>
+                  )}
 
                   <div style={{ fontSize: 12, color: "#4b5563", display: "grid", gap: 4 }}>
                     {it.oe && <div>OE：{it.oe}</div>}
@@ -255,9 +252,17 @@ export default async function StockPage({
                     {typeof it.stock !== "undefined" && <div>库存：{String(it.stock)}</div>}
                   </div>
 
-                  <div style={{ marginTop: "auto" }}>
+                  <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
+                    <button className="btn-add" data-payload={dataPayload}
+                            style={{ flex: 1, padding: "8px 12px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
+                      加入购物车
+                    </button>
+                    <button className="btn-checkout"
+                            style={{ flex: 1, padding: "8px 12px", borderRadius: 8, background: "#10b981", color: "#fff", border: "none", cursor: "pointer" }}>
+                      去结算
+                    </button>
                     <Link href={href} prefetch aria-label="查看详情" title="查看详情"
-                      style={{ display: "inline-block", padding: "8px 12px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textAlign: "center", textDecoration: "none", width: "100%" }}>
+                          style={{ flex: 1, padding: "8px 12px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textAlign: "center", textDecoration: "none" }}>
                       查看详情
                     </Link>
                   </div>
@@ -271,17 +276,137 @@ export default async function StockPage({
         {!q && (
           <div style={{ marginTop: 16, display: "flex", gap: 12 }}>
             <Link href={prevHref} aria-disabled={p === 0}
-              style={{ pointerEvents: p === 0 ? "none" : "auto", padding: "8px 16px", borderRadius: 8, border: "1px solid #e5e7eb", background: p === 0 ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}>
+                  style={{ pointerEvents: p === 0 ? "none" : "auto", padding: "8px 16px", borderRadius: 8, border: "1px solid #e5e7eb", background: p === 0 ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}>
               上一页
             </Link>
             <Link href={nextHref} aria-disabled={!hasNext}
-              style={{ pointerEvents: !hasNext ? "none" : "auto", padding: "8px 16px", borderRadius: 8, border: "1px solid #e5e7eb", background: !hasNext ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}>
+                  style={{ pointerEvents: !hasNext ? "none" : "auto", padding: "8px 16px", borderRadius: 8, border: "1px solid #e5e7eb", background: !hasNext ? "#f3f4f6" : "#fff", color: "#111827", textDecoration: "none" }}>
               下一页
             </Link>
             <span style={{ alignSelf: "center", color: "#6b7280" }}>第 {p + 1} 页</span>
           </div>
         )}
       </main>
+
+      {/* 结算弹窗（列表页内置） */}
+      <div id="list-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;z-index:50;"></div>
+      <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
+           style="position:fixed;left:50%;top:8vh;transform:translateX(-50%);width:min(720px,92vw);background:#fff;border:1px solid #e5e7eb;border-radius:12px;display:none;z-index:51;">
+        <div id="list-title" style="padding:12px 16px;font-weight:700;border-bottom:1px solid #e5e7eb;">提交订单</div>
+        <div style="padding:16px;display:grid;gap:12px;">
+          <div id="list-cart-items" style="font-size:13px;color:#374151;"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div><label>姓名 / Name</label><input id="l-name" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+            <div><label>电话 / Phone</label><input id="l-phone" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div><label>邮箱 / Email</label><input id="l-email" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+            <div><label>公司（可选）</label><input id="l-company" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div><label>国家 / Country</label><input id="l-country" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+            <div><label>交易模式</label>
+              <select id="l-mode" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;">
+                <option value="B2C">B2C</option>
+                <option value="B2B">B2B</option>
+              </select>
+            </div>
+          </div>
+          <div><label>地址 / Address</label><input id="l-address" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;" /></div>
+          <div><label>备注 / Notes</label><textarea id="l-notes" rows="3" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;"></textarea></div>
+          <div id="l-tip" style="font-size:12px;color:#059669;"></div>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+          <button id="l-cancel" style="padding:8px 14px;border-radius:8px;background:#fff;border:1px solid #e5e7eb;cursor:pointer;">取消</button>
+          <button id="l-submit" style="padding:8px 14px;border-radius:8px;background:#111827;color:#fff;border:1px solid #111827;cursor:pointer;">提交订单</button>
+        </div>
+      </div>
+
+      {/* 列表页行为脚本：加入购物车 + 去结算（本地闭环） */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+(function(){
+  function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
+  function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
+
+  // 绑定“加入购物车”（即时显示已加入）
+  Array.prototype.slice.call(document.querySelectorAll('.btn-add')).forEach(function(btn){
+    btn.addEventListener('click', function(){
+      try{
+        var payload = btn.getAttribute('data-payload');
+        var it = payload? JSON.parse(payload.replace(/&quot;/g,'"')) : null;
+        var cart = readCart();
+        if(it){
+          var idx = cart.findIndex(function(x){ return String(x.num)===String(it.num); });
+          if(idx===-1){ cart.push({ num:it.num, qty:1, price:it.price, brand:it.brand, product:it.product, oe:it.oe }); }
+          else { cart[idx].qty = (cart[idx].qty||1)+1; }
+          writeCart(cart);
+          var t = btn.innerText; btn.innerText='已加入'; setTimeout(function(){ btn.innerText=t; }, 1200);
+        }
+      }catch(e){}
+    });
+  });
+
+  // 结算弹窗
+  var mask=document.getElementById('list-mask');
+  var modal=document.getElementById('list-modal');
+  function openModal(){
+    // 渲染购物车
+    var el=document.getElementById('list-cart-items');
+    var cart=readCart();
+    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; }
+    else{
+      var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+      cart.forEach(function(it){
+        html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+
+              [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+
+              '</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
+              '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.price||'')+'</td></tr>';
+      });
+      html+='</tbody></table>';
+      el.innerHTML=html;
+    }
+    if(mask) mask.style.display='block';
+    if(modal) modal.style.display='block';
+  }
+  function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
+
+  Array.prototype.slice.call(document.querySelectorAll('.btn-checkout')).forEach(function(btn){
+    btn.addEventListener('click', openModal);
+  });
+  var cancel=document.getElementById('l-cancel'); if(cancel) cancel.addEventListener('click', closeModal);
+  if(mask) mask.addEventListener('click', closeModal);
+
+  var submit=document.getElementById('l-submit');
+  if(submit){
+    submit.addEventListener('click', function(){
+      var order={
+        items: readCart(),
+        contact:{
+          name:(document.getElementById('l-name') as any)?.value||'',
+          phone:(document.getElementById('l-phone') as any)?.value||'',
+          email:(document.getElementById('l-email') as any)?.value||'',
+          company:(document.getElementById('l-company') as any)?.value||'',
+          country:(document.getElementById('l-country') as any)?.value||'',
+          address:(document.getElementById('l-address') as any)?.value||'',
+          mode:(document.getElementById('l-mode') as any)?.value||'B2C',
+          notes:(document.getElementById('l-notes') as any)?.value||'',
+        },
+        createdAt:new Date().toISOString()
+      };
+      try{
+        var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
+        arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
+        localStorage.setItem('lastOrder', JSON.stringify(order));
+        var tip=document.getElementById('l-tip'); if(tip) tip.textContent='提交成功（演示）：已保存到本地订单列表';
+        // 可选择清空购物车： localStorage.removeItem('cart');
+      }catch(e){}
+    });
+  }
+})();`,
+        }}
+      />
     </>
   );
 }
