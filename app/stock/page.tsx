@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 
 type Item = {
   num?: string;
@@ -28,7 +29,7 @@ export default function StockPage() {
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [hasNext, setHasNext] = useState<boolean>(false);
-  const [addedHint, setAddedHint] = useState<string>(''); // 加入购物车提示
+  const [addedHint, setAddedHint] = useState<string>('');
 
   useEffect(() => {
     let alive = true;
@@ -49,7 +50,7 @@ export default function StockPage() {
           : [];
         if (!alive) return;
         setItems(rows);
-        setHasNext(rows.length === PAGE_SIZE); // 简易判断是否还有下一页
+        setHasNext(rows.length === PAGE_SIZE);
       } catch (e: any) {
         if (!alive) return;
         setError(e?.message || '加载失败');
@@ -60,9 +61,7 @@ export default function StockPage() {
       }
     }
     load();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [page]);
 
   function addToCart(item: Item) {
@@ -87,80 +86,42 @@ export default function StockPage() {
       }
       localStorage.setItem(key, JSON.stringify(cart));
       setAddedHint(`已加入购物车：${formatTitle(item)}`);
-      setTimeout(() => setAddedHint(''), 1800);
+      setTimeout(() => setAddedHint(''), 1600);
     } catch {
       setAddedHint('加入购物车失败，请重试');
-      setTimeout(() => setAddedHint(''), 1800);
+      setTimeout(() => setAddedHint(''), 1600);
     }
   }
 
-  function prevPage() {
-    setPage((p) => Math.max(0, p - 1));
-  }
-  function nextPage() {
-    if (hasNext) setPage((p) => p + 1);
-  }
+  function prevPage() { setPage((p) => Math.max(0, p - 1)); }
+  function nextPage() { if (hasNext) setPage((p) => p + 1); }
 
   return (
     <main style={{ padding: '24px 0' }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>
-        库存预览
-      </h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>库存预览</h1>
 
-      {/* 顶部操作区 */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 12,
-          fontSize: 14,
-        }}
-      >
-        <button
-          onClick={prevPage}
-          disabled={page === 0 || loading}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 8,
-            border: '1px solid #e5e7eb',
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, fontSize: 14 }}>
+        <button onClick={prevPage} disabled={page === 0 || loading}
+          style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #e5e7eb',
             background: page === 0 || loading ? '#f3f4f6' : '#fff',
-            cursor: page === 0 || loading ? 'not-allowed' : 'pointer',
-          }}
-        >
+            cursor: page === 0 || loading ? 'not-allowed' : 'pointer' }}>
           上一页
         </button>
-        <button
-          onClick={nextPage}
-          disabled={!hasNext || loading}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 8,
-            border: '1px solid #e5e7eb',
+        <button onClick={nextPage} disabled={!hasNext || loading}
+          style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #e5e7eb',
             background: !hasNext || loading ? '#f3f4f6' : '#fff',
-            cursor: !hasNext || loading ? 'not-allowed' : 'pointer',
-          }}
-        >
+            cursor: !hasNext || loading ? 'not-allowed' : 'pointer' }}>
           下一页
         </button>
         <span style={{ color: '#6b7280' }}>当前第 {page + 1} 页</span>
         {addedHint && (
-          <span
-            style={{
-              marginLeft: 'auto',
-              background: '#ecfeff',
-              border: '1px solid #a5f3fc',
-              padding: '4px 8px',
-              borderRadius: 6,
-              color: '#0e7490',
-            }}
-          >
+          <span style={{ marginLeft: 'auto', background: '#ecfeff', border: '1px solid #a5f3fc',
+            padding: '4px 8px', borderRadius: 6, color: '#0e7490' }}>
             {addedHint}
           </span>
         )}
       </div>
 
-      {/* 内容 */}
       {loading ? (
         <div style={{ padding: 24 }}>加载中...</div>
       ) : error ? (
@@ -168,50 +129,27 @@ export default function StockPage() {
       ) : items.length === 0 ? (
         <div style={{ padding: 24 }}>暂无数据</div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            gap: 16,
-          }}
-        >
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16 }}>
           {items.map((it) => (
             <Card key={String(it.num)} item={it} onAdd={() => addToCart(it)} />
           ))}
         </div>
       )}
 
-      {/* 分页 */}
       <div style={{ marginTop: 16, display: 'flex', gap: 12 }}>
-        <button
-          onClick={prevPage}
-          disabled={page === 0 || loading}
-          style={{
-            padding: '8px 16px',
-            borderRadius: 8,
-            border: '1px solid #e5e7eb',
+        <button onClick={prevPage} disabled={page === 0 || loading}
+          style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #e5e7eb',
             background: page === 0 || loading ? '#f3f4f6' : '#fff',
-            cursor: page === 0 || loading ? 'not-allowed' : 'pointer',
-          }}
-        >
+            cursor: page === 0 || loading ? 'not-allowed' : 'pointer' }}>
           上一页
         </button>
-        <button
-          onClick={nextPage}
-          disabled={!hasNext || loading}
-          style={{
-            padding: '8px 16px',
-            borderRadius: 8,
-            border: '1px solid #e5e7eb',
+        <button onClick={nextPage} disabled={!hasNext || loading}
+          style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #e5e7eb',
             background: !hasNext || loading ? '#f3f4f6' : '#fff',
-            cursor: !hasNext || loading ? 'not-allowed' : 'pointer',
-          }}
-        >
+            cursor: !hasNext || loading ? 'not-allowed' : 'pointer' }}>
           下一页
         </button>
-        <span style={{ alignSelf: 'center', color: '#6b7280' }}>
-          第 {page + 1} 页
-        </span>
+        <span style={{ alignSelf: 'center', color: '#6b7280' }}>第 {page + 1} 页</span>
       </div>
     </main>
   );
@@ -223,12 +161,7 @@ function formatTitle(item: Item) {
 
 function getPrimaryImage(item: Item): string {
   const raw: string[] =
-    item.images ||
-    item.pics ||
-    item.gallery ||
-    item.imageUrls ||
-    (item.image ? [item.image] : []) ||
-    [];
+    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
   const seen = new Set<string>();
   const cleaned = raw
     .filter(Boolean)
@@ -253,51 +186,25 @@ function Card({ item, onAdd }: { item: Item; onAdd: () => void }) {
   const title = formatTitle(item);
 
   return (
-    <div
-      style={{
-        background: '#fff',
-        border: '1px solid #e5e7eb',
-        borderRadius: 12,
-        padding: 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
-      {/* 图片 */}
-      <a href={href} title="查看详情">
-        <div
-          style={{
-            width: '100%',
-            aspectRatio: '1 / 1',
-            overflow: 'hidden',
-            borderRadius: 10,
-            background: '#fff',
-            border: '1px solid #f3f4f6',
-          }}
-        >
+    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* 图片（高优先级，减少进入详情页时的延迟感） */}
+      <Link href={href} prefetch title="查看详情">
+        <div style={{ width: '100%', aspectRatio: '1 / 1', overflow: 'hidden', borderRadius: 10, background: '#fff', border: '1px solid #f3f4f6' }}>
           <img
             src={primary}
             alt={String(item.product ?? 'product')}
+            loading="eager"
+            fetchPriority="high"
+            decoding="sync"
             style={{ width: '100%', height: '100%', objectFit: 'contain' }}
           />
         </div>
-      </a>
+      </Link>
 
-      {/* 标题（可点击） */}
-      <a
-        href={href}
-        style={{
-          fontWeight: 700,
-          fontSize: 14,
-          lineHeight: 1.35,
-          textDecoration: 'none',
-          color: '#111827',
-        }}
-        title={title}
-      >
+      {/* 标题（可点击，预取页面，加速跳转） */}
+      <Link href={href} prefetch title={title} style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.35, textDecoration: 'none', color: '#111827' }}>
         {title}
-      </a>
+      </Link>
 
       {/* 关键信息 */}
       <div style={{ fontSize: 12, color: '#4b5563', display: 'grid', gap: 4 }}>
@@ -308,41 +215,25 @@ function Card({ item, onAdd }: { item: Item; onAdd: () => void }) {
         {item.price !== undefined && <div>价格：{String(item.price)}</div>}
       </div>
 
-      {/* 操作按钮 */}
+      {/* 操作 */}
       <div style={{ marginTop: 'auto', display: 'flex', gap: 8 }}>
         <button
-          onClick={onAdd}
-          style={{
-            flex: 1,
-            padding: '8px 12px',
-            borderRadius: 8,
-            background: '#2563eb',
-            color: '#fff',
-            border: 'none',
-            cursor: 'pointer',
-          }}
+          onClick={(e) => { e.preventDefault(); onAdd(); }}
+          style={{ flex: 1, padding: '8px 12px', borderRadius: 8, background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer' }}
           aria-label="加入购物车"
           title="加入购物车"
         >
           加入购物车
         </button>
-        <a
+        <Link
           href={href}
-          style={{
-            flex: 1,
-            padding: '8px 12px',
-            borderRadius: 8,
-            background: '#fff',
-            color: '#111827',
-            border: '1px solid #e5e7eb',
-            textAlign: 'center',
-            textDecoration: 'none',
-          }}
+          prefetch
           aria-label="查看详情"
           title="查看详情"
+          style={{ flex: 1, padding: '8px 12px', borderRadius: 8, background: '#fff', color: '#111827', border: '1px solid #e5e7eb', textAlign: 'center', textDecoration: 'none' }}
         >
           查看详情
-        </a>
+        </Link>
       </div>
     </div>
   );
