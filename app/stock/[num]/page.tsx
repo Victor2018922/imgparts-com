@@ -1,7 +1,6 @@
-// 详情页：只查 p 页（±1 兜底）→ 秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
-// 修复：按钮用事件委托，避免首次后失效；每次点击“加入购物车”都有反馈
-// 增强：标准配件术语（中文/英文）显示，含动态兜底；Summary/Description 显示
-// 结算：内置弹窗（去结算/提交订单/交易模式），localStorage 闭环
+// 详情页：秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
+// 修复：事件委托（纯JS，无TS语法）确保“加入购物车/去结算”每次点击都有效
+// 命名：将“标准术语”改为“配件名称”（中/英）+ 显示 Summary/Description（若API提供）
 import Link from "next/link";
 
 type Item = {
@@ -18,7 +17,7 @@ type Item = {
   pics?: string[];
   gallery?: string[];
   imageUrls?: string[];
-  // 可能的标准术语/描述键
+  // 可能的标准术语/描述键（接口若有则显示）
   productCn?: string; productEn?: string;
   productNameCn?: string; productNameEn?: string;
   partNameCn?: string; partNameEn?: string;
@@ -72,50 +71,29 @@ async function fetchItemNear(num: string, p: number, size: number): Promise<Item
   return a || b || null;
 }
 
-// —— 标准术语抽取（含动态兜底） ——
-function hasZh(s: string) {
-  return /[\u4e00-\u9fff]/.test(s);
-}
+// —— “配件名称”抽取（含动态兜底） ——
+function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
 function getStdNames(it: Item) {
-  // 先按已知字段
-  const candidatesCn = [
-    it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn,
-  ].filter(Boolean) as string[];
-  const candidatesEn = [
-    it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn,
-  ].filter(Boolean) as string[];
-
+  const candidatesCn = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
+  const candidatesEn = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
   let cn = candidatesCn.find((x) => String(x).trim().length > 0) || "";
   let en = candidatesEn.find((x) => String(x).trim().length > 0) || "";
-
-  // 动态兜底：自动扫描对象里“可能是术语”的键
   if (!cn) {
     for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && hasZh(v)) {
-        const key = k.toLowerCase();
-        if (/(std|standard|name|product|part|desc)/.test(key)) {
-          cn = v;
-          break;
-        }
+      if (typeof v === "string" && v && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) {
+        cn = v; break;
       }
     }
   }
-  // 英文兜底（可选）
   if (!en) {
     for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && !hasZh(v)) {
-        const key = k.toLowerCase();
-        if (/(std|standard|name|product|part|desc|en)/.test(key)) {
-          en = v;
-          break;
-        }
+      if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) {
+        en = v; break;
       }
     }
   }
-
   const summary = it.summary || "";
   const description = it.description || it.desc || it.remark || "";
-
   return { cn, en, summary, description };
 }
 
@@ -199,7 +177,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
   return (
     <>
-      {/* 预取返回列表 + 预加载首图，确保“同步出现/即时返回” */}
+      {/* 预取返回列表 + 预加载首图 */}
       <link rel="prefetch" href={backHref} />
       {images.slice(0, preloadCount).map((src, i) => (
         <link key={`preload-${i}`} rel="preload" as="image" href={src} />
@@ -232,11 +210,11 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
 
-          {/* 标准术语与描述（若接口提供） */}
+          {/* 配件名称（若接口提供） */}
           {(stdCn || stdEn) && (
             <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.5 }}>
-              {stdCn && <div><strong>配件标准术语：</strong>{stdCn}</div>}
-              {stdEn && <div><strong>Standard Term:</strong> {stdEn}</div>}
+              {stdCn && <div><strong>配件名称：</strong>{stdCn}</div>}
+              {stdEn && <div><strong>Part Name:</strong> {stdEn}</div>}
             </div>
           )}
           {(summary || description) && (
@@ -314,14 +292,14 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
       <style dangerouslySetInnerHTML={{ __html: css }} />
 
-      {/* 统一事件委托脚本（纯JS），保证多次点击始终有效 */}
+      {/* 统一事件委托脚本（纯JS，无TS语法） */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
-  // 简易 closest 兼容
+  // closest poly
   function closest(el, sel){
-    while(el && el.nodeType === 1){
+    while(el && el.nodeType===1){
       if (el.matches && el.matches(sel)) return el;
       el = el.parentElement;
     }
@@ -343,6 +321,20 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
+  function renderCart(tableId){
+    var el=document.getElementById(tableId);
+    var cart=readCart();
+    if(!el) return;
+    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; return; }
+    var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+    cart.forEach(function(it){
+      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
+    });
+    html+='</tbody></table>';
+    el.innerHTML=html;
+  }
   function addCurrentToCart(){
     var cart=readCart();
     var item={ num:${JSON.stringify(item.num ?? "")}, price:${JSON.stringify(item.price ?? "")}, brand:${JSON.stringify(item.brand ?? "")}, product:${JSON.stringify(item.product ?? "")}, oe:${JSON.stringify(item.oe ?? "")} };
@@ -351,44 +343,29 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     else{ cart[i].qty=(cart[i].qty||1)+1; }
     writeCart(cart);
   }
-  function renderCart(tableId){
-    var el=document.getElementById(tableId);
-    var cart=readCart();
-    if(!el) return;
-    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; return; }
-    var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
-    cart.forEach(function(it){
-      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
-    });
-    html+='</tbody></table>';
-    el.innerHTML=html;
-  }
 
   var mask=document.getElementById('modal-mask');
   var modal=document.getElementById('checkout-modal');
   function openModal(){ addCurrentToCart(); renderCart('cart-items'); if(mask) mask.style.display='block'; if(modal) modal.style.display='block'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
 
-  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
+  function gv(id){
+    var el=document.getElementById(id);
+    if(!el) return '';
+    return (typeof el.value!=='undefined') ? el.value : '';
+  }
 
-  // —— 事件委托：确保多次点击始终有效 ——
+  // —— 统一委托：保证多次点击有反应 ——
   document.addEventListener('click', function(ev){
-    var t = ev.target as HTMLElement;
-    // 加入购物车
+    var t = ev.target;
     if (closest(t, '#add-cart')) {
       addCurrentToCart();
       var btn=closest(t, '#add-cart');
       if(btn){ var txt=btn.innerText; btn.innerText='已加入'; setTimeout(function(){ btn.innerText=txt; }, 1200); }
+      return;
     }
-    // 去结算
-    if (closest(t, '#go-checkout')) {
-      openModal();
-    }
-    // 关闭弹窗
-    if (closest(t, '#o-cancel') || (mask && t===mask)) {
-      closeModal();
-    }
-    // 提交订单
+    if (closest(t, '#go-checkout')) { openModal(); return; }
+    if (closest(t, '#o-cancel') || (mask && t===mask)) { closeModal(); return; }
     if (closest(t, '#o-submit')) {
       var order={
         items: readCart(),
@@ -405,6 +382,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         localStorage.setItem('lastOrder', JSON.stringify(order));
         var tip=document.getElementById('o-tip'); if(tip) tip.textContent='提交成功（演示）：已保存到本地订单列表';
       }catch(e){}
+      return;
     }
   });
 })();`,

@@ -1,5 +1,5 @@
-// 库存页（SSR）：极速搜索 + 排序 + 标准术语展示（含动态兜底） + 本地购物车 + 结算弹窗
-// 修复：按钮采用事件委托，多次点击始终有效；保留列表⇄详情秒开与返回即时
+// 库存页：极速搜索 + 排序 + “配件名称”展示（含动态兜底） + 本地购物车 + 结算弹窗
+// 修复：按钮用事件委托（纯JS，无TS语法），多次点击始终有效；保留列表⇄详情秒开与返回即时
 import Link from "next/link";
 
 type Item = {
@@ -102,7 +102,7 @@ function primaryImage(it: Item): string {
 }
 function titleOf(it: Item) { return [it.brand, it.product, it.oe, it.num].filter(Boolean).join(" | "); }
 
-// —— 标准术语抽取（含动态兜底） ——
+// —— “配件名称”抽取（含动态兜底） ——
 function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
 function stdCn(it: Item) {
   const arr = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
@@ -125,6 +125,7 @@ function stdEn(it: Item) {
   return val;
 }
 
+// 居中扫描顺序
 function centeredOrder(p: number, max: number) {
   const out: number[] = [];
   let step = 0;
@@ -257,11 +258,11 @@ export default async function StockPage({
                     {title}
                   </Link>
 
-                  {/* 标准术语（若有） */}
+                  {/* 配件名称（若有） */}
                   {(scn || sen) && (
                     <div style={{ fontSize: 12, color: "#374151" }}>
-                      {scn && <div>标准术语：{scn}</div>}
-                      {sen && <div>Standard: {sen}</div>}
+                      {scn && <div>配件名称：{scn}</div>}
+                      {sen && <div>Part Name: {sen}</div>}
                     </div>
                   )}
 
@@ -354,7 +355,7 @@ export default async function StockPage({
         </div>
       </div>
 
-      {/* 事件委托脚本（纯JS） */}
+      {/* 事件委托脚本（纯JS，无TS语法） */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
@@ -375,7 +376,9 @@ export default async function StockPage({
     if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
     cart.forEach(function(it){
-      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td><td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
+      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
     });
     html+='</tbody></table>';
     el.innerHTML=html;
@@ -396,12 +399,15 @@ export default async function StockPage({
   var modal=document.getElementById('list-modal');
   function openModal(){ renderCart(); if(mask) mask.style.display='block'; if(modal) modal.style.display='block'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
-  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
+  function gv(id){
+    var el=document.getElementById(id);
+    if(!el) return '';
+    return (typeof el.value!=='undefined') ? el.value : '';
+  }
 
-  // —— 统一委托：多次点击始终有效 ——
+  // —— 统一委托：保证多次点击有反应 ——
   document.addEventListener('click', function(ev){
-    var t = ev.target as HTMLElement;
-    // 加入购物车
+    var t = ev.target;
     var addBtn = closest(t, '.btn-add');
     if(addBtn){
       var payload = addBtn.getAttribute('data-payload') || '';
@@ -409,11 +415,8 @@ export default async function StockPage({
       var txt = addBtn.innerText; addBtn.innerText='已加入'; setTimeout(function(){ addBtn.innerText=txt; }, 1200);
       return;
     }
-    // 去结算
     if(closest(t, '.btn-checkout')){ openModal(); return; }
-    // 关闭
     if(closest(t, '#l-cancel') || (mask && t===mask)){ closeModal(); return; }
-    // 提交
     if(closest(t, '#l-submit')){
       var order={
         items: readCart(),
@@ -439,4 +442,3 @@ export default async function StockPage({
     </>
   );
 }
-
