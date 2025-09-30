@@ -112,7 +112,7 @@ function cnPartToEn(cn: string): string {
 
 function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
 
-// ✅ 这里修正为 Promise<Item[]>
+// ✅ 返回类型修正为 Promise<Item[]>
 async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController();
@@ -354,10 +354,30 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
       </main>
 
       {/* 结算弹窗（可滚动 + 底部按钮固定） */}
-      <div id="list-mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
-      <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
-           style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
-                    border: "1px solid #e5e7eb", borderRadius: 12, display: "none", zIndex: 51, maxHeight: "84vh", display: "flex", flexDirection: "column" }}>
+      <div
+        id="list-mask"
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }}
+      />
+      <div
+        id="list-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="list-title"
+        style={{
+          position: "fixed",
+          left: "50%",
+          top: "8vh",
+          transform: "translateX(-50%)",
+          width: "min(720px, 92vw)",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          display: "none",       // 初始隐藏；打开时通过 JS 改为 'flex'
+          zIndex: 51,
+          maxHeight: "84vh",
+          flexDirection: "column",
+        }}
+      >
         <div id="list-title" style={{ padding: "12px 16px", fontWeight: 700, borderBottom: "1px solid #e5e7eb" }}>{tr.submitOrder}</div>
         <div style={{ padding: 16, display: "grid", gap: 12, overflow: "auto", flex: 1 }}>
           <div id="list-cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
@@ -412,7 +432,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     var cart=readCart(); if(!cart.length){ el.innerHTML='<div>${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").emptyCart}</div>'; return; }
     var tr=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh"))};
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.item+'</th>'+
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+tr.item+'</th>'+
              '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.qty+'</th>'+
              '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.price+'</th></tr></thead><tbody>';
     cart.forEach(function(it){
