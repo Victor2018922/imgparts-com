@@ -112,7 +112,8 @@ function cnPartToEn(cn: string): string {
 
 function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
 
-async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise(Item[]) {
+// ✅ 这里修正为 Promise<Item[]>
+async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -411,9 +412,9 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     var cart=readCart(); if(!cart.length){ el.innerHTML='<div>${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").emptyCart}</div>'; return; }
     var tr=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh"))};
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+tr.item+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+tr.qty+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+tr.price+'</th></tr></thead><tbody>';
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.item+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.qty+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.price+'</th></tr></thead><tbody>';
     cart.forEach(function(it){
       html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
