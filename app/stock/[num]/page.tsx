@@ -1,7 +1,7 @@
 // 详情页：秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
-// 修复：点击无反应——改为健壮的事件委托（支持从文本节点点击）；“加入购物车/去结算”稳定可点
-// 文案：将“标准术语”改为“配件名称”；支持全站中/英切换（顶部语言条 + cookie 持久化）
-// 结算：内置弹窗（B2B/B2C），localStorage 闭环
+// 修复：1) “加入购物车/去结算”采用【双保险】事件绑定（直接绑定 + 委托），确保每次可点
+//      2) 结算弹窗可滚动，底部按钮固定可见
+// i18n：顶部中英切换（cookie 持久化）；英文站无英文字段时对中文配件名做规则翻译（例如“前下悬挂 L”→“Front Left Lower Suspension”）
 import Link from "next/link";
 import { cookies } from "next/headers";
 
@@ -29,72 +29,73 @@ type Item = {
 
 const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
 
-export async function generateMetadata({ params }: { params: { num: string } }) {
-  return { title: `Item ${params.num}` };
-}
-
+// —— 语言 & 文案 ——
 function tFactory(lang: "zh" | "en") {
   return lang === "en"
     ? {
-        stockPreview: "Stock Preview",
         backToList: "Back to list",
         partName: "Part Name",
         summary: "Summary",
         description: "Description",
-        brand: "Brand",
-        product: "Product",
-        oe: "OE",
-        price: "Price",
-        stock: "Stock",
-        addToCart: "Add to Cart",
-        checkout: "Proceed to Checkout",
-        submitOrder: "Submit Order",
-        cancel: "Cancel",
-        contactName: "Name",
-        phone: "Phone",
-        email: "Email",
-        company: "Company (optional)",
-        country: "Country",
-        address: "Address",
-        mode: "Mode",
-        note: "Notes",
-        b2c: "B2C",
-        b2b: "B2B",
+        brand: "Brand", product: "Product", oe: "OE", price: "Price", stock: "Stock",
+        addToCart: "Add to Cart", added: "Added", checkout: "Proceed to Checkout",
+        submitOrder: "Submit Order", cancel: "Cancel",
+        contactName: "Name", phone: "Phone", email: "Email", company: "Company (optional)",
+        country: "Country", address: "Address", mode: "Mode", note: "Notes",
+        b2c: "B2C", b2b: "B2B",
         submittedTip: "Submitted (Demo): saved to local orders",
-        added: "Added",
-        langZh: "中文",
-        langEn: "EN",
       }
     : {
-        stockPreview: "库存预览",
         backToList: "返回列表",
         partName: "配件名称",
         summary: "Summary",
         description: "Description",
-        brand: "品牌",
-        product: "品名",
-        oe: "OE",
-        price: "价格",
-        stock: "库存",
-        addToCart: "加入购物车",
-        checkout: "去结算",
-        submitOrder: "提交订单",
-        cancel: "取消",
-        contactName: "姓名 / Name",
-        phone: "电话 / Phone",
-        email: "邮箱 / Email",
-        company: "公司（可选）",
-        country: "国家 / Country",
-        address: "地址 / Address",
-        mode: "交易模式",
-        note: "备注 / Notes",
-        b2c: "B2C",
-        b2b: "B2B",
+        brand: "品牌", product: "品名", oe: "OE", price: "价格", stock: "库存",
+        addToCart: "加入购物车", added: "已加入", checkout: "去结算",
+        submitOrder: "提交订单", cancel: "取消",
+        contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email", company: "公司（可选）",
+        country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
+        b2c: "B2C", b2b: "B2B",
         submittedTip: "提交成功（演示）：已保存到本地订单列表",
-        added: "已加入",
-        langZh: "中文",
-        langEn: "EN",
       };
+}
+
+// —— 中文配件名到英文的规则翻译（兜底） ——
+function cnPartToEn(cn: string): string {
+  if (!cn) return "";
+  let s = cn.replace(/\s+/g, "");
+  const has = (re: RegExp) => re.test(s);
+  const take = (re: RegExp) => (has(re) ? (s = s.replace(re, ""), true) : false);
+
+  const dir: string[] = [];
+  if (take(/前/)) dir.push("Front");
+  if (take(/后/)) dir.push("Rear");
+  if (take(/左|L\b/i)) dir.push("Left");
+  if (take(/右|R\b/i)) dir.push("Right");
+  if (take(/上/)) dir.push("Upper");
+  if (take(/下/)) dir.push("Lower");
+
+  const map: [RegExp, string][] = [
+    [/悬挂|底盘|悬架|摆臂|控制臂/, "Suspension"],
+    [/控制臂|摆臂|下摆臂|上摆臂/, "Control Arm"],
+    [/球头|万向节/, "Ball Joint"],
+    [/拉杆|横拉杆|转向拉杆/, "Tie Rod"],
+    [/减震器|避震器/, "Shock Absorber"],
+    [/水箱|散热器/, "Radiator"],
+    [/风扇|电子扇/, "Cooling Fan"],
+    [/保险杠/, "Bumper"],
+    [/挡泥板|翼子板/, "Fender"],
+    [/刹车片|制动片/, "Brake Pads"],
+    [/刹车盘|制动盘/, "Brake Disc"],
+    [/前大灯|大灯|车灯/, "Headlamp"],
+    [/后视镜|反光镜/, "Door Mirror"],
+  ];
+  let noun = "Part";
+  for (const [re, en] of map) { if (has(re)) { noun = en; break; } }
+  // 顺序与行业常见书写一致
+  const order = ["Front", "Rear", "Left", "Right", "Upper", "Lower"];
+  const dirs = order.filter(d => dir.includes(d));
+  return (dirs.concat([noun])).join(" ");
 }
 
 function toInt(v: unknown, def: number) {
@@ -136,7 +137,7 @@ async function fetchItemNear(num: string, p: number, size: number): Promise<Item
   return a || b || null;
 }
 
-// —— “配件名称”抽取（含动态兜底） ——
+// —— 配件名称抽取（含动态兜底） ——
 function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
 function getStdNames(it: Item) {
   const candidatesCn = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
@@ -153,9 +154,7 @@ function getStdNames(it: Item) {
       if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { en = v; break; }
     }
   }
-  const summary = it.summary || "";
-  const description = it.description || it.desc || it.remark || "";
-  return { cn, en, summary, description };
+  return { cn, en, summary: it.summary || "", description: it.description || it.desc || it.remark || "" };
 }
 
 function buildImages(item: Item) {
@@ -165,8 +164,7 @@ function buildImages(item: Item) {
     item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
   const seen = new Set<string>();
   const cleaned = raw
-    .filter(Boolean)
-    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : ""))
     .filter((s) => s.length > 0)
     .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   const MIN = 18;
@@ -176,13 +174,27 @@ function buildImages(item: Item) {
   return images;
 }
 
+// —— 顶部语言条（组件内定义，不新增文件） ——
+function LangBar({ lang }: { lang: "zh" | "en" }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, fontSize: 13 }}>
+      <button id="lang-zh" disabled={lang === "zh"} style={{ opacity: lang === "zh" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>
+        中文
+      </button>
+      <button id="lang-en" disabled={lang === "en"} style={{ opacity: lang === "en" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>
+        EN
+      </button>
+    </div>
+  );
+}
+
+export async function generateMetadata({ params }: { params: { num: string } }) {
+  return { title: `Item ${params.num}` };
+}
+
 export default async function Page({
-  params,
-  searchParams,
-}: {
-  params: { num: string };
-  searchParams?: { [k: string]: string | string[] | undefined };
-}) {
+  params, searchParams,
+}: { params: { num: string }; searchParams?: { [k: string]: string | string[] | undefined } }) {
   const num = params.num;
   const p = toInt((searchParams?.p as string) ?? "0", 0);
   const size = toInt((searchParams?.s as string) ?? "20", 20);
@@ -210,8 +222,9 @@ export default async function Page({
   const backHref = `/stock?p=${p}`;
   const { cn: stdCn, en: stdEn, summary, description } = getStdNames(item);
 
-  const css =
-    `
+  const shownPartNameEn = stdEn || (langCookie === "en" ? cnPartToEn(stdCn) : "");
+
+  const css = `
 .detail-wrap{ display:grid; gap:24px; padding:24px 0; grid-template-columns:1fr; align-items:start; }
 @media (min-width: 960px){ .detail-wrap{ grid-template-columns:minmax(0,1fr) 1fr; } }
 .gallery{ width:100%; }
@@ -222,48 +235,36 @@ export default async function Page({
 .thumbs img{ width:100%; height:100%; object-fit:cover; }
 .gallery input[type="radio"]{ display:none; }
 
+/* 弹窗可见并可滚动，底部按钮固定 */
 .modal-mask{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; z-index:50; }
-.modal{ position:fixed; inset:auto; left:50%; top:10vh; transform:translateX(-50%); width:min(720px, 92vw); background:#fff; border:1px solid #e5e7eb; border-radius:12px; display:none; z-index:51; }
+.modal{ position:fixed; left:50%; top:8vh; transform:translateX(-50%); width:min(720px,92vw); background:#fff; border:1px solid #e5e7eb; border-radius:12px; display:none; z-index:51;
+  max-height:84vh; display:flex; flex-direction:column; }
 .modal header{ padding:12px 16px; font-weight:700; border-bottom:1px solid #e5e7eb; }
-.modal .body{ padding:16px; display:grid; gap:12px; }
+.modal .body{ padding:16px; display:grid; gap:12px; overflow:auto; flex:1; }
 .modal .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-.modal footer{ padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end; }
+.modal footer{ padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end; position:sticky; bottom:0; background:#fff; }
 input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; }
-`.trim() +
-    "\n" +
-    images
-      .map(
-        (_s, i) =>
-          `#${gal}-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
-#${gal}-${i}:checked ~ .thumbs label[for="${gal}-${i}"]{border:2px solid #2563eb}`
-      )
-      .join("\n");
+` + "\n" +
+    images.map((_s, i) => `#${gal}-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
+#${gal}-${i}:checked ~ .thumbs label[for="${gal}-${i}"]{border:2px solid #2563eb}`).join("\n");
 
   return (
     <>
-      {/* 顶部语言切换条（全站中英切换） */}
       <LangBar lang={langCookie} />
 
       {/* 预取返回列表 + 预加载首图 */}
       <link rel="prefetch" href={backHref} />
-      {images.slice(0, preloadCount).map((src, i) => (
-        <link key={`preload-${i}`} rel="preload" as="image" href={src} />
-      ))}
+      {images.slice(0, preloadCount).map((src, i) => (<link key={`preload-${i}`} rel="preload" as="image" href={src} />))}
 
       <div className="detail-wrap">
         {/* 左：大图 + 缩略图（轮播） */}
         <div className="gallery">
-          {images.map((_, i) => (
-            <input key={`r-${i}`} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />
-          ))}
-
+          {images.map((_, i) => (<input key={`r-${i}`} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />))}
           <div className="main">
             {images.map((src, i) => (
-              <img key={`main-${i}`} data-idx={i} src={src} alt="product"
-                   loading={i === 0 ? "eager" : "lazy"} fetchPriority={i === 0 ? "high" : "auto"} decoding={i === 0 ? "sync" : "async"} />
+              <img key={`main-${i}`} data-idx={i} src={src} alt="product" loading={i === 0 ? "eager" : "lazy"} fetchPriority={i === 0 ? "high" : "auto"} decoding={i === 0 ? "sync" : "async"} />
             ))}
           </div>
-
           <div className="thumbs">
             {images.map((src, i) => (
               <label key={`thumb-${i}`} htmlFor={`${gal}-${i}`} title={`第 ${i + 1} 张`}>
@@ -277,12 +278,14 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
 
-          {(stdCn || stdEn) && (
+          {/* 配件名称（中/英） */}
+          {(stdCn || shownPartNameEn) && (
             <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.5 }}>
               {stdCn && <div><strong>{tr.partName}：</strong>{stdCn}</div>}
-              {stdEn && <div><strong>Part Name:</strong> {stdEn}</div>}
+              {shownPartNameEn && <div><strong>Part Name:</strong> {shownPartNameEn}</div>}
             </div>
           )}
+
           {(summary || description) && (
             <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>
               {summary && <div><strong>{tr.summary}：</strong>{summary}</div>}
@@ -290,15 +293,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
             </div>
           )}
 
-          <dl
-            style={{
-              marginTop: 16,
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 12,
-              fontSize: 14,
-            }}
-          >
+          <dl style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 14 }}>
             {item.brand && (<div><dt style={{ color: "#6b7280" }}>{tr.brand}</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
             {item.product && (<div><dt style={{ color: "#6b7280" }}>{tr.product}</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
             {item.oe && (<div><dt style={{ color: "#6b7280" }}>{tr.oe}</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
@@ -307,7 +302,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
           </dl>
 
           <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button id="add-cart"
+            <button id="add-cart" data-added={tr.added}
               style={{ padding: "8px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
               {tr.addToCart}
             </button>
@@ -323,31 +318,28 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         </div>
       </div>
 
-      {/* 结算弹窗（不新建页面） */}
+      {/* 结算弹窗 */}
       <div id="modal-mask" className="modal-mask"></div>
       <div id="checkout-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
         <header id="checkout-title">{tr.submitOrder}</header>
         <div className="body">
           <div id="cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
           <div className="row">
-            <div><label>{tr.contactName}</label><input id="o-name" placeholder="" /></div>
-            <div><label>{tr.phone}</label><input id="o-phone" placeholder="" /></div>
+            <div><label>{tr.contactName}</label><input id="o-name" /></div>
+            <div><label>{tr.phone}</label><input id="o-phone" /></div>
           </div>
           <div className="row">
-            <div><label>{tr.email}</label><input id="o-email" placeholder="" /></div>
-            <div><label>{tr.company}</label><input id="o-company" placeholder="" /></div>
+            <div><label>{tr.email}</label><input id="o-email" /></div>
+            <div><label>{tr.company}</label><input id="o-company" /></div>
           </div>
           <div className="row">
-            <div><label>{tr.country}</label><input id="o-country" placeholder="" /></div>
+            <div><label>{tr.country}</label><input id="o-country" /></div>
             <div><label>{tr.mode}</label>
-              <select id="o-mode">
-                <option value="B2C">{tr.b2c}</option>
-                <option value="B2B">{tr.b2b}</option>
-              </select>
+              <select id="o-mode"><option value="B2C">{tr.b2c}</option><option value="B2B">{tr.b2b}</option></select>
             </div>
           </div>
-          <div><label>{tr.address}</label><input id="o-address" placeholder="" /></div>
-          <div><label>{tr.note}</label><textarea id="o-notes" placeholder="" rows={3}></textarea></div>
+          <div><label>{tr.address}</label><input id="o-address" /></div>
+          <div><label>{tr.note}</label><textarea id="o-notes" rows={3}></textarea></div>
           <div id="o-tip" style={{ fontSize: 12, color: "#059669" }}></div>
         </div>
         <footer>
@@ -358,64 +350,49 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
       <style dangerouslySetInnerHTML={{ __html: css }} />
 
-      {/* 统一事件脚本（纯JS，无TS语法） */}
+      {/* 事件脚本（直接绑定 + 委托双保险） */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
-  // 兼容文本节点点击的 closest
   function closestSel(node, sel){
     var el = node && node.nodeType===1 ? node : (node && node.parentElement);
-    while(el){
-      if (el.matches && el.matches(sel)) return el;
-      el = el.parentElement;
-    }
+    while(el){ if (el.matches && el.matches(sel)) return el; el = el.parentElement; }
     return null;
   }
 
-  // 顶部语言切换（cookie 持久化，全站生效）
+  // 顶部语言切换
   document.addEventListener('click', function(e){
     var t = e.target;
-    if (closestSel(t, '#lang-zh')) {
-      document.cookie = 'lang=zh; path=/; max-age=' + (3600*24*365);
-      location.reload();
-      return;
-    }
-    if (closestSel(t, '#lang-en')) {
-      document.cookie = 'lang=en; path=/; max-age=' + (3600*24*365);
-      location.reload();
-      return;
-    }
+    if (closestSel(t, '#lang-zh')) { document.cookie = 'lang=zh; path=/; max-age='+(3600*24*365); location.reload(); return; }
+    if (closestSel(t, '#lang-en')) { document.cookie = 'lang=en; path=/; max-age='+(3600*24*365); location.reload(); return; }
   });
 
   // 轮播：5s 自动
   (function(){
     var name='${gal}';
     var radios=[].slice.call(document.querySelectorAll('input[name="'+name+'"]'));
-    if(!radios.length) return;
-    var idx=radios.findIndex(function(r){return r.checked;}); if(idx<0) idx=0;
+    if(!radios.length) return; var idx=radios.findIndex(function(r){return r.checked;}); if(idx<0) idx=0;
     function tick(){ idx=(idx+1)%radios.length; radios[idx].checked=true; }
     var timer=setInterval(tick,5000);
-    radios.forEach(function(r,i){
-      r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); });
-    });
+    radios.forEach(function(r,i){ r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); }); });
   })();
 
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
   function renderCart(tableId){
-    var el=document.getElementById(tableId);
-    var cart=readCart();
-    if(!el) return;
-    if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; return; }
-    var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
+    var el=document.getElementById(tableId); var cart=readCart(); if(!el) return;
+    if(!cart.length){ el.innerHTML='<div>${cookies().get("lang")?.value==="en"?"Cart is empty":"购物车为空"}</div>'; return; }
+    var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">${cookies().get("lang")?.value==="en"?"Item":"商品"}</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">${cookies().get("lang")?.value==="en"?"Qty":"数量"}</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">${cookies().get("lang")?.value==="en"?"Price":"价格"}</th></tr></thead><tbody>';
     cart.forEach(function(it){
       html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
     });
-    html+='</tbody></table>';
-    el.innerHTML=html;
+    html+='</tbody></table>'; el.innerHTML=html;
   }
   function addCurrentToCart(){
     var cart=readCart();
@@ -428,34 +405,34 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
   var mask=document.getElementById('modal-mask');
   var modal=document.getElementById('checkout-modal');
-  function openModal(){ addCurrentToCart(); renderCart('cart-items'); if(mask) mask.style.display='block'; if(modal) modal.style.display='block'; }
+  function openModal(){ addCurrentToCart(); renderCart('cart-items'); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
-
   function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
 
-  // 统一事件委托：按钮稳定可点
+  // —— 直接绑定（按钮自己）——
+  var addBtn=document.getElementById('add-cart');
+  if(addBtn){ addBtn.addEventListener('click', function(){ addCurrentToCart(); var txt=addBtn.innerText; addBtn.innerText=addBtn.getAttribute('data-added')||'已加入'; setTimeout(function(){ addBtn.innerText=txt; },1200); }); }
+  var checkoutBtn=document.getElementById('go-checkout');
+  if(checkoutBtn){ checkoutBtn.addEventListener('click', function(){ openModal(); }); }
+
+  // —— 委托兜底（文本节点/图标等点击也生效）——
   document.addEventListener('click', function(ev){
     var t = ev.target;
-
-    if (closestSel(t, '#add-cart')) {
-      addCurrentToCart();
-      var btn=closestSel(t, '#add-cart');
-      if(btn){ var txt=btn.innerText; btn.innerText=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh").added)}; setTimeout(function(){ btn.innerText=txt; }, 1200); }
+    if (t && (t.id==='add-cart' || (t.closest && t.closest('#add-cart')))) {
+      if(addBtn) addBtn.click();
       return;
     }
-
-    if (closestSel(t, '#go-checkout')) { openModal(); return; }
-
-    if (closestSel(t, '#o-cancel') || (mask && t===mask)) { closeModal(); return; }
-
-    if (closestSel(t, '#o-submit')) {
+    if (t && (t.id==='go-checkout' || (t.closest && t.closest('#go-checkout')))) {
+      if(checkoutBtn) checkoutBtn.click();
+      return;
+    }
+    if (t && (t.id==='o-cancel' || (t===mask))) { closeModal(); return; }
+    if (t && (t.id==='o-submit' || (t.closest && t.closest('#o-submit')))) {
       var order={
         items: readCart(),
-        contact: {
-          name: gv('o-name'), phone: gv('o-phone'), email: gv('o-email'),
+        contact: { name: gv('o-name'), phone: gv('o-phone'), email: gv('o-email'),
           company: gv('o-company'), country: gv('o-country'),
-          address: gv('o-address'), mode: gv('o-mode')||'B2C', notes: gv('o-notes')
-        },
+          address: gv('o-address'), mode: gv('o-mode')||'B2C', notes: gv('o-notes') },
         createdAt: new Date().toISOString()
       };
       try{
@@ -471,20 +448,6 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         }}
       />
     </>
-  );
-}
-
-// —— 顶部语言条（仅在本文件内定义，无需新增文件） ——
-function LangBar({ lang }: { lang: "zh" | "en" }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, fontSize: 13 }}>
-      <button id="lang-zh" disabled={lang === "zh"} style={{ opacity: lang === "zh" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>
-        中文
-      </button>
-      <button id="lang-en" disabled={lang === "en"} style={{ opacity: lang === "en" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>
-        EN
-      </button>
-    </div>
   );
 }
 
