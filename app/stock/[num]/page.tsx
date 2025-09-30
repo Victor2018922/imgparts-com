@@ -1,7 +1,9 @@
 // 详情页：秒开；两栏布局 + 缩略图轮播（5s自动）+ 预加载
-// 修复：事件委托（纯JS，无TS语法）确保“加入购物车/去结算”每次点击都有效
-// 命名：将“标准术语”改为“配件名称”（中/英）+ 显示 Summary/Description（若API提供）
+// 修复：点击无反应——改为健壮的事件委托（支持从文本节点点击）；“加入购物车/去结算”稳定可点
+// 文案：将“标准术语”改为“配件名称”；支持全站中/英切换（顶部语言条 + cookie 持久化）
+// 结算：内置弹窗（B2B/B2C），localStorage 闭环
 import Link from "next/link";
+import { cookies } from "next/headers";
 
 type Item = {
   num?: string;
@@ -17,7 +19,6 @@ type Item = {
   pics?: string[];
   gallery?: string[];
   imageUrls?: string[];
-  // 可能的标准术语/描述键（接口若有则显示）
   productCn?: string; productEn?: string;
   productNameCn?: string; productNameEn?: string;
   partNameCn?: string; partNameEn?: string;
@@ -30,6 +31,70 @@ const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
 
 export async function generateMetadata({ params }: { params: { num: string } }) {
   return { title: `Item ${params.num}` };
+}
+
+function tFactory(lang: "zh" | "en") {
+  return lang === "en"
+    ? {
+        stockPreview: "Stock Preview",
+        backToList: "Back to list",
+        partName: "Part Name",
+        summary: "Summary",
+        description: "Description",
+        brand: "Brand",
+        product: "Product",
+        oe: "OE",
+        price: "Price",
+        stock: "Stock",
+        addToCart: "Add to Cart",
+        checkout: "Proceed to Checkout",
+        submitOrder: "Submit Order",
+        cancel: "Cancel",
+        contactName: "Name",
+        phone: "Phone",
+        email: "Email",
+        company: "Company (optional)",
+        country: "Country",
+        address: "Address",
+        mode: "Mode",
+        note: "Notes",
+        b2c: "B2C",
+        b2b: "B2B",
+        submittedTip: "Submitted (Demo): saved to local orders",
+        added: "Added",
+        langZh: "中文",
+        langEn: "EN",
+      }
+    : {
+        stockPreview: "库存预览",
+        backToList: "返回列表",
+        partName: "配件名称",
+        summary: "Summary",
+        description: "Description",
+        brand: "品牌",
+        product: "品名",
+        oe: "OE",
+        price: "价格",
+        stock: "库存",
+        addToCart: "加入购物车",
+        checkout: "去结算",
+        submitOrder: "提交订单",
+        cancel: "取消",
+        contactName: "姓名 / Name",
+        phone: "电话 / Phone",
+        email: "邮箱 / Email",
+        company: "公司（可选）",
+        country: "国家 / Country",
+        address: "地址 / Address",
+        mode: "交易模式",
+        note: "备注 / Notes",
+        b2c: "B2C",
+        b2b: "B2B",
+        submittedTip: "提交成功（演示）：已保存到本地订单列表",
+        added: "已加入",
+        langZh: "中文",
+        langEn: "EN",
+      };
 }
 
 function toInt(v: unknown, def: number) {
@@ -80,16 +145,12 @@ function getStdNames(it: Item) {
   let en = candidatesEn.find((x) => String(x).trim().length > 0) || "";
   if (!cn) {
     for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) {
-        cn = v; break;
-      }
+      if (typeof v === "string" && v && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { cn = v; break; }
     }
   }
   if (!en) {
     for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) {
-        en = v; break;
-      }
+      if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { en = v; break; }
     }
   }
   const summary = it.summary || "";
@@ -127,13 +188,16 @@ export default async function Page({
   const size = toInt((searchParams?.s as string) ?? "20", 20);
 
   const item = await fetchItemNear(num, p, size);
+  const langCookie = cookies().get("lang")?.value === "en" ? "en" : "zh";
+  const tr = tFactory(langCookie);
 
   if (!item) {
     return (
       <div style={{ padding: 32 }}>
+        <LangBar lang={langCookie} />
         <h1 style={{ fontSize: 20, fontWeight: 600 }}>未找到商品：{num}</h1>
         <Link href={`/stock?p=${p}`} prefetch style={{ display: "inline-block", marginTop: 16, padding: "8px 16px", background: "#111827", color: "#fff", borderRadius: 8, textDecoration: "none" }}>
-          返回列表
+          {tr.backToList}
         </Link>
       </div>
     );
@@ -177,6 +241,9 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
   return (
     <>
+      {/* 顶部语言切换条（全站中英切换） */}
+      <LangBar lang={langCookie} />
+
       {/* 预取返回列表 + 预加载首图 */}
       <link rel="prefetch" href={backHref} />
       {images.slice(0, preloadCount).map((src, i) => (
@@ -210,17 +277,16 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
 
-          {/* 配件名称（若接口提供） */}
           {(stdCn || stdEn) && (
             <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.5 }}>
-              {stdCn && <div><strong>配件名称：</strong>{stdCn}</div>}
+              {stdCn && <div><strong>{tr.partName}：</strong>{stdCn}</div>}
               {stdEn && <div><strong>Part Name:</strong> {stdEn}</div>}
             </div>
           )}
           {(summary || description) && (
             <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>
-              {summary && <div><strong>Summary：</strong>{summary}</div>}
-              {description && <div><strong>Description：</strong>{description}</div>}
+              {summary && <div><strong>{tr.summary}：</strong>{summary}</div>}
+              {description && <div><strong>{tr.description}：</strong>{description}</div>}
             </div>
           )}
 
@@ -233,25 +299,25 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
               fontSize: 14,
             }}
           >
-            {item.brand && (<div><dt style={{ color: "#6b7280" }}>品牌</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
-            {item.product && (<div><dt style={{ color: "#6b7280" }}>品名</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
-            {item.oe && (<div><dt style={{ color: "#6b7280" }}>OE</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
-            {typeof item.price !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>价格</dt><dd style={{ fontWeight: 600 }}>{String(item.price)}</dd></div>)}
-            {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>库存</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
+            {item.brand && (<div><dt style={{ color: "#6b7280" }}>{tr.brand}</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
+            {item.product && (<div><dt style={{ color: "#6b7280" }}>{tr.product}</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
+            {item.oe && (<div><dt style={{ color: "#6b7280" }}>{tr.oe}</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
+            {typeof item.price !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tr.price}</dt><dd style={{ fontWeight: 600 }}>{String(item.price)}</dd></div>)}
+            {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tr.stock}</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
           </dl>
 
           <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <button id="add-cart"
               style={{ padding: "8px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
-              加入购物车
+              {tr.addToCart}
             </button>
             <button id="go-checkout"
               style={{ padding: "8px 16px", borderRadius: 8, background: "#10b981", color: "#fff", border: "none", cursor: "pointer" }}>
-              去结算
+              {tr.checkout}
             </button>
             <Link href={backHref} prefetch
               style={{ padding: "8px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none", textAlign: "center" }}>
-              返回列表
+              {tr.backToList}
             </Link>
           </div>
         </div>
@@ -260,51 +326,67 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
       {/* 结算弹窗（不新建页面） */}
       <div id="modal-mask" className="modal-mask"></div>
       <div id="checkout-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
-        <header id="checkout-title">提交订单</header>
+        <header id="checkout-title">{tr.submitOrder}</header>
         <div className="body">
           <div id="cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
           <div className="row">
-            <div><label>姓名 / Name</label><input id="o-name" placeholder="联系人" /></div>
-            <div><label>电话 / Phone</label><input id="o-phone" placeholder="+86..." /></div>
+            <div><label>{tr.contactName}</label><input id="o-name" placeholder="" /></div>
+            <div><label>{tr.phone}</label><input id="o-phone" placeholder="" /></div>
           </div>
           <div className="row">
-            <div><label>邮箱 / Email</label><input id="o-email" placeholder="you@example.com" /></div>
-            <div><label>公司（可选）</label><input id="o-company" placeholder="Company" /></div>
+            <div><label>{tr.email}</label><input id="o-email" placeholder="" /></div>
+            <div><label>{tr.company}</label><input id="o-company" placeholder="" /></div>
           </div>
           <div className="row">
-            <div><label>国家 / Country</label><input id="o-country" placeholder="China / ..." /></div>
-            <div><label>交易模式</label>
+            <div><label>{tr.country}</label><input id="o-country" placeholder="" /></div>
+            <div><label>{tr.mode}</label>
               <select id="o-mode">
-                <option value="B2C">B2C</option>
-                <option value="B2B">B2B</option>
+                <option value="B2C">{tr.b2c}</option>
+                <option value="B2B">{tr.b2b}</option>
               </select>
             </div>
           </div>
-          <div><label>地址 / Address</label><input id="o-address" placeholder="详细地址" /></div>
-          <div><label>备注 / Notes</label><textarea id="o-notes" placeholder="补充信息..." rows={3}></textarea></div>
+          <div><label>{tr.address}</label><input id="o-address" placeholder="" /></div>
+          <div><label>{tr.note}</label><textarea id="o-notes" placeholder="" rows={3}></textarea></div>
           <div id="o-tip" style={{ fontSize: 12, color: "#059669" }}></div>
         </div>
         <footer>
-          <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>取消</button>
-          <button id="o-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>提交订单</button>
+          <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
+          <button id="o-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tr.submitOrder}</button>
         </footer>
       </div>
 
       <style dangerouslySetInnerHTML={{ __html: css }} />
 
-      {/* 统一事件委托脚本（纯JS，无TS语法） */}
+      {/* 统一事件脚本（纯JS，无TS语法） */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
-  // closest poly
-  function closest(el, sel){
-    while(el && el.nodeType===1){
+  // 兼容文本节点点击的 closest
+  function closestSel(node, sel){
+    var el = node && node.nodeType===1 ? node : (node && node.parentElement);
+    while(el){
       if (el.matches && el.matches(sel)) return el;
       el = el.parentElement;
     }
     return null;
   }
+
+  // 顶部语言切换（cookie 持久化，全站生效）
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if (closestSel(t, '#lang-zh')) {
+      document.cookie = 'lang=zh; path=/; max-age=' + (3600*24*365);
+      location.reload();
+      return;
+    }
+    if (closestSel(t, '#lang-en')) {
+      document.cookie = 'lang=en; path=/; max-age=' + (3600*24*365);
+      location.reload();
+      return;
+    }
+  });
 
   // 轮播：5s 自动
   (function(){
@@ -328,7 +410,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     if(!cart.length){ el.innerHTML='<div>购物车为空</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">价格</th></tr></thead><tbody>';
     cart.forEach(function(it){
-      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
+      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
     });
@@ -349,24 +431,24 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
   function openModal(){ addCurrentToCart(); renderCart('cart-items'); if(mask) mask.style.display='block'; if(modal) modal.style.display='block'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
 
-  function gv(id){
-    var el=document.getElementById(id);
-    if(!el) return '';
-    return (typeof el.value!=='undefined') ? el.value : '';
-  }
+  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
 
-  // —— 统一委托：保证多次点击有反应 ——
+  // 统一事件委托：按钮稳定可点
   document.addEventListener('click', function(ev){
     var t = ev.target;
-    if (closest(t, '#add-cart')) {
+
+    if (closestSel(t, '#add-cart')) {
       addCurrentToCart();
-      var btn=closest(t, '#add-cart');
-      if(btn){ var txt=btn.innerText; btn.innerText='已加入'; setTimeout(function(){ btn.innerText=txt; }, 1200); }
+      var btn=closestSel(t, '#add-cart');
+      if(btn){ var txt=btn.innerText; btn.innerText=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh").added)}; setTimeout(function(){ btn.innerText=txt; }, 1200); }
       return;
     }
-    if (closest(t, '#go-checkout')) { openModal(); return; }
-    if (closest(t, '#o-cancel') || (mask && t===mask)) { closeModal(); return; }
-    if (closest(t, '#o-submit')) {
+
+    if (closestSel(t, '#go-checkout')) { openModal(); return; }
+
+    if (closestSel(t, '#o-cancel') || (mask && t===mask)) { closeModal(); return; }
+
+    if (closestSel(t, '#o-submit')) {
       var order={
         items: readCart(),
         contact: {
@@ -380,7 +462,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('o-tip'); if(tip) tip.textContent='提交成功（演示）：已保存到本地订单列表';
+        var tip=document.getElementById('o-tip'); if(tip) tip.textContent=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh").submittedTip)};
       }catch(e){}
       return;
     }
@@ -391,3 +473,18 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     </>
   );
 }
+
+// —— 顶部语言条（仅在本文件内定义，无需新增文件） ——
+function LangBar({ lang }: { lang: "zh" | "en" }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, fontSize: 13 }}>
+      <button id="lang-zh" disabled={lang === "zh"} style={{ opacity: lang === "zh" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>
+        中文
+      </button>
+      <button id="lang-en" disabled={lang === "en"} style={{ opacity: lang === "en" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>
+        EN
+      </button>
+    </div>
+  );
+}
+
