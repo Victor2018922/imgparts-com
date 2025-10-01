@@ -586,7 +586,8 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
           else cart[i].qty = (cart[i].qty||1) + r.qty;
         });
         writeCart(cart); alert('${tr.uploadOk}'); updateTotal();
-      }catch(e){} }; fr.readAsText(f, 'utf-8'); (t as any).value='';
+      }catch(e){} }; fr.readAsText(f, 'utf-8');
+      if (t && typeof (t as any).value !== 'undefined') { (t as any).value = ''; } // 纯 JS 重置文件控件
     }
   });
 

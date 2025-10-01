@@ -474,7 +474,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     html+='</tbody></table>'; el.innerHTML=html;
   }
 
-  // 顶栏：下载模板 / 上传（需注册）
+  // 顶栏：下载/上传/注册
   function isLogin(){ try{ return !!localStorage.getItem('user'); }catch(e){ return false; } }
   function openReg(){ document.getElementById('reg-mask').style.display='block'; document.getElementById('reg-modal').style.display='flex'; }
   function closeReg(){ document.getElementById('reg-mask').style.display='none'; document.getElementById('reg-modal').style.display='none'; }
@@ -559,15 +559,15 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         });
         writeCart(cart); alert('${tr.uploadOk}');
       }catch(e){} }; fr.readAsText(f, 'utf-8');
-      (t as any).value='';
+      if (t && typeof (t as any).value === 'string') { /* TS placeholder, ignored at runtime */ }
+      if (t && typeof (t as HTMLInputElement).value !== 'undefined') { (t as HTMLInputElement).value = ''; }
+      // 纯 JS 重置：
+      if (t && typeof (t as any).value !== 'undefined') { (t as any).value = ''; }
     }
   });
 
   // 打开页面时同步星号
   syncCompanyStar();
-
-  // 详情“加入购物车/去结算”按钮已在上方 click 委托内处理
-  // 预加载首图合计
   updateTotal();
 })();`,
         }}
