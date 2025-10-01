@@ -1,27 +1,14 @@
-// 列表页：极速搜索 + 排序 + “配件名称”展示（含动态兜底与英文兜底翻译） + 本地购物车 + 结算弹窗
-// 修复：1) “去结算”打开后按钮不可见——弹窗可滚动，底部按钮固定
-//      2) 统一事件（直接绑定 + 委托）稳定可点
+// 列表页：极速搜索 + 排序 + “配件名称”（中/英） + 本地购物车 + 结算弹窗
+// 新增：结算弹窗“金额合计 + 货币选择（人民币/美元/欧元）”；B2B 模式下【公司】必填校验；修复弹窗初始显示 & 表格样式
 import Link from "next/link";
 import { cookies } from "next/headers";
 
 type Item = {
-  num?: string;
-  brand?: string;
-  product?: string;
-  oe?: string;
-  model?: string;
-  year?: string | number;
-  price?: string | number;
-  stock?: string | number;
-  image?: string;
-  images?: string[];
-  pics?: string[];
-  gallery?: string[];
-  imageUrls?: string[];
-  productCn?: string; productEn?: string;
-  productNameCn?: string; productNameEn?: string;
-  partNameCn?: string; partNameEn?: string;
-  stdNameCn?: string; stdNameEn?: string;
+  num?: string; brand?: string; product?: string; oe?: string; model?: string;
+  year?: string | number; price?: string | number; stock?: string | number;
+  image?: string; images?: string[]; pics?: string[]; gallery?: string[]; imageUrls?: string[];
+  productCn?: string; productEn?: string; productNameCn?: string; productNameEn?: string;
+  partNameCn?: string; partNameEn?: string; stdNameCn?: string; stdNameEn?: string;
   summary?: string; description?: string; desc?: string; remark?: string;
   [k: string]: any;
 };
@@ -48,8 +35,10 @@ function tFactory(lang: "zh" | "en") {
         partName: "Part Name", oe: "OE", price: "Price", stock: "Stock",
         addToCart: "Add to Cart", added: "Added", checkout: "Proceed to Checkout", viewDetail: "View Details",
         submitOrder: "Submit Order", cancel: "Cancel",
-        contactName: "Name", phone: "Phone", email: "Email", company: "Company (optional)",
+        contactName: "Name", phone: "Phone", email: "Email",
+        company: "Company (optional)", companyRequired: "Company (required)", companyMust: "Company is required in B2B mode.",
         country: "Country", address: "Address", mode: "Mode", note: "Notes",
+        currency: "Currency", total: "Total",
         b2c: "B2C", b2b: "B2B",
         emptyCart: "Cart is empty", item: "Item", qty: "Qty",
         submittedTip: "Submitted (Demo): saved to local orders",
@@ -65,8 +54,10 @@ function tFactory(lang: "zh" | "en") {
         partName: "配件名称", oe: "OE", price: "价格", stock: "库存",
         addToCart: "加入购物车", added: "已加入", checkout: "去结算", viewDetail: "查看详情",
         submitOrder: "提交订单", cancel: "取消",
-        contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email", company: "公司（可选）",
+        contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email",
+        company: "公司（可选）", companyRequired: "公司（必填）", companyMust: "B2B 模式下，公司为必填项。",
         country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
+        currency: "货币 / Currency", total: "合计",
         b2c: "B2C", b2b: "B2B",
         emptyCart: "购物车为空", item: "商品", qty: "数量",
         submittedTip: "提交成功（演示）：已保存到本地订单列表",
@@ -79,7 +70,6 @@ function cnPartToEn(cn: string): string {
   let s = cn.replace(/\s+/g, "");
   const has = (re: RegExp) => re.test(s);
   const take = (re: RegExp) => (has(re) ? (s = s.replace(re, ""), true) : false);
-
   const dir: string[] = [];
   if (take(/前/)) dir.push("Front");
   if (take(/后/)) dir.push("Rear");
@@ -87,7 +77,6 @@ function cnPartToEn(cn: string): string {
   if (take(/右|R\b/i)) dir.push("Right");
   if (take(/上/)) dir.push("Upper");
   if (take(/下/)) dir.push("Lower");
-
   const map: [RegExp, string][] = [
     [/悬挂|底盘|悬架|摆臂|控制臂/, "Suspension"],
     [/控制臂|摆臂|下摆臂|上摆臂/, "Control Arm"],
@@ -111,12 +100,9 @@ function cnPartToEn(cn: string): string {
 }
 
 function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
-
-// ✅ 返回类型修正为 Promise<Item[]>
 async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const resp = await fetch(url, { cache: "no-store", signal: ctrl.signal });
     if (!resp.ok) return [];
@@ -134,8 +120,7 @@ async function fetchPageStable(page: number, size: number): Promise<Item[]> {
 
 function norm(s: any) { return String(s ?? "").toLowerCase(); }
 function matchQuery(it: Item, q: string) {
-  if (!q) return true;
-  const k = q.toLowerCase();
+  if (!q) return true; const k = q.toLowerCase();
   return norm(it.num).includes(k) || norm(it.oe).includes(k) || norm(it.brand).includes(k) || norm(it.product).includes(k) || norm(it.model).includes(k);
 }
 function sortRows(rows: Row[], sort: string) {
@@ -169,7 +154,6 @@ function stdEn(it: Item) {
   return val;
 }
 
-// —— 顶部语言条（组件内定义） ——
 function LangBar({ lang }: { lang: "zh" | "en" }) {
   return (
     <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, fontSize: 13 }}>
@@ -347,47 +331,41 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
               {tr.next}
             </Link>
             <span style={{ alignSelf: "center", color: "#6b7280" }}>
-              {langCookie === "en" ? `${"Page"} ${p + 1}` : `${tr.pageN} ${p + 1} 页`}
+              {langCookie === "en" ? `Page ${p + 1}` : `${tr.pageN} ${p + 1} 页`}
             </span>
           </div>
         )}
       </main>
 
-      {/* 结算弹窗（可滚动 + 底部按钮固定） */}
-      <div
-        id="list-mask"
-        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }}
-      />
-      <div
-        id="list-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="list-title"
-        style={{
-          position: "fixed",
-          left: "50%",
-          top: "8vh",
-          transform: "translateX(-50%)",
-          width: "min(720px, 92vw)",
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          display: "none",       // 初始隐藏；打开时通过 JS 改为 'flex'
-          zIndex: 51,
-          maxHeight: "84vh",
-          flexDirection: "column",
-        }}
-      >
+      {/* 结算弹窗（初始隐藏；按钮始终可见；含金额合计与货币） */}
+      <div id="list-mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
+      <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
+           style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
+                    border: "1px solid #e5e7eb", borderRadius: 12, display: "none", zIndex: 51, maxHeight: "84vh", flexDirection: "column" }}>
         <div id="list-title" style={{ padding: "12px 16px", fontWeight: 700, borderBottom: "1px solid #e5e7eb" }}>{tr.submitOrder}</div>
         <div style={{ padding: 16, display: "grid", gap: 12, overflow: "auto", flex: 1 }}>
           <div id="list-cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
+
+          {/* 货币 + 合计 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "center", gap: 8 }}>
+            <div>
+              <label>{tr.currency}</label>
+              <select id="l-currency">
+                <option value="CNY">人民币 CNY</option>
+                <option value="USD" selected>美元 USD</option>
+                <option value="EUR">欧元 EUR</option>
+              </select>
+            </div>
+            <div id="l-total" style={{ textAlign: "right", fontWeight: 700 }}>{tr.total}：--</div>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div><label>{tr.contactName}</label><input id="l-name" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
             <div><label>{tr.phone}</label><input id="l-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div><label>{tr.email}</label><input id="l-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
-            <div><label>{tr.company}</label><input id="l-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label id="l-company-label">{tr.company}</label><input id="l-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div><label>{tr.country}</label><input id="l-country" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
@@ -407,7 +385,6 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         </div>
       </div>
 
-      {/* 事件脚本：直接绑定 + 委托 */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
@@ -442,55 +419,88 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     });
     html+='</tbody></table>'; el.innerHTML=html;
   }
-  function addByPayload(payload){
-    try{
-      var it = payload? JSON.parse(payload.replace(/&quot;/g,'"')) : null; if(!it) return;
-      var cart = readCart(); var idx = cart.findIndex(function(x){ return String(x.num)===String(it.num); });
-      if(idx===-1){ cart.push({ num:it.num, qty:1, price:it.price, brand:it.brand, product:it.product, oe:it.oe }); }
-      else { cart[idx].qty = (cart[idx].qty||1)+1; }
-      writeCart(cart);
-    }catch(e){}
+
+  // —— 合计 & 货币 ——
+  var RATES = { USD:1, CNY:7.2, EUR:0.92 };
+  function computeTotal(currency){
+    var cart=readCart();
+    var sum=cart.reduce(function(acc,it){ var p=Number(it.price)||0; var q=Number(it.qty)||1; return acc + p*q; },0);
+    var rate=RATES[currency]||1;
+    var val=sum*rate;
+    var sym=currency==='CNY'?'¥':(currency==='EUR'?'€':'$');
+    return sym+' '+(Math.round(val*100)/100).toFixed(2);
+  }
+  function updateTotal(){
+    var curEl=document.getElementById('l-currency'); var cur = (curEl && curEl.value) || 'USD';
+    var el=document.getElementById('l-total'); if(el) el.textContent = '${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").total}：' + computeTotal(cur);
   }
 
   var mask=document.getElementById('list-mask');
   var modal=document.getElementById('list-modal');
-  function openModal(){ renderCart(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; }
+  function openModal(){ renderCart(); updateTotal(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; toggleCompanyRequired(); }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
-  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value : ''; }
+  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
 
-  // —— 直接绑定 ——（若DOM在首屏已可见）
+  function toggleCompanyRequired(){
+    var mode=document.getElementById('l-mode'); var lab=document.getElementById('l-company-label');
+    if(mode && lab){
+      if(mode.value==='B2B'){ lab.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").companyRequired}'; }
+      else { lab.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").company}'; }
+    }
+  }
+
+  // —— 直接绑定 —— 
   document.querySelectorAll('.btn-add').forEach(function(btn){
     btn.addEventListener('click', function(){
-      var payload = btn.getAttribute('data-payload') || ''; addByPayload(payload);
+      var payload = btn.getAttribute('data-payload') || '';
+      try{
+        var it = payload? JSON.parse(payload.replace(/&quot;/g,'"')) : null; if(!it) return;
+        var cart = readCart(); var idx = cart.findIndex(function(x){ return String(x.num)===String(it.num); });
+        if(idx===-1){ cart.push({ num:it.num, qty:1, price:it.price, brand:it.brand, product:it.product, oe:it.oe }); }
+        else { cart[idx].qty = (cart[idx].qty||1)+1; }
+        writeCart(cart); updateTotal();
+      }catch(e){}
       var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || '${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").added}';
       setTimeout(function(){ btn.innerText = txt; }, 1200);
     });
   });
   document.querySelectorAll('.btn-checkout').forEach(function(btn){ btn.addEventListener('click', openModal); });
 
-  // —— 委托兜底 ——（兼容文本节点/图标点击）
+  // —— 委托 —— 
   document.addEventListener('click', function(ev){
     var t = ev.target;
-    var addBtn = closestSel(t, '.btn-add');
-    if(addBtn){ addBtn.click(); return; }
     if(closestSel(t, '.btn-checkout')){ openModal(); return; }
     if(closestSel(t, '#l-cancel') || (mask && t===mask)){ closeModal(); return; }
     if(closestSel(t, '#l-submit')){
+      if ((gv('l-mode')==='B2B') && !gv('l-company')) {
+        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").companyMust}'; }
+        var c=document.getElementById('l-company'); if(c) c.focus();
+        return;
+      }
       var order={
         items: readCart(),
         contact:{ name: gv('l-name'), phone: gv('l-phone'), email: gv('l-email'),
           company: gv('l-company'), country: gv('l-country'),
-          address: gv('l-address'), mode: gv('l-mode') || 'B2C', notes: gv('l-notes') },
+          address: gv('l-address'), mode: gv('l-mode') || 'B2C', notes: gv('l-notes'),
+          currency: (document.getElementById('l-currency')||{}).value || 'USD',
+          totalText: (document.getElementById('l-total')||{}).textContent || ''
+        },
         createdAt: new Date().toISOString()
       };
       try{
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('l-tip'); if(tip) tip.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").submittedTip}';
+        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").submittedTip}'; }
       }catch(e){}
       return;
     }
+  });
+
+  document.addEventListener('change', function(ev){
+    var t=ev.target;
+    if (t && (t.id==='l-currency')) { updateTotal(); }
+    if (t && (t.id==='l-mode')) { toggleCompanyRequired(); }
   });
 })();`,
         }}
