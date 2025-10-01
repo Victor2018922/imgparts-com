@@ -1,5 +1,5 @@
 // 列表页：极速搜索 + 排序 + “配件名称”（中/英） + 本地购物车 + 结算弹窗
-// 新增：结算弹窗“金额合计 + 货币选择（人民币/美元/欧元）”；B2B 模式下【公司】必填校验；修复弹窗初始显示 & 表格样式
+// 更新：提交订单表单“所有字段必填”（含邮箱/电话格式校验），错误高亮与提示；货币+合计保持
 import Link from "next/link";
 import { cookies } from "next/headers";
 
@@ -36,12 +36,14 @@ function tFactory(lang: "zh" | "en") {
         addToCart: "Add to Cart", added: "Added", checkout: "Proceed to Checkout", viewDetail: "View Details",
         submitOrder: "Submit Order", cancel: "Cancel",
         contactName: "Name", phone: "Phone", email: "Email",
-        company: "Company (optional)", companyRequired: "Company (required)", companyMust: "Company is required in B2B mode.",
-        country: "Country", address: "Address", mode: "Mode", note: "Notes",
+        company: "Company", country: "Country", address: "Address", mode: "Mode", note: "Notes",
         currency: "Currency", total: "Total",
         b2c: "B2C", b2b: "B2B",
         emptyCart: "Cart is empty", item: "Item", qty: "Qty",
         submittedTip: "Submitted (Demo): saved to local orders",
+        requiredAll: "Please complete all required fields.",
+        invalidEmail: "Invalid email format.",
+        invalidPhone: "Invalid phone number.",
       }
     : {
         stockPreview: "库存预览",
@@ -55,16 +57,18 @@ function tFactory(lang: "zh" | "en") {
         addToCart: "加入购物车", added: "已加入", checkout: "去结算", viewDetail: "查看详情",
         submitOrder: "提交订单", cancel: "取消",
         contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email",
-        company: "公司（可选）", companyRequired: "公司（必填）", companyMust: "B2B 模式下，公司为必填项。",
-        country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
+        company: "公司", country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
         currency: "货币 / Currency", total: "合计",
         b2c: "B2C", b2b: "B2B",
         emptyCart: "购物车为空", item: "商品", qty: "数量",
         submittedTip: "提交成功（演示）：已保存到本地订单列表",
+        requiredAll: "请完整填写所有必填字段。",
+        invalidEmail: "邮箱格式不正确。",
+        invalidPhone: "电话格式不正确。",
       };
 }
 
-// —— 中文配件名到英文翻译兜底（与详情一致） ——
+// —— 中文配件名到英文（兜底，与详情一致） ——
 function cnPartToEn(cn: string): string {
   if (!cn) return "";
   let s = cn.replace(/\s+/g, "");
@@ -154,6 +158,7 @@ function stdEn(it: Item) {
   return val;
 }
 
+// 顶部语言条
 function LangBar({ lang }: { lang: "zh" | "en" }) {
   return (
     <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, fontSize: 13 }}>
@@ -249,7 +254,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
               {tr.next}
             </Link>
             <span style={{ color: "#6b7280" }}>
-              {langCookie === "en" ? `${tr.pageN} ${p + 1}` : `${tr.pageN} ${p + 1} 页`}
+              {langCookie === "en" ? `Page ${p + 1}` : `${tr.pageN} ${p + 1} 页`}
             </span>
           </div>
         )}
@@ -337,7 +342,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         )}
       </main>
 
-      {/* 结算弹窗（初始隐藏；按钮始终可见；含金额合计与货币） */}
+      {/* 结算弹窗（所有字段必填） */}
       <div id="list-mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
       <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
            style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
@@ -349,10 +354,10 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
           {/* 货币 + 合计 */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "center", gap: 8 }}>
             <div>
-              <label>{tr.currency}</label>
+              <label>{tr.currency} <span style={{color:"#dc2626"}}>*</span></label>
               <select id="l-currency">
                 <option value="CNY">人民币 CNY</option>
-                <option value="USD" selected>美元 USD</option>
+                <option value="USD" defaultValue="selected">美元 USD</option>
                 <option value="EUR">欧元 EUR</option>
               </select>
             </div>
@@ -360,24 +365,24 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div><label>{tr.contactName}</label><input id="l-name" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
-            <div><label>{tr.phone}</label><input id="l-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>{tr.contactName} <span style={{color:"#dc2626"}}>*</span></label><input id="l-name" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="l-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div><label>{tr.email}</label><input id="l-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
-            <div><label id="l-company-label">{tr.company}</label><input id="l-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="l-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>{tr.company} <span style={{color:"#dc2626"}}>*</span></label><input id="l-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div><label>{tr.country}</label><input id="l-country" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
-            <div><label>{tr.mode}</label>
+            <div><label>{tr.country} <span style={{color:"#dc2626"}}>*</span></label><input id="l-country" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>{tr.mode} <span style={{color:"#dc2626"}}>*</span></label>
               <select id="l-mode" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
                 <option value="B2C">{tr.b2c}</option><option value="B2B">{tr.b2b}</option>
               </select>
             </div>
           </div>
-          <div><label>{tr.address}</label><input id="l-address" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
-          <div><label>{tr.note}</label><textarea id="l-notes" rows={3} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
-          <div id="l-tip" style={{ fontSize: 12, color: "#059669" }}></div>
+          <div><label>{tr.address} <span style={{color:"#dc2626"}}>*</span></label><input id="l-address" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+          <div><label>{tr.note} <span style={{color:"#dc2626"}}>*</span></label><textarea id="l-notes" rows={3} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+          <div id="l-tip" style={{ fontSize: 12 }}></div>
         </div>
         <div style={{ padding: "12px 16px", borderTop: "1px solid #e5e7eb", display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" }}>
           <button id="l-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
@@ -389,6 +394,8 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
+  var TR = ${JSON.stringify(tr)};
+
   function closestSel(node, sel){
     var el = node && node.nodeType===1 ? node : (node && node.parentElement);
     while(el){ if (el.matches && el.matches(sel)) return el; el = el.parentElement; }
@@ -407,11 +414,10 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   function renderCart(){
     var el=document.getElementById('list-cart-items'); if(!el) return;
     var cart=readCart(); if(!cart.length){ el.innerHTML='<div>${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").emptyCart}</div>'; return; }
-    var tr=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh"))};
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+tr.item+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.qty+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+tr.price+'</th></tr></thead><tbody>';
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.item+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
     cart.forEach(function(it){
       html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
@@ -432,21 +438,27 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   }
   function updateTotal(){
     var curEl=document.getElementById('l-currency'); var cur = (curEl && curEl.value) || 'USD';
-    var el=document.getElementById('l-total'); if(el) el.textContent = '${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").total}：' + computeTotal(cur);
+    var el=document.getElementById('l-total'); if(el) el.textContent = TR.total+'：' + computeTotal(cur);
   }
 
   var mask=document.getElementById('list-mask');
   var modal=document.getElementById('list-modal');
-  function openModal(){ renderCart(); updateTotal(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; toggleCompanyRequired(); }
+  function openModal(){ renderCart(); updateTotal(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
   function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
+  function markInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#dc2626'; el.focus(); } }
+  function clearInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#e5e7eb'; } }
+  function clearTip(){ var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#111827'; tip.textContent=''; } }
 
-  function toggleCompanyRequired(){
-    var mode=document.getElementById('l-mode'); var lab=document.getElementById('l-company-label');
-    if(mode && lab){
-      if(mode.value==='B2B'){ lab.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").companyRequired}'; }
-      else { lab.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").company}'; }
-    }
+  function validateAll(){
+    clearTip();
+    ['l-name','l-phone','l-email','l-company','l-country','l-address','l-notes'].forEach(clearInvalid);
+    var need=['l-name','l-phone','l-email','l-company','l-country','l-address','l-notes'];
+    for(var i=0;i<need.length;i++){ var id=need[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tr.requiredAll}'; } return false; } }
+    var email=gv('l-email'); var phone=gv('l-phone').replace(/\\D/g,'');
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('l-email'); var tip1=document.getElementById('l-tip'); if(tip1){ tip1.style.color='#dc2626'; tip1.textContent='${tr.invalidEmail}'; } return false; }
+    if(phone.length<5){ markInvalid('l-phone'); var tip2=document.getElementById('l-tip'); if(tip2){ tip2.style.color='#dc2626'; tip2.textContent='${tr.invalidPhone}'; } return false; }
+    return true;
   }
 
   // —— 直接绑定 —— 
@@ -460,7 +472,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         else { cart[idx].qty = (cart[idx].qty||1)+1; }
         writeCart(cart); updateTotal();
       }catch(e){}
-      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || '${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").added}';
+      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || '${tr.added}';
       setTimeout(function(){ btn.innerText = txt; }, 1200);
     });
   });
@@ -472,11 +484,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     if(closestSel(t, '.btn-checkout')){ openModal(); return; }
     if(closestSel(t, '#l-cancel') || (mask && t===mask)){ closeModal(); return; }
     if(closestSel(t, '#l-submit')){
-      if ((gv('l-mode')==='B2B') && !gv('l-company')) {
-        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").companyMust}'; }
-        var c=document.getElementById('l-company'); if(c) c.focus();
-        return;
-      }
+      if(!validateAll()) return;
       var order={
         items: readCart(),
         contact:{ name: gv('l-name'), phone: gv('l-phone'), email: gv('l-email'),
@@ -491,16 +499,17 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").submittedTip}'; }
+        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tr.submittedTip}'; }
       }catch(e){}
       return;
     }
   });
-
+  document.addEventListener('input', function(ev){
+    var t=ev.target && ev.target.id; if(t){ var el=document.getElementById(t); if(el){ el.style.borderColor='#e5e7eb'; } var tip=document.getElementById('l-tip'); if(tip) tip.textContent=''; }
+  });
   document.addEventListener('change', function(ev){
     var t=ev.target;
     if (t && (t.id==='l-currency')) { updateTotal(); }
-    if (t && (t.id==='l-mode')) { toggleCompanyRequired(); }
   });
 })();`,
         }}

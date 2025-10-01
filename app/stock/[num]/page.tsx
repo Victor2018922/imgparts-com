@@ -1,6 +1,5 @@
 // 详情页：两栏布局 + 缩略图轮播（5s自动）+ 预加载
-// 修复：进入详情页时“提交订单”弹窗默认打开的问题（初始 display: none）
-// 新增：结算弹窗“金额合计 + 货币选择（人民币/美元/欧元）”；B2B 模式下【公司】必填校验；中英切换（cookie 持久化）
+// 更新：提交订单表单“所有字段必填”（含邮箱/电话格式校验），错误高亮与提示；货币+合计保持
 import Link from "next/link";
 import { cookies } from "next/headers";
 
@@ -27,12 +26,15 @@ function tFactory(lang: "zh" | "en") {
         addToCart: "Add to Cart", added: "Added", checkout: "Proceed to Checkout",
         submitOrder: "Submit Order", cancel: "Cancel",
         contactName: "Name", phone: "Phone", email: "Email",
-        company: "Company (optional)", companyRequired: "Company (required)",
-        companyMust: "Company is required in B2B mode.",
+        company: "Company",                     // 必填
         country: "Country", address: "Address", mode: "Mode", note: "Notes",
         currency: "Currency", total: "Total",
         b2c: "B2C", b2b: "B2B",
         submittedTip: "Submitted (Demo): saved to local orders",
+        requiredAll: "Please complete all required fields.",
+        invalidEmail: "Invalid email format.",
+        invalidPhone: "Invalid phone number.",
+        item: "Item", qty: "Qty",
       }
     : {
         backToList: "返回列表",
@@ -43,16 +45,19 @@ function tFactory(lang: "zh" | "en") {
         addToCart: "加入购物车", added: "已加入", checkout: "去结算",
         submitOrder: "提交订单", cancel: "取消",
         contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email",
-        company: "公司（可选）", companyRequired: "公司（必填）",
-        companyMust: "B2B 模式下，公司为必填项。",
+        company: "公司",                           // 必填
         country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
         currency: "货币 / Currency", total: "合计",
         b2c: "B2C", b2b: "B2B",
         submittedTip: "提交成功（演示）：已保存到本地订单列表",
+        requiredAll: "请完整填写所有必填字段。",
+        invalidEmail: "邮箱格式不正确。",
+        invalidPhone: "电话格式不正确。",
+        item: "商品", qty: "数量",
       };
 }
 
-// —— 中文配件名到英文的规则翻译（兜底） ——
+// —— 中文配件名到英文（兜底） ——
 function cnPartToEn(cn: string): string {
   if (!cn) return "";
   let s = cn.replace(/\s+/g, "");
@@ -155,7 +160,7 @@ function buildImages(item: Item) {
   return images;
 }
 
-// —— 顶部语言条（组件内定义，不新增文件） ——
+// —— 顶部语言条 ——
 function LangBar({ lang }: { lang: "zh" | "en" }) {
   return (
     <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, fontSize: 13 }}>
@@ -213,9 +218,9 @@ export default async function Page({ params, searchParams }:{ params:{ num:strin
 .thumbs img{ width:100%; height:100%; object-fit:cover; }
 .gallery input[type="radio"]{ display:none; }
 
-/* 弹窗初始隐藏，打开后通过 JS 设为 display:flex */
+/* 弹窗 */
 .modal-mask{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; z-index:50; }
-.modal{ position:fixed; left:50%; top:8vh; transform:translateX(-50%); width:min(720px,92vw); background:#fff; border:1px solid #e5e7eb; border-radius:12px; display:none; z-index:51; max-height:84vh; flex-direction:column; }
+.modal{ position:fixed; left:50%; top:8vh; transform:translateX(-50%); width:min(720px,92vw); background:#fff; border:1px solid #e5e7eb; border-radius:12px; display:none; zIndex:51; max-height:84vh; flex-direction:column; }
 .modal header{ padding:12px 16px; font-weight:700; border-bottom:1px solid #e5e7eb; }
 .modal .body{ padding:16px; display:grid; gap:12px; overflow:auto; flex:1; }
 .modal .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
@@ -234,7 +239,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
       {images.slice(0, preloadCount).map((src, i) => (<link key={`preload-${i}`} rel="preload" as="image" href={src} />))}
 
       <div className="detail-wrap">
-        {/* 左：大图 + 缩略图（轮播） */}
+        {/* 左：大图 + 缩略图 */}
         <div className="gallery">
           {images.map((_, i) => (<input key={`r-${i}`} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />))}
           <div className="main">
@@ -304,10 +309,10 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
           {/* 货币 + 合计 */}
           <div className="row" style={{ alignItems: "center" }}>
             <div>
-              <label>{tr.currency}</label>
+              <label>{tr.currency} <span style={{color:"#dc2626"}}>*</span></label>
               <select id="o-currency">
                 <option value="CNY">人民币 CNY</option>
-                <option value="USD" selected>美元 USD</option>
+                <option value="USD" defaultValue="selected">美元 USD</option>
                 <option value="EUR">欧元 EUR</option>
               </select>
             </div>
@@ -317,22 +322,22 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
           </div>
 
           <div className="row">
-            <div><label>{tr.contactName}</label><input id="o-name" /></div>
-            <div><label>{tr.phone}</label><input id="o-phone" /></div>
+            <div><label>{tr.contactName} <span style={{color:"#dc2626"}}>*</span></label><input id="o-name" /></div>
+            <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="o-phone" /></div>
           </div>
           <div className="row">
-            <div><label>{tr.email}</label><input id="o-email" /></div>
-            <div><label id="o-company-label">{tr.company}</label><input id="o-company" /></div>
+            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="o-email" /></div>
+            <div><label>{tr.company} <span style={{color:"#dc2626"}}>*</span></label><input id="o-company" /></div>
           </div>
           <div className="row">
-            <div><label>{tr.country}</label><input id="o-country" /></div>
-            <div><label>{tr.mode}</label>
+            <div><label>{tr.country} <span style={{color:"#dc2626"}}>*</span></label><input id="o-country" /></div>
+            <div><label>{tr.mode} <span style={{color:"#dc2626"}}>*</span></label>
               <select id="o-mode"><option value="B2C">{tr.b2c}</option><option value="B2B">{tr.b2b}</option></select>
             </div>
           </div>
-          <div><label>{tr.address}</label><input id="o-address" /></div>
-          <div><label>{tr.note}</label><textarea id="o-notes" rows={3}></textarea></div>
-          <div id="o-tip" style={{ fontSize: 12, color: "#059669" }}></div>
+          <div><label>{tr.address} <span style={{color:"#dc2626"}}>*</span></label><input id="o-address" /></div>
+          <div><label>{tr.note} <span style={{color:"#dc2626"}}>*</span></label><textarea id="o-notes" rows={3}></textarea></div>
+          <div id="o-tip" style={{ fontSize: 12 }}></div>
         </div>
         <footer>
           <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
@@ -342,11 +347,13 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
       <style dangerouslySetInnerHTML={{ __html: css }} />
 
-      {/* 事件脚本（直接绑定 + 委托） */}
+      {/* 事件脚本 */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
+  var TR = ${JSON.stringify(tr)};
+
   function closestSel(node, sel){
     var el = node && node.nodeType===1 ? node : (node && node.parentElement);
     while(el){ if (el.matches && el.matches(sel)) return el; el = el.parentElement; }
@@ -372,23 +379,25 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
+
+  // 渲染购物车表
   function renderCart(tableId){
     var el=document.getElementById(tableId); var cart=readCart(); if(!el) return;
-    if(!cart.length){ el.innerHTML='<div>${cookies().get("lang")?.value==="en"?"Cart is empty":"购物车为空"}</div>'; return; }
+    if(!cart.length){ el.innerHTML='<div>'+(${JSON.stringify(langCookie==='en'?'Cart is empty':'购物车为空')})+'</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">${cookies().get("lang")?.value==="en"?"Item":"商品"}</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">${cookies().get("lang")?.value==="en"?"Qty":"数量"}</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">${cookies().get("lang")?.value==="en"?"Price":"价格"}</th></tr></thead><tbody>';
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.item+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
     cart.forEach(function(it){
-      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
-            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>'+
-            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
+      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.price||'')+'</td></tr>';
     });
     html+='</tbody></table>'; el.innerHTML=html;
   }
 
   // —— 合计 & 货币 ——
-  var RATES = { USD:1, CNY:7.2, EUR:0.92 }; // 可按需要调整
+  var RATES = { USD:1, CNY:7.2, EUR:0.92 };
   function computeTotal(currency){
     var cart=readCart();
     var sum=cart.reduce(function(acc,it){ var p=Number(it.price)||0; var q=Number(it.qty)||1; return acc + p*q; },0);
@@ -402,6 +411,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     var el=document.getElementById('o-total'); if(el) el.textContent = computeTotal(cur);
   }
 
+  // 把当前详情加入购物车（用于去结算前）
   function addCurrentToCart(){
     var cart=readCart();
     var item={ num:${JSON.stringify(item.num ?? "")}, price:${JSON.stringify(item.price ?? "")}, brand:${JSON.stringify(item.brand ?? "")}, product:${JSON.stringify(item.product ?? "")}, oe:${JSON.stringify(item.oe ?? "")} };
@@ -413,17 +423,22 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
   var mask=document.getElementById('modal-mask');
   var modal=document.getElementById('checkout-modal');
-  function openModal(){ addCurrentToCart(); renderCart('cart-items'); updateTotal(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; toggleCompanyRequired(); }
+  function openModal(){ addCurrentToCart(); renderCart('cart-items'); updateTotal(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; }
   function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
   function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
+  function markInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#dc2626'; el.focus(); } }
+  function clearInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#e5e7eb'; } }
+  function clearTip(){ var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#111827'; tip.textContent=''; } }
 
-  function toggleCompanyRequired(){
-    var mode=document.getElementById('o-mode');
-    var lab=document.getElementById('o-company-label');
-    if(mode && lab){
-      if(mode.value==='B2B'){ lab.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").companyRequired}'; }
-      else { lab.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").company}'; }
-    }
+  function validateAll(){
+    clearTip();
+    ['o-name','o-phone','o-email','o-company','o-country','o-address','o-notes'].forEach(clearInvalid);
+    var need=['o-name','o-phone','o-email','o-company','o-country','o-address','o-notes'];
+    for(var i=0;i<need.length;i++){ var id=need[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent=TR.requiredAll; } return false; } }
+    var email=gv('o-email'); var phone=gv('o-phone').replace(/\\D/g,'');
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('o-email'); var tip1=document.getElementById('o-tip'); if(tip1){ tip1.style.color='#dc2626'; tip1.textContent=TR.invalidEmail; } return false; }
+    if(phone.length<5){ markInvalid('o-phone'); var tip2=document.getElementById('o-tip'); if(tip2){ tip2.style.color='#dc2626'; tip2.textContent=TR.invalidPhone; } return false; }
+    return true;
   }
 
   // —— 直接绑定 —— 
@@ -439,11 +454,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     if (t && (t.id==='go-checkout' || (t.closest && t.closest('#go-checkout')))) { if(checkoutBtn) checkoutBtn.click(); return; }
     if (t && (t.id==='o-cancel' || (t===mask))) { closeModal(); return; }
     if (t && (t.id==='o-submit' || (t.closest && t.closest('#o-submit')))) {
-      if ((gv('o-mode')==='B2B') && !gv('o-company')) {
-        var e=document.getElementById('o-tip'); if(e){ e.style.color='#dc2626'; e.textContent='${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").companyMust}'; }
-        var c=document.getElementById('o-company'); if(c) c.focus();
-        return;
-      }
+      if(!validateAll()) return;
       var order={
         items: readCart(),
         contact: { name: gv('o-name'), phone: gv('o-phone'), email: gv('o-email'),
@@ -458,16 +469,18 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=${JSON.stringify(tFactory(cookies().get("lang")?.value==="en"?"en":"zh").submittedTip)}; }
+        var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=${JSON.stringify(tr.submittedTip)}; }
       }catch(e){}
       return;
     }
   });
 
+  document.addEventListener('input', function(ev){
+    var t=ev.target && ev.target.id; if(t){ var el=document.getElementById(t); if(el){ el.style.borderColor='#e5e7eb'; } var tip=document.getElementById('o-tip'); if(tip) tip.textContent=''; }
+  });
   document.addEventListener('change', function(ev){
     var t=ev.target;
     if (t && (t.id==='o-currency')) { updateTotal(); }
-    if (t && (t.id==='o-mode')) { toggleCompanyRequired(); }
   });
 })();`,
         }}
