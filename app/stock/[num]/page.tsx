@@ -99,7 +99,7 @@ function toInt(v: unknown, def: number) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
 }
-async function fetchPageOnce(page: number, size: number, timeoutMs = 5000): Promise<Item[]> {
+async function fetchPageOnce(page: number, size: number, timeoutMs = 6000): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -114,7 +114,7 @@ async function fetchPageOnce(page: number, size: number, timeoutMs = 5000): Prom
   } catch { return []; } finally { clearTimeout(t); }
 }
 async function findInPage(num: string, page: number, size: number): Promise<Item | null> {
-  const rows = await fetchPageOnce(page, size, 5000);
+  const rows = await fetchPageOnce(page, size, 6000);
   return rows.find((x) => String(x?.num ?? "") === String(num)) || null;
 }
 async function fetchItemNear(num: string, p: number, size: number): Promise<Item | null> {
@@ -554,19 +554,21 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
       var fr=new FileReader(); fr.onload=function(){ try{
         var rows=parseCsv(String(fr.result||'')); var cart=readCart();
         rows.forEach(function(r){ if(!r || !r.num) return; var i=cart.findIndex(function(x){ return String(x.num)===String(r.num); });
-          if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
-          else cart[i].qty = (cart[i].qty||1) + r.qty;
-        });
+        if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
+        else cart[i].qty = (cart[i].qty||1) + r.qty; });
         writeCart(cart); alert('${tr.uploadOk}');
       }catch(e){} }; fr.readAsText(f, 'utf-8');
-      if (t && typeof (t as any).value === 'string') { /* TS placeholder, ignored at runtime */ }
-      if (t && typeof (t as HTMLInputElement).value !== 'undefined') { (t as HTMLInputElement).value = ''; }
-      // 纯 JS 重置：
-      if (t && typeof (t as any).value !== 'undefined') { (t as any).value = ''; }
+      if (t && typeof (t as any) === 'object' && typeof (t as any).value !== 'undefined') {} // no-op for TS
+      if (t && (t as any) && typeof (t as any).value !== 'undefined') {} // no-op
+      // 纯 JS 重置文件控件
+      // @ts-ignore
+      if (t && typeof t.value !== 'undefined') { try{ (t as HTMLInputElement).value=''; }catch(_){ try{ (t as any).value=''; }catch(__){} } }
+      // 最稳妥：创建新表单来重置
+      try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
     }
   });
 
-  // 打开页面时同步星号
+  // 打开页面时同步星号 & 合计
   syncCompanyStar();
   updateTotal();
 })();`,

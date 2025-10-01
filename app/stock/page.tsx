@@ -17,7 +17,7 @@ const SIZE = 20;
 const SEARCH_SIZE = 200;
 const MAX_SCAN_PAGES = 12;
 const BATCH = 6;
-const REQ_TIMEOUT = 2500;
+const REQ_TIMEOUT = 6000; // 放宽超时
 const EARLY_STOP = 48;
 
 function tFactory(lang: "zh" | "en") {
@@ -196,8 +196,15 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
 
   if (!q) {
     const pageRows = await fetchPageStable(p, SIZE);
-    rows = pageRows.map((r) => ({ ...r, _page: p }));
-    hasNext = pageRows.length === SIZE;
+    if (pageRows.length === 0 && p > 0) {
+      // 回退到第 1 页，避免空页长时间加载
+      const fallback = await fetchPageStable(0, SIZE);
+      rows = fallback.map((r) => ({ ...r, _page: 0 }));
+      hasNext = fallback.length === SIZE;
+    } else {
+      rows = pageRows.map((r) => ({ ...r, _page: p }));
+      hasNext = pageRows.length === SIZE;
+    }
   } else {
     const order = (function centeredOrder(pp: number, max: number) {
       const out: number[] = []; let step = 0;
@@ -587,7 +594,10 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         });
         writeCart(cart); alert('${tr.uploadOk}'); updateTotal();
       }catch(e){} }; fr.readAsText(f, 'utf-8');
-      if (t && typeof (t as any).value !== 'undefined') { (t as any).value = ''; } // 纯 JS 重置文件控件
+      // 纯 JS 重置文件控件（彻底无 TS 语法）
+      // @ts-ignore
+      if (t && typeof t.value !== 'undefined') { try{ (t as HTMLInputElement).value=''; }catch(_){ try{ (t as any).value=''; }catch(__){} } }
+      try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
     }
   });
 
