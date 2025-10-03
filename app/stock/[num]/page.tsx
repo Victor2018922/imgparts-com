@@ -577,4 +577,3 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     </>
   );
 }
-
