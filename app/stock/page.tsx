@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 
+/** ---------- Types ---------- */
 type Item = {
   num?: string; brand?: string; product?: string; oe?: string; model?: string;
   year?: string | number; price?: string | number; stock?: string | number;
@@ -12,12 +13,13 @@ type Item = {
 };
 type Row = Item & { _page?: number };
 
+/** ---------- Const ---------- */
 const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
-const SIZE = 20;
-const SEARCH_SIZE = 200;
+const PAGE_SIZE = 20;
+const SEARCH_SCAN_SIZE = 200;
 const MAX_SCAN_PAGES = 12;
 const BATCH = 6;
-const REQ_TIMEOUT = 6000; // 放宽超时
+const REQ_TIMEOUT = 6000;   // 放宽接口超时
 const EARLY_STOP = 48;
 
 function tFactory(lang: "zh" | "en") {
@@ -42,9 +44,10 @@ function tFactory(lang: "zh" | "en") {
         requiredAll: "Please complete all required fields.",
         invalidEmail: "Invalid email format.",
         invalidPhone: "Invalid phone number.",
-        downloadTpl: "Download Template", uploadNeeds: "Upload Needs (CSV)", register: "Register", hi: "Hi",
+        downloadTpl: "Download Template", uploadNeeds: "Upload Needs (CSV)", register: "Register",
         needLogin: "Please register/login first.",
-        uploadOk: "Uploaded: items have been added to cart.",
+        noData: "No data or failed to load, refresh and try again",
+        noMatch: "No results, try other keywords",
       }
     : {
         stockPreview: "库存预览",
@@ -66,12 +69,66 @@ function tFactory(lang: "zh" | "en") {
         requiredAll: "请完整填写所有必填字段。",
         invalidEmail: "邮箱格式不正确。",
         invalidPhone: "电话格式不正确。",
-        downloadTpl: "下载模板", uploadNeeds: "上传需求 (CSV)", register: "注册/登录", hi: "您好",
+        downloadTpl: "下载模板", uploadNeeds: "上传需求 (CSV)", register: "注册/登录",
         needLogin: "请先完成注册/登录。",
-        uploadOk: "上传成功：已将清单加入购物车。",
+        noData: "暂无数据或加载失败，请刷新重试",
+        noMatch: "未找到匹配结果，请更换关键词",
       };
 }
 
+/** ---------- Helpers ---------- */
+function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
+async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
+  const url = `${API_BASE}?size=${size}&page=${page}`;
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    if (Array.isArray(data)) return data as Item[];
+    if (Array.isArray((data as any)?.content)) return (data as any).content as Item[];
+    if (Array.isArray((data as any)?.data)) return (data as any).data as Item[];
+    return [];
+  } catch { return []; } finally { clearTimeout(t); }
+}
+async function fetchPageStable(page: number, size: number): Promise<Item[]> {
+  for (let i = 0; i < 2; i++) { const rows = await fetchPageOnce(page, size, REQ_TIMEOUT); if (rows.length) return rows; }
+  return [];
+}
+function norm(s: any) { return String(s ?? "").toLowerCase(); }
+function matchQuery(it: Item, q: string) {
+  if (!q) return true; const k = q.toLowerCase();
+  return norm(it.num).includes(k) || norm(it.oe).includes(k) || norm(it.brand).includes(k) || norm(it.product).includes(k) || norm(it.model).includes(k);
+}
+function sortRows(rows: Row[], sort: string) {
+  if (!sort) return rows;
+  const cp = [...rows];
+  if (sort === "price_asc") cp.sort((a, b) => Number(a.price ?? 0) - Number(b.price ?? 0));
+  else if (sort === "price_desc") cp.sort((a, b) => Number(b.price ?? 0) - Number(a.price ?? 0));
+  else if (sort === "stock_desc") cp.sort((a, b) => Number(b.stock ?? 0) - Number(a.stock ?? 0));
+  return cp;
+}
+function primaryImage(it: Item): string {
+  const raw: string[] = it.images || it.pics || it.gallery || it.imageUrls || (it.image ? [it.image] : []) || [];
+  const seen = new Set<string>();
+  const cleaned = raw.filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
+    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  const placeholder = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
+  return cleaned[0] || placeholder;
+}
+function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
+function stdCn(it: Item) {
+  const arr = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
+  let val = arr.find((x) => String(x).trim().length > 0) || "";
+  if (!val) { for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { val = v; break; } } }
+  return val;
+}
+function stdEn(it: Item) {
+  const arr = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
+  let val = arr.find((x) => String(x).trim().length > 0) || "";
+  if (!val) { for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { val = v; break; } } }
+  return val;
+}
 function cnPartToEn(cn: string): string {
   if (!cn) return "";
   let s = cn.replace(/\s+/g, "");
@@ -106,62 +163,7 @@ function cnPartToEn(cn: string): string {
   return (dirs.concat([noun])).join(" ");
 }
 
-function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
-async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
-  const url = `${API_BASE}?size=${size}&page=${page}`;
-  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const resp = await fetch(url, { cache: "no-store", signal: ctrl.signal });
-    if (!resp.ok) return [];
-    const data = await resp.json();
-    if (Array.isArray(data)) return data as Item[];
-    if (Array.isArray((data as any)?.content)) return (data as any).content as Item[];
-    if (Array.isArray((data as any)?.data)) return (data as any).data as Item[];
-    return [];
-  } catch { return []; } finally { clearTimeout(t); }
-}
-async function fetchPageStable(page: number, size: number): Promise<Item[]> {
-  for (let i = 0; i < 2; i++) { const rows = await fetchPageOnce(page, size, REQ_TIMEOUT); if (rows.length) return rows; }
-  return [];
-}
-
-function norm(s: any) { return String(s ?? "").toLowerCase(); }
-function matchQuery(it: Item, q: string) {
-  if (!q) return true; const k = q.toLowerCase();
-  return norm(it.num).includes(k) || norm(it.oe).includes(k) || norm(it.brand).includes(k) || norm(it.product).includes(k) || norm(it.model).includes(k);
-}
-function sortRows(rows: Row[], sort: string) {
-  if (!sort) return rows;
-  const cp = [...rows];
-  if (sort === "price_asc") cp.sort((a, b) => Number(a.price ?? 0) - Number(b.price ?? 0));
-  else if (sort === "price_desc") cp.sort((a, b) => Number(b.price ?? 0) - Number(a.price ?? 0));
-  else if (sort === "stock_desc") cp.sort((a, b) => Number(b.stock ?? 0) - Number(a.stock ?? 0));
-  return cp;
-}
-function primaryImage(it: Item): string {
-  const raw: string[] = it.images || it.pics || it.gallery || it.imageUrls || (it.image ? [it.image] : []) || [];
-  const seen = new Set<string>();
-  const cleaned = raw.filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
-    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const placeholder = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
-  return cleaned[0] || placeholder;
-}
-function titleOf(it: Item) { return [it.brand, it.product, it.oe, it.num].filter(Boolean).join(" | "); }
-function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
-function stdCn(it: Item) {
-  const arr = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
-  let val = arr.find((x) => String(x).trim().length > 0) || "";
-  if (!val) { for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { val = v; break; } } }
-  return val;
-}
-function stdEn(it: Item) {
-  const arr = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
-  let val = arr.find((x) => String(x).trim().length > 0) || "";
-  if (!val) { for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { val = v; break; } } }
-  return val;
-}
-
-/** 顶部语言 + 交易模式 + 模板/上传 + 注册条 */
+/** ---------- TopBar ---------- */
 function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
   const tr = tFactory(lang);
   return (
@@ -183,6 +185,7 @@ function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
   );
 }
 
+/** ---------- Page ---------- */
 export default async function StockPage({ searchParams }: { searchParams?: { [k: string]: string | string[] | undefined } }) {
   const p = toInt((searchParams?.p as string) ?? "0", 0);
   const q = ((searchParams?.q as string) || "").trim();
@@ -191,36 +194,41 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   const modeCookie = cookies().get("mode")?.value === "B2B" ? "B2B" : "B2C";
   const tr = tFactory(langCookie);
 
+  // 数据
   let rows: Row[] = [];
   let hasNext = false;
 
   if (!q) {
-    const pageRows = await fetchPageStable(p, SIZE);
+    const pageRows = await fetchPageStable(p, PAGE_SIZE);
     if (pageRows.length === 0 && p > 0) {
-      // 回退到第 1 页，避免空页长时间加载
-      const fallback = await fetchPageStable(0, SIZE);
+      const fallback = await fetchPageStable(0, PAGE_SIZE);
       rows = fallback.map((r) => ({ ...r, _page: 0 }));
-      hasNext = fallback.length === SIZE;
+      hasNext = fallback.length === PAGE_SIZE;
     } else {
       rows = pageRows.map((r) => ({ ...r, _page: p }));
-      hasNext = pageRows.length === SIZE;
+      hasNext = pageRows.length === PAGE_SIZE;
     }
   } else {
-    const order = (function centeredOrder(pp: number, max: number) {
+    const order = (function centered(pp: number, max: number) {
       const out: number[] = []; let step = 0;
-      while (out.length < max) { const a = pp + step; if (a >= 0 && !out.includes(a)) out.push(a);
-        if (out.length >= max) break; const b = pp - step; if (b >= 0 && !out.includes(b)) out.push(b); step++; }
-      if (!out.includes(0)) out.push(0); return out.slice(0, max);
+      while (out.length < max) {
+        const a = pp + step; if (a >= 0 && !out.includes(a)) out.push(a);
+        const b = pp - step; if (b >= 0 && !out.includes(b)) out.push(b);
+        step++;
+      }
+      if (!out.includes(0)) out.push(0);
+      return out.slice(0, max);
     })(p, MAX_SCAN_PAGES);
+
     let found: Row[] = []; let reachedEnd = false;
     for (let i = 0; i < order.length && !reachedEnd && found.length < EARLY_STOP; i += BATCH) {
       const batchPages = order.slice(i, i + BATCH);
-      const lists = await Promise.all(batchPages.map((pg) => fetchPageStable(pg, SEARCH_SIZE)));
+      const lists = await Promise.all(batchPages.map((pg) => fetchPageStable(pg, SEARCH_SCAN_SIZE)));
       for (let j = 0; j < lists.length; j++) {
         const pg = batchPages[j], list = lists[j];
         const filtered = list.filter((it) => matchQuery(it, q)).map((it) => ({ ...it, _page: pg }));
         found.push(...filtered);
-        if (list.length < SEARCH_SIZE) reachedEnd = true;
+        if (list.length < SEARCH_SCAN_SIZE) reachedEnd = true;
       }
     }
     rows = found; hasNext = false;
@@ -229,13 +237,15 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   rows = sortRows(rows, sort);
   const preloadImgs = rows.slice(0, 8).map(primaryImage);
 
-  const baseQuery = (extra: Record<string, string | number | undefined>) => {
-    const params = new URLSearchParams(); if (q) params.set("q", q); if (sort) params.set("sort", sort);
-    if (typeof extra.p !== "undefined") params.set("p", String(extra.p));
-    return `/stock${params.toString() ? "?" + params.toString() : ""}`;
+  const mkHref = (np: number) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (sort) params.set("sort", sort);
+    params.set("p", String(np));
+    return `/stock?${params.toString()}`;
   };
-  const prevHref = !q && p > 0 ? baseQuery({ p: p - 1 }) : "#";
-  const nextHref = !q && hasNext ? baseQuery({ p: p + 1 }) : "#";
+  const prevHref = !q && p > 0 ? mkHref(p - 1) : "#";
+  const nextHref = !q && hasNext ? mkHref(p + 1) : "#";
 
   return (
     <>
@@ -277,21 +287,28 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         )}
 
         {rows.length === 0 ? (
-          <div style={{ padding: 24 }}>{q ? (langCookie === "en" ? "No results, try other keywords" : "未找到匹配结果，请更换关键词") : (langCookie === "en" ? "No data or failed to load, refresh and try again" : "暂无数据或加载失败，请刷新重试")}</div>
+          <div style={{ padding: 24 }}>{q ? tr.noMatch : tr.noData}</div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16 }}>
             {rows.map((it) => {
               const srcPage = typeof it._page === "number" ? it._page : p;
-              const sParam = q ? SEARCH_SIZE : SIZE;
+              const sParam = q ? SEARCH_SCAN_SIZE : PAGE_SIZE;
               const href = `/stock/${encodeURIComponent(String(it.num ?? ""))}?p=${srcPage}&s=${sParam}`;
-              const img = primaryImage(it);
-              const title = titleOf(it);
+
+              const raw: string[] = it.images || it.pics || it.gallery || it.imageUrls || (it.image ? [it.image] : []) || [];
+              const seen = new Set<string>();
+              const cleaned = raw.filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
+                .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+              const img = cleaned[0] || "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
+
+              const title = [it.brand, it.product, it.oe, it.num].filter(Boolean).join(" | ");
               const scn = stdCn(it);
               const sen = stdEn(it);
               const partEn = sen || (langCookie === "en" ? cnPartToEn(scn) : "");
               const dataPayload = JSON.stringify({
                 num: it.num ?? "", price: it.price ?? "", brand: it.brand ?? "", product: it.product ?? "", oe: it.oe ?? ""
               }).replace(/"/g, "&quot;");
+
               return (
                 <div key={String(it.num)}
                      style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -357,7 +374,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         )}
       </main>
 
-      {/* 结算弹窗（公司在 B2C 下不必填） */}
+      {/* 列表页 - 结算弹窗（公司在 B2C 下不必填） */}
       <div id="list-mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
       <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
            style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
@@ -409,32 +426,29 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
       <div id="reg-modal" role="dialog" aria-modal="true" aria-labelledby="reg-title"
            style={{ position:"fixed", left:"50%", top:"8vh", transform:"translateX(-50%)", width:"min(520px,92vw)", background:"#fff",
                     border:"1px solid #e5e7eb", borderRadius:12, display:"none", zIndex:51, maxHeight:"84vh", flexDirection:"column" }}>
-        <div id="reg-title" style={{ padding:"12px 16px", fontWeight:700, borderBottom:"1px solid #e5e7eb" }}>{tr.register}</div>
+        <div id="reg-title" style={{ padding:"12px 16px", fontWeight:700, borderBottom:"1px solid #e5e7eb" }}>{tFactory(langCookie).register}</div>
         <div style={{ padding:16, display:"grid", gap:12 }}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-            <div><label>{tr.contactName} *</label><input id="r-name" style={{ border:"1px solid #e5e7eb", borderRadius:8, padding:"10px 12px" }}/></div>
-            <div><label>{tr.email} *</label><input id="r-email" style={{ border:"1px solid #e5e7eb", borderRadius:8, padding:"10px 12px" }}/></div>
+            <div><label>{tFactory(langCookie).contactName} *</label><input id="r-name" style={{ border:"1px solid #e5e7eb", borderRadius:8, padding:"10px 12px" }}/></div>
+            <div><label>{tFactory(langCookie).email} *</label><input id="r-email" style={{ border:"1px solid #e5e7eb", borderRadius:8, padding:"10px 12px" }}/></div>
           </div>
           <div id="r-tip" style={{ fontSize:12, color:"#dc2626" }}></div>
         </div>
         <div style={{ padding:"12px 16px", borderTop:"1px solid #e5e7eb", display:"flex", gap:8, justifyContent:"flex-end" }}>
-          <button id="r-cancel" style={{ padding:"8px 14px", borderRadius:8, background:"#fff", border:"1px solid #e5e7eb", cursor:"pointer" }}>{tr.cancel}</button>
-          <button id="r-submit" style={{ padding:"8px 14px", borderRadius:8, background:"#111827", color:"#fff", border:"1px solid #111827", cursor:"pointer" }}>{tr.register}</button>
+          <button id="r-cancel" style={{ padding:"8px 14px", borderRadius:8, background:"#fff", border:"1px solid #e5e7eb", cursor:"pointer" }}>{tFactory(langCookie).cancel}</button>
+          <button id="r-submit" style={{ padding:"8px 14px", borderRadius:8, background:"#111827", color:"#fff", border:"1px solid "#111827", cursor:"pointer" }}>{tFactory(langCookie).register}</button>
         </div>
       </div>
       <input id="needs-file" type="file" accept=".csv" style={{ display: "none" }} />
 
+      {/* 行为逻辑（纯 JS，无 TS 语法） */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
   var TR=${JSON.stringify(tr)}, MODE='${modeCookie}';
   function setCookie(k,v){ document.cookie = k+'='+v+'; path=/; max-age='+(3600*24*365); }
-  function closestSel(node, sel){
-    var el = node && node.nodeType===1 ? node : (node && node.parentElement);
-    while(el){ if (el.matches && el.matches(sel)) return el; el = el.parentElement; }
-    return null;
-  }
+  function closestSel(node, sel){ var el=node && node.nodeType===1?node:(node&&node.parentElement); while(el){ if(el.matches && el.matches(sel)) return el; el=el.parentElement; } return null; }
 
   // 顶栏语言/模式
   document.addEventListener('click', function(e){
@@ -592,11 +606,9 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
           if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
           else cart[i].qty = (cart[i].qty||1) + r.qty;
         });
-        writeCart(cart); alert('${tr.uploadOk}'); updateTotal();
+        writeCart(cart); alert('${tr.uploadNeeds} OK'); updateTotal();
       }catch(e){} }; fr.readAsText(f, 'utf-8');
-      // 纯 JS 重置文件控件（彻底无 TS 语法）
-      // @ts-ignore
-      if (t && typeof t.value !== 'undefined') { try{ (t as HTMLInputElement).value=''; }catch(_){ try{ (t as any).value=''; }catch(__){} } }
+      // 重置文件控件
       try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
     }
   });

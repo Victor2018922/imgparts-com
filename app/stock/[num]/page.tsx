@@ -24,18 +24,16 @@ function tFactory(lang: "zh" | "en") {
         addToCart: "Add to Cart", added: "Added", checkout: "Proceed to Checkout",
         submitOrder: "Submit Order", cancel: "Cancel",
         contactName: "Name", phone: "Phone", email: "Email",
-        company: "Company",
-        country: "Country", address: "Address", mode: "Mode", note: "Notes",
+        company: "Company", country: "Country", address: "Address", mode: "Mode", note: "Notes",
         currency: "Currency", total: "Total",
         b2c: "B2C", b2b: "B2B",
         submittedTip: "Submitted (Demo): saved to local orders",
         requiredAll: "Please complete all required fields.",
         invalidEmail: "Invalid email format.",
         invalidPhone: "Invalid phone number.",
-        item: "Item", qty: "Qty",
-        downloadTpl: "Download Template", uploadNeeds: "Upload Needs (CSV)", register: "Register", hi: "Hi",
+        item: "Item", qty: "Qty", register: "Register",
+        downloadTpl: "Download Template", uploadNeeds: "Upload Needs (CSV)",
         needLogin: "Please register/login first.",
-        uploadOk: "Uploaded: items have been added to cart.",
       }
     : {
         backToList: "返回列表",
@@ -46,21 +44,29 @@ function tFactory(lang: "zh" | "en") {
         addToCart: "加入购物车", added: "已加入", checkout: "去结算",
         submitOrder: "提交订单", cancel: "取消",
         contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email",
-        company: "公司",
-        country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
+        company: "公司", country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
         currency: "货币 / Currency", total: "合计",
         b2c: "B2C", b2b: "B2B",
         submittedTip: "提交成功（演示）：已保存到本地订单列表",
         requiredAll: "请完整填写所有必填字段。",
         invalidEmail: "邮箱格式不正确。",
         invalidPhone: "电话格式不正确。",
-        item: "商品", qty: "数量",
-        downloadTpl: "下载模板", uploadNeeds: "上传需求 (CSV)", register: "注册/登录", hi: "您好",
+        item: "商品", qty: "数量", register: "注册/登录",
+        downloadTpl: "下载模板", uploadNeeds: "上传需求 (CSV)",
         needLogin: "请先完成注册/登录。",
-        uploadOk: "上传成功：已将清单加入购物车。",
       };
 }
 
+function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
+function getStdNames(it: Item) {
+  const candidatesCn = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
+  const candidatesEn = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
+  let cn = candidatesCn.find((x) => String(x).trim().length > 0) || "";
+  let en = candidatesEn.find((x) => String(x).trim().length > 0) || "";
+  if (!cn) for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && v && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { cn = v; break; } }
+  if (!en) for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { en = v; break; } }
+  return { cn, en, summary: it.summary || "", description: it.description || it.desc || it.remark || "" };
+}
 function cnPartToEn(cn: string): string {
   if (!cn) return "";
   let s = cn.replace(/\s+/g, "");
@@ -95,14 +101,11 @@ function cnPartToEn(cn: string): string {
   return (dirs.concat([noun])).join(" ");
 }
 
-function toInt(v: unknown, def: number) {
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
-}
+/** API */
+function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
 async function fetchPageOnce(page: number, size: number, timeoutMs = 6000): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const resp = await fetch(url, { cache: "no-store", signal: ctrl.signal });
     if (!resp.ok) return [];
@@ -120,51 +123,13 @@ async function findInPage(num: string, page: number, size: number): Promise<Item
 async function fetchItemNear(num: string, p: number, size: number): Promise<Item | null> {
   const cur = await findInPage(num, p, size);
   if (cur) return cur;
-  const [a, b] = await Promise.all([
-    p > 0 ? findInPage(num, p - 1, size) : Promise.resolve(null),
-    findInPage(num, p + 1, size),
-  ]);
+  const [a, b] = await Promise.all([ p > 0 ? findInPage(num, p - 1, size) : Promise.resolve(null), findInPage(num, p + 1, size) ]);
   return a || b || null;
 }
 
-function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
-function getStdNames(it: Item) {
-  const candidatesCn = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
-  const candidatesEn = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
-  let cn = candidatesCn.find((x) => String(x).trim().length > 0) || "";
-  let en = candidatesEn.find((x) => String(x).trim().length > 0) || "";
-  if (!cn) {
-    for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { cn = v; break; }
-    }
-  }
-  if (!en) {
-    for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { en = v; break; }
-    }
-  }
-  return { cn, en, summary: it.summary || "", description: it.description || it.desc || it.remark || "" };
-}
-
-function buildImages(item: Item) {
-  const placeholder =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
-  const raw: string[] =
-    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
-  const seen = new Set<string>();
-  const cleaned = raw
-    .filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : ""))
-    .filter((s) => s.length > 0)
-    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const MIN = 18;
-  const base = cleaned.length > 0 ? cleaned : [placeholder];
-  const images: string[] = [];
-  while (images.length < Math.max(MIN, base.length)) images.push(base[images.length % base.length]);
-  return images;
-}
-
-/** 顶部语言 + 交易模式 + 模板/上传 + 注册条 */
+/** 顶栏 */
 function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
+  const tr = tFactory(lang);
   return (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, alignItems: "center" }}>
       <div style={{ display: "flex", gap: 8 }}>
@@ -176,18 +141,37 @@ function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
         <button id="mode-b2b" disabled={mode === "B2B"} style={{ opacity: mode === "B2B" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>B2B</button>
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button id="download-template" style={{ cursor: "pointer", background: "#fff", border: "1px solid #e5e7eb", padding: "4px 10px", borderRadius: 6 }}>
-          {tFactory(lang).downloadTpl}
-        </button>
-        <button id="upload-needs" style={{ cursor: "pointer", background: "#fff", border: "1px solid #e5e7eb", padding: "4px 10px", borderRadius: 6 }}>
-          {tFactory(lang).uploadNeeds}
-        </button>
-        <button id="btn-register" style={{ cursor: "pointer", background: "#111827", color: "#fff", border: "1px solid #111827", padding: "4px 10px", borderRadius: 6 }}>
-          {tFactory(lang).register}
-        </button>
+        <button id="download-template" style={{ cursor: "pointer", background: "#fff", border: "1px solid #e5e7eb", padding: "4px 10px", borderRadius: 6 }}>{tFactory(lang).downloadTpl}</button>
+        <button id="upload-needs" style={{ cursor: "pointer", background: "#fff", border: "1px solid #e5e7eb", padding: "4px 10px", borderRadius: 6 }}>{tFactory(lang).uploadNeeds}</button>
+        <button id="btn-register" style={{ cursor: "pointer", background: "#111827", color: "#fff", border: "1px solid #111827", padding: "4px 10px", borderRadius: 6 }}>{tFactory(lang).register}</button>
       </div>
     </div>
   );
+}
+
+/** 构造去重后的图片并补足 ≥18（循环唯一图，避免相邻重复） */
+function buildImages(item: Item) {
+  const raw: string[] =
+    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
+  const seen = new Set<string>();
+  const uniq = raw
+    .filter(Boolean)
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter((s) => s.length > 0)
+    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+
+  const placeholder =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
+  const base = uniq.length > 0 ? uniq : [placeholder];
+
+  const need = Math.max(18, base.length);
+  const out: string[] = [];
+  for (let i = 0; i < need; i++) {
+    // 交错取图，避免相邻重复
+    const idx = (i * 3) % base.length;
+    out.push(base[idx]);
+  }
+  return out;
 }
 
 export async function generateMetadata({ params }: { params: { num: string } }) {
@@ -249,22 +233,21 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
   return (
     <>
       <TopBar lang={langCookie} mode={modeCookie} />
-
       <link rel="prefetch" href={backHref} />
-      {images.slice(0, preloadCount).map((src, i) => (<link key={`preload-${i}`} rel="preload" as="image" href={src} />))}
+      {images.slice(0, preloadCount).map((src, i) => (<link key={'preload-'+i} rel="preload" as="image" href={src} />))}
 
       <div className="detail-wrap">
         <div className="gallery">
-          {images.map((_, i) => (<input key={`r-${i}`} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />))}
+          {images.map((_, i) => (<input key={'r-'+i} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />))}
           <div className="main">
             {images.map((src, i) => (
-              <img key={`main-${i}`} data-idx={i} src={src} alt="product" loading={i === 0 ? "eager" : "lazy"} fetchPriority={i === 0 ? "high" : "auto"} decoding={i === 0 ? "sync" : "async"} />
+              <img key={'m-'+i} data-idx={i} src={src} alt="product" loading={i === 0 ? "eager" : "lazy"} fetchPriority={i === 0 ? "high" : "auto"} decoding={i === 0 ? "sync" : "async"} />
             ))}
           </div>
           <div className="thumbs">
             {images.map((src, i) => (
-              <label key={`thumb-${i}`} htmlFor={`${gal}-${i}`} title={`第 ${i + 1} 张`}>
-                <img src={src} alt={`thumb-${i + 1}`} loading="eager" decoding="sync" />
+              <label key={'t-'+i} htmlFor={`${gal}-${i}`} title={`第 ${i + 1} 张`}>
+                <img src={src} alt={`thumb-${i+1}`} loading="eager" decoding="sync" />
               </label>
             ))}
           </div>
@@ -275,38 +258,38 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
 
           {(stdCn || shownPartNameEn) && (
             <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.5 }}>
-              {stdCn && <div><strong>{tr.partName}：</strong>{stdCn}</div>}
+              {stdCn && <div><strong>{tFactory(langCookie).partName}：</strong>{stdCn}</div>}
               {shownPartNameEn && <div><strong>Part Name:</strong> {shownPartNameEn}</div>}
             </div>
           )}
 
           {(summary || description) && (
             <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>
-              {summary && <div><strong>{tr.summary}：</strong>{summary}</div>}
-              {description && <div><strong>{tr.description}：</strong>{description}</div>}
+              {summary && <div><strong>{tFactory(langCookie).summary}：</strong>{summary}</div>}
+              {description && <div><strong>{tFactory(langCookie).description}：</strong>{description}</div>}
             </div>
           )}
 
           <dl style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 14 }}>
-            {item.brand && (<div><dt style={{ color: "#6b7280" }}>{tr.brand}</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
-            {item.product && (<div><dt style={{ color: "#6b7280" }}>{tr.product}</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
-            {item.oe && (<div><dt style={{ color: "#6b7280" }}>{tr.oe}</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
-            {typeof item.price !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tr.price}</dt><dd style={{ fontWeight: 600 }}>{String(item.price)}</dd></div>)}
-            {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tr.stock}</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
+            {item.brand && (<div><dt style={{ color: "#6b7280" }}>{tFactory(langCookie).brand}</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
+            {item.product && (<div><dt style={{ color: "#6b7280" }}>{tFactory(langCookie).product}</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
+            {item.oe && (<div><dt style={{ color: "#6b7280" }}>{tFactory(langCookie).oe}</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
+            {typeof item.price !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tFactory(langCookie).price}</dt><dd style={{ fontWeight: 600 }}>{String(item.price)}</dd></div>)}
+            {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tFactory(langCookie).stock}</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
           </dl>
 
           <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button id="add-cart" data-added={tr.added}
+            <button id="add-cart" data-added={tFactory(langCookie).added}
               style={{ padding: "8px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
-              {tr.addToCart}
+              {tFactory(langCookie).addToCart}
             </button>
             <button id="go-checkout"
               style={{ padding: "8px 16px", borderRadius: 8, background: "#10b981", color: "#fff", border: "none", cursor: "pointer" }}>
-              {tr.checkout}
+              {tFactory(langCookie).checkout}
             </button>
             <Link href={backHref} prefetch
               style={{ padding: "8px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none", textAlign: "center" }}>
-              {tr.backToList}
+              {tFactory(langCookie).backToList}
             </Link>
           </div>
         </div>
@@ -315,13 +298,13 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
       {/* 结算弹窗 */}
       <div id="modal-mask" className="modal-mask"></div>
       <div id="checkout-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
-        <header id="checkout-title">{tr.submitOrder}</header>
+        <header id="checkout-title">{tFactory(langCookie).submitOrder}</header>
         <div className="body">
           <div id="cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
 
           <div className="row" style={{ alignItems: "center" }}>
             <div>
-              <label>{tr.currency} <span style={{color:"#dc2626"}}>*</span></label>
+              <label>{tFactory(langCookie).currency} <span style={{color:"#dc2626"}}>*</span></label>
               <select id="o-currency" defaultValue="USD">
                 <option value="CNY">人民币 CNY</option>
                 <option value="USD">美元 USD</option>
@@ -329,48 +312,48 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
               </select>
             </div>
             <div style={{ textAlign: "right", fontWeight: 700 }}>
-              <span>{tr.total}：</span><span id="o-total">--</span>
+              <span>{tFactory(langCookie).total}：</span><span id="o-total">--</span>
             </div>
           </div>
 
           <div className="row">
-            <div><label>{tr.contactName} <span style={{color:"#dc2626"}}>*</span></label><input id="o-name" /></div>
-            <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="o-phone" /></div>
+            <div><label>{tFactory(langCookie).contactName} <span style={{color:"#dc2626"}}>*</span></label><input id="o-name" /></div>
+            <div><label>{tFactory(langCookie).phone} <span style={{color:"#dc2626"}}>*</span></label><input id="o-phone" /></div>
           </div>
           <div className="row">
-            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="o-email" /></div>
-            <div><label id="o-company-label">{tr.company} <span id="o-company-star" style={{color:"#dc2626",display: modeCookie==='B2B'?'inline':'none'}}>*</span></label><input id="o-company" /></div>
+            <div><label>{tFactory(langCookie).email} <span style={{color:"#dc2626"}}>*</span></label><input id="o-email" /></div>
+            <div><label id="o-company-label">{tFactory(langCookie).company} <span id="o-company-star" style={{color:"#dc2626",display: modeCookie==='B2B'?'inline':'none'}}>*</span></label><input id="o-company" /></div>
           </div>
           <div className="row">
-            <div><label>{tr.country} <span style={{color:"#dc2626"}}>*</span></label><input id="o-country" /></div>
-            <div><label>{tr.mode} <span style={{color:"#dc2626"}}>*</span></label>
-              <select id="o-mode" defaultValue={modeCookie}><option value="B2C">{tr.b2c}</option><option value="B2B">{tr.b2b}</option></select>
+            <div><label>{tFactory(langCookie).country} <span style={{color:"#dc2626"}}>*</span></label><input id="o-country" /></div>
+            <div><label>{tFactory(langCookie).mode} <span style={{color:"#dc2626"}}>*</span></label>
+              <select id="o-mode" defaultValue={modeCookie}><option value="B2C">{tFactory(langCookie).b2c}</option><option value="B2B">{tFactory(langCookie).b2b}</option></select>
             </div>
           </div>
-          <div><label>{tr.address} <span style={{color:"#dc2626"}}>*</span></label><input id="o-address" /></div>
-          <div><label>{tr.note} <span style={{color:"#dc2626"}}>*</span></label><textarea id="o-notes" rows={3}></textarea></div>
+          <div><label>{tFactory(langCookie).address} <span style={{color:"#dc2626"}}>*</span></label><input id="o-address" /></div>
+          <div><label>{tFactory(langCookie).note} <span style={{color:"#dc2626"}}>*</span></label><textarea id="o-notes" rows={3}></textarea></div>
           <div id="o-tip" style={{ fontSize: 12 }}></div>
         </div>
         <footer>
-          <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
-          <button id="o-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tr.submitOrder}</button>
+          <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tFactory(langCookie).cancel}</button>
+          <button id="o-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tFactory(langCookie).submitOrder}</button>
         </footer>
       </div>
 
       {/* 注册弹窗 + 隐藏文件输入 */}
       <div id="reg-mask" className="modal-mask"></div>
       <div id="reg-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="reg-title">
-        <header id="reg-title">{tr.register}</header>
+        <header id="reg-title">{tFactory(langCookie).register}</header>
         <div className="body">
           <div className="row">
-            <div><label>{tr.contactName} *</label><input id="r-name" /></div>
-            <div><label>{tr.email} *</label><input id="r-email" /></div>
+            <div><label>{tFactory(langCookie).contactName} *</label><input id="r-name" /></div>
+            <div><label>{tFactory(langCookie).email} *</label><input id="r-email" /></div>
           </div>
           <div id="r-tip" style={{ fontSize: 12, color: "#dc2626" }}></div>
         </div>
         <footer>
-          <button id="r-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
-          <button id="r-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tr.register}</button>
+          <button id="r-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tFactory(langCookie).cancel}</button>
+          <button id="r-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tFactory(langCookie).register}</button>
         </footer>
       </div>
       <input id="needs-file" type="file" accept=".csv" style={{ display: "none" }} />
@@ -381,17 +364,11 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         dangerouslySetInnerHTML={{
           __html: `
 (function(){
-  var TR=${JSON.stringify(tr)}, MODE='${modeCookie}';
-
-  function closestSel(node, sel){
-    var el = node && node.nodeType===1 ? node : (node && node.parentElement);
-    while(el){ if (el.matches && el.matches(sel)) return el; el = el.parentElement; }
-    return null;
-  }
-
+  var TR=${JSON.stringify(tFactory(langCookie))}, MODE='${modeCookie}';
+  function closestSel(node, sel){ var el=node && node.nodeType===1?node:(node&&node.parentElement); while(el){ if(el.matches && el.matches(sel)) return el; el=el.parentElement; } return null; }
   function setCookie(k,v){ document.cookie = k+'='+v+'; path=/; max-age='+(3600*24*365); }
 
-  // 语言 & 模式切换（顶栏）
+  // 语言&模式（顶栏）
   document.addEventListener('click', function(e){
     var t=e.target;
     if(closestSel(t,'#lang-zh')){ setCookie('lang','zh'); location.reload(); return; }
@@ -400,7 +377,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     if(closestSel(t,'#mode-b2b')){ setCookie('mode','B2B'); location.reload(); return; }
   });
 
-  // 轮播
+  // 轮播自动播
   (function(){
     var name='${gal}', radios=[].slice.call(document.querySelectorAll('input[name="'+name+'"]')); if(!radios.length) return;
     var idx=radios.findIndex(function(r){return r.checked;}); if(idx<0) idx=0;
@@ -451,21 +428,20 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     ['o-name','o-phone','o-email','o-country','o-address','o-notes','o-company'].forEach(clearInvalid);
     var req=['o-name','o-phone','o-email','o-country','o-address','o-notes'];
     if(needCompany()) req.push('o-company');
-    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tr.requiredAll}'; } return false; } }
+    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tFactory(langCookie).requiredAll}'; } return false; } }
     var email=gv('o-email'); var phone=gv('o-phone').replace(/\\D/g,'');
-    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('o-email'); var t1=document.getElementById('o-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent='${tr.invalidEmail}'; } return false; }
-    if(phone.length<5){ markInvalid('o-phone'); var t2=document.getElementById('o-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent='${tr.invalidPhone}'; } return false; }
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('o-email'); var t1=document.getElementById('o-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent='${tFactory(langCookie).invalidEmail}'; } return false; }
+    if(phone.length<5){ markInvalid('o-phone'); var t2=document.getElementById('o-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent='${tFactory(langCookie).invalidPhone}'; } return false; }
     return true;
   }
 
-  // 渲染购物车简表
   function renderCart(id){
     var el=document.getElementById(id); if(!el) return; var cart=readCart();
     if(!cart.length){ el.innerHTML='<div>${cookies().get("lang")?.value==="en"?"Cart is empty":"购物车为空"}</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.item+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">${tFactory(langCookie).item}</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">${tFactory(langCookie).qty}</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">${tFactory(langCookie).price}</th></tr></thead><tbody>';
     cart.forEach(function(it){
       html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
@@ -478,7 +454,6 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
   function isLogin(){ try{ return !!localStorage.getItem('user'); }catch(e){ return false; } }
   function openReg(){ document.getElementById('reg-mask').style.display='block'; document.getElementById('reg-modal').style.display='flex'; }
   function closeReg(){ document.getElementById('reg-mask').style.display='none'; document.getElementById('reg-modal').style.display='none'; }
-
   function downloadTemplate(){
     var csv = 'num,oe,qty\\n# 例: 721012,69820-06160,2\\n';
     var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
@@ -498,11 +473,10 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     return out;
   }
   function uploadNeeds(){
-    if(!isLogin()){ alert('${tr.needLogin}'); openReg(); return; }
+    if(!isLogin()){ alert('${tFactory(langCookie).needLogin}'); openReg(); return; }
     var fi=document.getElementById('needs-file'); if(fi) fi.click();
   }
 
-  // 事件绑定
   document.addEventListener('click', function(e){
     var t=e.target;
     if(closestSel(t,'#download-template')){ downloadTemplate(); return; }
@@ -526,7 +500,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tr.submittedTip}'; }
+        var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tFactory(langCookie).submittedTip}'; }
       }catch(e){}
       return;
     }
@@ -538,7 +512,7 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     if(closestSel(t,'#r-cancel') || t===document.getElementById('reg-mask')){ closeReg(); return; }
     if(closestSel(t,'#r-submit')){
       var nm=gv('r-name'), em=gv('r-email');
-      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent = '${tr.requiredAll}'; } return; }
+      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent = '${tFactory(langCookie).requiredAll}'; } return; }
       try{ localStorage.setItem('user', JSON.stringify({name:nm,email:em,ts:Date.now()})); }catch(e){}
       closeReg();
       return;
@@ -556,20 +530,14 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
         rows.forEach(function(r){ if(!r || !r.num) return; var i=cart.findIndex(function(x){ return String(x.num)===String(r.num); });
         if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
         else cart[i].qty = (cart[i].qty||1) + r.qty; });
-        writeCart(cart); alert('${tr.uploadOk}');
+        writeCart(cart); alert('${tFactory(langCookie).uploadNeeds} OK');
       }catch(e){} }; fr.readAsText(f, 'utf-8');
-      if (t && typeof (t as any) === 'object' && typeof (t as any).value !== 'undefined') {} // no-op for TS
-      if (t && (t as any) && typeof (t as any).value !== 'undefined') {} // no-op
-      // 纯 JS 重置文件控件
-      // @ts-ignore
-      if (t && typeof t.value !== 'undefined') { try{ (t as HTMLInputElement).value=''; }catch(_){ try{ (t as any).value=''; }catch(__){} } }
-      // 最稳妥：创建新表单来重置
       try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
     }
   });
 
-  // 打开页面时同步星号 & 合计
-  syncCompanyStar();
+  // 初始
+  (function(){ var star=document.getElementById('o-company-star'); if(star){ star.style.display = ('${modeCookie}'==='B2B' ? 'inline' : 'none'); } })();
   updateTotal();
 })();`,
         }}
