@@ -79,6 +79,7 @@ function tFactory(lang: "zh" | "en") {
 
 /* ------------ Helpers ------------ */
 function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
+
 async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -92,10 +93,12 @@ async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT
     return [];
   } catch { return []; } finally { clearTimeout(t); }
 }
+
 async function fetchPageStable(page: number, size: number): Promise<Item[]> {
   for (let i = 0; i < 2; i++) { const rows = await fetchPageOnce(page, size, REQ_TIMEOUT); if (rows.length) return rows; }
   return [];
 }
+
 function norm(s: any) { return String(s ?? "").toLowerCase(); }
 function matchQuery(it: Item, q: string) {
   if (!q) return true; const k = q.toLowerCase();
@@ -443,7 +446,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
       </div>
       <input id="needs-file" type="file" accept=".csv" style={{ display: "none" }} />
 
-      {/* 行为脚本（只注入 TR/MODE 两个变量，其余在脚本内部使用，避免模板串未闭合） */}
+      {/* 行为脚本 */}
       <script
         dangerouslySetInnerHTML={{
           __html: (function(tr, mode){
@@ -466,7 +469,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
 
-  // 合计
+  // 金额
   var RATES={ USD:1, CNY:7.2, EUR:0.92 };
   function computeTotal(currency){
     var cart=readCart();
