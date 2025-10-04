@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 
-/** ---------- Types ---------- */
+/* ------------ Types ------------ */
 type Item = {
   num?: string; brand?: string; product?: string; oe?: string; model?: string;
   year?: string | number; price?: string | number; stock?: string | number;
@@ -13,15 +13,16 @@ type Item = {
 };
 type Row = Item & { _page?: number };
 
-/** ---------- Const ---------- */
+/* ------------ Const ------------ */
 const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
 const PAGE_SIZE = 20;
 const SEARCH_SCAN_SIZE = 200;
 const MAX_SCAN_PAGES = 12;
 const BATCH = 6;
-const REQ_TIMEOUT = 6000;   // 放宽接口超时
+const REQ_TIMEOUT = 6000;
 const EARLY_STOP = 48;
 
+/* ------------ i18n ------------ */
 function tFactory(lang: "zh" | "en") {
   return lang === "en"
     ? {
@@ -76,7 +77,7 @@ function tFactory(lang: "zh" | "en") {
       };
 }
 
-/** ---------- Helpers ---------- */
+/* ------------ Helpers ------------ */
 function toInt(v: unknown, def: number) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def; }
 async function fetchPageOnce(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
@@ -163,7 +164,7 @@ function cnPartToEn(cn: string): string {
   return (dirs.concat([noun])).join(" ");
 }
 
-/** ---------- TopBar ---------- */
+/* ------------ TopBar ------------ */
 function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
   const tr = tFactory(lang);
   return (
@@ -185,7 +186,7 @@ function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
   );
 }
 
-/** ---------- Page ---------- */
+/* ------------ Page ------------ */
 export default async function StockPage({ searchParams }: { searchParams?: { [k: string]: string | string[] | undefined } }) {
   const p = toInt((searchParams?.p as string) ?? "0", 0);
   const q = ((searchParams?.q as string) || "").trim();
@@ -194,7 +195,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   const modeCookie = cookies().get("mode")?.value === "B2B" ? "B2B" : "B2C";
   const tr = tFactory(langCookie);
 
-  // 数据
+  // 拉数据
   let rows: Row[] = [];
   let hasNext = false;
 
@@ -209,6 +210,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
       hasNext = pageRows.length === PAGE_SIZE;
     }
   } else {
+    // 搜索：中心页向两侧扫描
     const order = (function centered(pp: number, max: number) {
       const out: number[] = []; let step = 0;
       while (out.length < max) {
@@ -374,7 +376,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         )}
       </main>
 
-      {/* 列表页 - 结算弹窗（公司在 B2C 下不必填） */}
+      {/* 列表页 - 结算弹窗 */}
       <div id="list-mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
       <div id="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-title"
            style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
@@ -436,17 +438,18 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         </div>
         <div style={{ padding:"12px 16px", borderTop:"1px solid #e5e7eb", display:"flex", gap:8, justifyContent:"flex-end" }}>
           <button id="r-cancel" style={{ padding:"8px 14px", borderRadius:8, background:"#fff", border:"1px solid #e5e7eb", cursor:"pointer" }}>{tFactory(langCookie).cancel}</button>
-          <button id="r-submit" style={{ padding:"8px 14px", borderRadius:8, background:"#111827", color:"#fff", border:"1px solid "#111827", cursor:"pointer" }}>{tFactory(langCookie).register}</button>
+          <button id="r-submit" style={{ padding:"8px 14px", borderRadius:8, background:"#111827", color:"#fff", border:"1px solid #111827", cursor:"pointer" }}>{tFactory(langCookie).register}</button>
         </div>
       </div>
       <input id="needs-file" type="file" accept=".csv" style={{ display: "none" }} />
 
-      {/* 行为逻辑（纯 JS，无 TS 语法） */}
+      {/* 行为脚本（只注入 TR/MODE 两个变量，其余在脚本内部使用，避免模板串未闭合） */}
       <script
         dangerouslySetInnerHTML={{
-          __html: `
+          __html: (function(tr, mode){
+            return `
 (function(){
-  var TR=${JSON.stringify(tr)}, MODE='${modeCookie}';
+  var TR=${JSON.stringify(tr)}, MODE='${mode}';
   function setCookie(k,v){ document.cookie = k+'='+v+'; path=/; max-age='+(3600*24*365); }
   function closestSel(node, sel){ var el=node && node.nodeType===1?node:(node&&node.parentElement); while(el){ if(el.matches && el.matches(sel)) return el; el=el.parentElement; } return null; }
 
@@ -493,20 +496,20 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     ['l-name','l-phone','l-email','l-country','l-address','l-notes','l-company'].forEach(clearInvalid);
     var req=['l-name','l-phone','l-email','l-country','l-address','l-notes'];
     if(needCompany()) req.push('l-company');
-    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tr.requiredAll}'; } return false; } }
+    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent=TR.requiredAll; } return false; } }
     var email=gv('l-email'); var phone=gv('l-phone').replace(/\\D/g,'');
-    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('l-email'); var t1=document.getElementById('l-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent='${tr.invalidEmail}'; } return false; }
-    if(phone.length<5){ markInvalid('l-phone'); var t2=document.getElementById('l-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent='${tr.invalidPhone}'; } return false; }
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('l-email'); var t1=document.getElementById('l-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent=TR.invalidEmail; } return false; }
+    if(phone.length<5){ markInvalid('l-phone'); var t2=document.getElementById('l-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent=TR.invalidPhone; } return false; }
     return true;
   }
 
   function renderCart(){
     var el=document.getElementById('list-cart-items'); if(!el) return;
-    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>${tFactory(cookies().get("lang")?.value==="en"?"en":"zh").emptyCart}</div>'; return; }
+    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+TR.emptyCart+'</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">${tr.item}</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">${tr.qty}</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">${tr.price}</th></tr></thead><tbody>';
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.item+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
     cart.forEach(function(it){
       html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
@@ -526,7 +529,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         else { cart[idx].qty = (cart[idx].qty||1)+1; }
         writeCart(cart); updateTotal();
       }catch(e){}
-      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || '${tr.added}';
+      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || TR.added;
       setTimeout(function(){ btn.innerText = txt; }, 1200);
     });
   });
@@ -552,7 +555,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     return out;
   }
   function uploadNeeds(){
-    if(!isLogin()){ alert('${tr.needLogin}'); openReg(); return; }
+    if(!isLogin()){ alert(TR.needLogin); openReg(); return; }
     var fi=document.getElementById('needs-file'); if(fi) fi.click();
   }
 
@@ -578,7 +581,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tr.submittedTip}'; }
+        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=TR.submittedTip; }
       }catch(e){}
       return;
     }
@@ -587,7 +590,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     if(closestSel(t,'#r-cancel') || t===document.getElementById('reg-mask')){ closeReg(); return; }
     if(closestSel(t,'#r-submit')){
       var nm=gv('r-name'), em=gv('r-email');
-      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent='${tr.requiredAll}'; } return; }
+      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent=TR.requiredAll; } return; }
       try{ localStorage.setItem('user', JSON.stringify({name:nm,email:em,ts:Date.now()})); }catch(e){}
       closeReg();
       return;
@@ -597,7 +600,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   document.addEventListener('change', function(e){
     var t=e.target;
     if(t && t.id==='l-currency') updateTotal();
-    if(t && t.id==='l-mode') syncCompanyStar();
+    if(t && t.id==='l-mode'){ var star=document.getElementById('l-company-star'); if(star){ star.style.display = ((document.getElementById('l-mode')||{}).value==='B2B')?'inline':'none'; } }
     if(t && t.id==='needs-file'){
       var f=t.files && t.files[0]; if(!f) return;
       var fr=new FileReader(); fr.onload=function(){ try{
@@ -606,7 +609,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
           if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
           else cart[i].qty = (cart[i].qty||1) + r.qty;
         });
-        writeCart(cart); alert('${tr.uploadNeeds} OK'); updateTotal();
+        writeCart(cart); alert(TR.uploadNeeds+' OK'); updateTotal();
       }catch(e){} }; fr.readAsText(f, 'utf-8');
       // 重置文件控件
       try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
@@ -614,8 +617,9 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   });
 
   // 初始
-  updateTotal(); syncCompanyStar();
-})();`,
+  updateTotal();
+})();`;
+          })(tr, modeCookie)
         }}
       />
     </>
