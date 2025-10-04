@@ -307,7 +307,8 @@ export default async function DetailPage({
             <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="d-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="d-email" style={{ border: "1px solid "#e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            {/* 这里修正了 border 的字符串（之前引号位置导致语法错误） */}
+            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="d-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
             <div><label id="d-company-label">{tr.company} <span id="d-company-star" style={{color:"#dc2626",display: modeCookie==='B2B'?'inline':'none'}}>*</span></label><input id="d-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
