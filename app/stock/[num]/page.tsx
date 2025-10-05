@@ -151,7 +151,7 @@ export default async function DetailPage({
   const p = Number((searchParams?.p as string) ?? "0") || 0;
   const size = Number((searchParams?.s as string) ?? String(SEARCH_SCAN_SIZE)) || SEARCH_SCAN_SIZE;
 
-  // 先从提示页抓取，再向两侧扫描，直到找到该 num
+  // 扫描附近分页直到找到 num
   let item: Item | null = null; let foundPage = p;
   const centerOrder = (function centered(pp: number, max: number) {
     const out: number[] = []; let step = 0;
@@ -183,7 +183,7 @@ export default async function DetailPage({
     );
   }
 
-  // 图片集合：合并、清洗、去重、补足 >= 18
+  // 图片集合：合并→清洗→去重→补足 ≥18
   const raw: string[] = item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
   const seen = new Set<string>();
   const cleaned = raw
@@ -271,7 +271,7 @@ export default async function DetailPage({
                 {tr.checkout}
               </button>
               <Link id="btn-back" href={backHref}
-                    style={{ padding: "10px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid "#e5e7eb", textDecoration: "none" }}>
+                    style={{ padding: "10px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none" }}>
                 {tr.back}
               </Link>
             </div>
@@ -477,3 +477,4 @@ export default async function DetailPage({
     </>
   );
 }
+
