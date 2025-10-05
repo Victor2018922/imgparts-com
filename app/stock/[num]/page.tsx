@@ -271,7 +271,7 @@ export default async function DetailPage({
                 {tr.checkout}
               </button>
               <Link id="btn-back" href={backHref}
-                    style={{ padding: "10px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none" }}>
+                    style={{ padding: "10px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid "#e5e7eb", textDecoration: "none" }}>
                 {tr.back}
               </Link>
             </div>
@@ -281,7 +281,7 @@ export default async function DetailPage({
         <div style={{ marginTop: 24, color: "#6b7280" }}>{tr.datasource}</div>
       </main>
 
-      {/* 结算弹窗（与列表页一致） */}
+      {/* 结算弹窗（与列表页一致，带 +/- 与删除） */}
       <div id="mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
       <div id="modal" role="dialog" aria-modal="true" aria-labelledby="d-title"
            style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
@@ -307,7 +307,6 @@ export default async function DetailPage({
             <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="d-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {/* 这里修正了 border 的字符串（之前引号位置导致语法错误） */}
             <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="d-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
             <div><label id="d-company-label">{tr.company} <span id="d-company-star" style={{color:"#dc2626",display: modeCookie==='B2B'?'inline':'none'}}>*</span></label><input id="d-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
@@ -394,6 +393,8 @@ export default async function DetailPage({
     return true;
   }
 
+  function rowTitle(it){ return [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | '); }
+
   function renderCart(){
     var el=document.getElementById('cart-items'); if(!el) return;
     var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+TR.emptyCart+'</div>'; return; }
@@ -401,9 +402,14 @@ export default async function DetailPage({
              '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.item+'</th>'+
              '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
              '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
-    cart.forEach(function(it){
-      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
-            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
+    cart.forEach(function(it,idx){
+      html+='<tr data-idx="'+idx+'"><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+rowTitle(it)+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+
+              '<button class="q-dec" style="margin-right:6px">-</button>'+
+              '<span class="q-num">'+(it.qty||1)+'</span>'+
+              '<button class="q-inc" style="margin-left:6px">+</button>'+
+              '<button class="q-del" style="margin-left:12px">✕</button>'+
+            '</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.price||'')+'</td></tr>';
     });
     html+='</tbody></table>'; el.innerHTML=html;
@@ -425,8 +431,17 @@ export default async function DetailPage({
   var btnCheckout=document.getElementById('d-checkout');
   if(btnCheckout){ btnCheckout.addEventListener('click', openModal); }
   document.addEventListener('click', function(e){
-    var t=e.target;
+    var t=e.target, trEl, idx, cart;
     if(t && t.id==='d-cancel'){ closeModal(); return; }
+    if(t && t.classList && (t.classList.contains('q-inc')||t.classList.contains('q-dec')||t.classList.contains('q-del'))){
+      trEl = t.closest('tr'); if(!trEl) return; idx = Number(trEl.getAttribute('data-idx')||'-1'); if(idx<0) return;
+      cart = readCart(); if(idx>=cart.length) return;
+      if(t.classList.contains('q-inc')) cart[idx].qty = (cart[idx].qty||1)+1;
+      else if(t.classList.contains('q-dec')) cart[idx].qty = Math.max(1,(cart[idx].qty||1)-1);
+      else if(t.classList.contains('q-del')) cart.splice(idx,1);
+      writeCart(cart); renderCart(); updateTotal();
+      return;
+    }
     if(t && t.id==='d-submit'){
       if(!validateAll()) return;
       var order={
