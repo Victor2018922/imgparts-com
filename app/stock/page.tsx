@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
+import Script from "next/script";
 
 /* ------------ Types ------------ */
 type Item = {
@@ -467,17 +468,13 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
       </div>
       <input id="needs-file" type="file" accept=".csv" style={{ display: "none" }} />
 
-      {/* 行为脚本 */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html: (function(tr, mode){
-            return `
+      {/* 交互脚本：确保执行（afterInteractive） */}
+      <Script id="stock-page-js" strategy="afterInteractive">{`
 (function(){
-  var TR=${JSON.stringify(tr)}, MODE='${mode}';
   function setCookie(k,v){ document.cookie = k+'='+v+'; path=/; max-age='+(3600*24*365); }
   function closestSel(node, sel){ var el=node && node.nodeType===1?node:(node&&node.parentElement); while(el){ if(el.matches && el.matches(sel)) return el; el=el.parentElement; } return null; }
 
-  // 顶栏语言/模式
+  // 多语言/模式切换
   document.addEventListener('click', function(e){
     var t=e.target;
     if(closestSel(t,'#lang-zh')){ setCookie('lang','zh'); location.reload(); return; }
@@ -489,8 +486,6 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   // 购物车
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
-
-  // 金额
   var RATES={ USD:1, CNY:7.2, EUR:0.92 };
   function computeTotal(currency){
     var cart=readCart();
@@ -500,7 +495,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   }
   function updateTotal(){
     var cur=(document.getElementById('l-currency')||{}).value || 'USD';
-    var el=document.getElementById('l-total'); if(el) el.textContent = TR.total+'：'+computeTotal(cur);
+    var el=document.getElementById('l-total'); if(el) el.textContent = (document.documentElement.lang==='en'?'Total':'合计')+'：'+computeTotal(cur);
   }
 
   // 结算弹窗
@@ -510,33 +505,27 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
   function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
   function markInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#dc2626'; el.focus(); } }
   function clearInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#e5e7eb'; } }
-  function clearTip(){ var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#111827'; tip.textContent=''; } }
-
+  function clearTip(){ var tip=document.getElementById('l-tip'); if(tip){ tip.textContent=''; tip.style.color='#111827'; } }
   function needCompany(){ var m=(document.getElementById('l-mode')||{}).value || 'B2C'; return m==='B2B'; }
   function syncCompanyStar(){ var star=document.getElementById('l-company-star'); if(star){ star.style.display = needCompany() ? 'inline' : 'none'; } }
-
   function validateAll(){
     clearTip();
     ['l-name','l-phone','l-email','l-country','l-address','l-notes','l-company'].forEach(clearInvalid);
-    var req=['l-name','l-phone','l-email','l-country','l-address','l-notes'];
-    if(needCompany()) req.push('l-company');
-    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent=TR.requiredAll; } return false; } }
+    var req=['l-name','l-phone','l-email','l-country','l-address','l-notes']; if(needCompany()) req.push('l-company');
+    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent=(document.documentElement.lang==='en'?'Please complete all required fields.':'请完整填写所有必填字段。'); } return false; } }
     var email=gv('l-email'); var phone=gv('l-phone').replace(/\\D/g,'');
-    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('l-email'); var t1=document.getElementById('l-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent=TR.invalidEmail; } return false; }
-    if(phone.length<5){ markInvalid('l-phone'); var t2=document.getElementById('l-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent=TR.invalidPhone; } return false; }
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('l-email'); var t1=document.getElementById('l-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent=(document.documentElement.lang==='en'?'Invalid email format.':'邮箱格式不正确。'); } return false; }
+    if(phone.length<5){ markInvalid('l-phone'); var t2=document.getElementById('l-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent=(document.documentElement.lang==='en'?'Invalid phone number.':'电话格式不正确。'); } return false; }
     return true;
   }
-
   function rowTitle(it){ return [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | '); }
-
-  // 渲染购物车（带 +/- 与删除）
   function renderCart(){
     var el=document.getElementById('list-cart-items'); if(!el) return;
-    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+TR.emptyCart+'</div>'; return; }
+    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+(document.documentElement.lang==='en'?'Cart is empty':'购物车为空')+'</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-      '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.item+'</th>'+
-      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.qty+'</th>'+
-      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.price+'</th></tr></thead><tbody>';
+      '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+(document.documentElement.lang==='en'?'Item':'商品')+'</th>'+
+      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+(document.documentElement.lang==='en'?'Qty':'数量')+'</th>'+
+      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+(document.documentElement.lang==='en'?'Price':'价格')+'</th></tr></thead><tbody>';
     cart.forEach(function(it,idx){
       html+='<tr data-idx="'+idx+'">'+
         '<td style="padding:6px;border-bottom:1px solid #f3f4f6">'+rowTitle(it)+'</td>'+
@@ -552,7 +541,7 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     html+='</tbody></table>'; el.innerHTML=html;
   }
 
-  // 列表按钮
+  // 列表中按钮
   document.querySelectorAll('.btn-add').forEach(function(btn){
     btn.addEventListener('click', function(){
       var payload = btn.getAttribute('data-payload') || '';
@@ -563,44 +552,95 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
         else { cart[idx].qty = (cart[idx].qty||1)+1; }
         writeCart(cart); updateTotal();
       }catch(e){}
-      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || TR.added;
+      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || (document.documentElement.lang==='en'?'Added':'已加入');
       setTimeout(function(){ btn.innerText = txt; }, 1200);
     });
   });
   document.querySelectorAll('.btn-checkout').forEach(function(btn){ btn.addEventListener('click', openModal); });
 
-  // 购物车行内事件（数量 +/- 与删除）
+  // 购物车行内事件
   document.addEventListener('click', function(e){
     var t=e.target, trEl, idx, cart;
-    if(t && t.classList && (t.classList.contains('q-inc')||t.classList.contains('q-dec')||t.classList.contains('q-del'))){
-      trEl = t.closest('tr'); if(!trEl) return; idx = Number(trEl.getAttribute('data-idx')||'-1'); if(idx<0) return;
-      cart = readCart(); if(idx>=cart.length) return;
-      if(t.classList.contains('q-inc')) cart[idx].qty = (cart[idx].qty||1)+1;
-      else if(t.classList.contains('q-dec')) cart[idx].qty = Math.max(1,(cart[idx].qty||1)-1);
-      else if(t.classList.contains('q-del')) cart.splice(idx,1);
-      writeCart(cart); renderCart(); updateTotal();
+    if(closestSel(t,'#l-cancel') || t===document.getElementById('list-mask')){ closeModal(); return; }
+    if(closestSel(t,'#l-submit')){
+      if(!validateAll()) return;
+      var order={
+        items: readCart(),
+        contact:{ name: gv('l-name'), phone: gv('l-phone'), email: gv('l-email'),
+          company: gv('l-company'), country: gv('l-country'),
+          address: gv('l-address'), mode: gv('l-mode') || 'B2C', notes: gv('l-notes'),
+          currency: (document.getElementById('l-currency')||{}).value || 'USD',
+          totalText: (document.getElementById('l-total')||{}).textContent || ''
+        },
+        createdAt: new Date().toISOString()
+      };
+      try{
+        var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
+        arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
+        localStorage.setItem('lastOrder', JSON.stringify(order));
+        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=(document.documentElement.lang==='en'?'Submitted (Demo): saved to local orders':'提交成功（演示）：已保存到本地订单列表'); }
+      }catch(e){}
       return;
     }
+
+    if(t && (t as HTMLElement).classList){
+      if((t as HTMLElement).classList.contains('q-inc') || (t as HTMLElement).classList.contains('q-dec') || (t as HTMLElement).classList.contains('q-del')){
+        trEl = (t as HTMLElement).closest('tr'); if(!trEl) return; idx = Number(trEl.getAttribute('data-idx')||'-1'); if(idx<0) return;
+        cart = readCart(); if(idx>=cart.length) return;
+        if((t as HTMLElement).classList.contains('q-inc')) cart[idx].qty = (cart[idx].qty||1)+1;
+        else if((t as HTMLElement).classList.contains('q-dec')) cart[idx].qty = Math.max(1,(cart[idx].qty||1)-1);
+        else if((t as HTMLElement).classList.contains('q-del')) cart.splice(idx,1);
+        writeCart(cart); renderCart(); updateTotal();
+        return;
+      }
+    }
+  });
+  document.addEventListener('change', function(e){
+    var t=e.target;
+    if(t && (t as HTMLElement).id==='l-currency') updateTotal();
+    if(t && (t as HTMLElement).id==='l-mode'){ var star=document.getElementById('l-company-star'); if(star){ star.style.display = ((document.getElementById('l-mode')||{}).value==='B2B')?'inline':'none'; } }
   });
 
-  // 顶栏：我的订单
-  var oMask=document.getElementById('orders-mask'), oModal=document.getElementById('orders-modal');
+  // 顶栏：我的订单 & 模板/上传/注册
+  function isLogin(){ try{ return !!localStorage.getItem('user'); }catch(e){ return false; } }
+  function openReg(){ document.getElementById('reg-mask').style.display='block'; document.getElementById('reg-modal').style.display='flex'; }
+  function closeReg(){ document.getElementById('reg-mask').style.display='none'; document.getElementById('reg-modal').style.display='none'; }
+  function downloadTemplate(){
+    var csv='num,oe,qty\\n# example: 721012,69820-06160,2\\n';
+    var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ImgParts_Demand_Template.csv'; a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 500);
+  }
+  function parseCsv(text){
+    var lines=text.split(/\\r?\\n/), out=[];
+    lines.forEach(function(l){
+      if(!l || /^\\s*#/.test(l)) return;
+      var c=l.split(',').map(function(s){ return s.trim(); });
+      if(c.length>=2){ var num=c[0]||'', oe=c[1]||''; var qty=Number(c[2]||'1'); if(!qty||qty<1) qty=1; out.push({num:num||oe, oe:oe, qty:qty}); }
+    });
+    return out;
+  }
+  function uploadNeeds(){
+    if(!isLogin()){ alert(document.documentElement.lang==='en'?'Please register/login first.':'请先完成注册/登录。'); openReg(); return; }
+    var fi=document.getElementById('needs-file'); if(fi) (fi as HTMLInputElement).click();
+  }
   function readOrders(){ try{ var raw=localStorage.getItem('orders'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
+  var oMask=document.getElementById('orders-mask'), oModal=document.getElementById('orders-modal');
   function openOrders(){ renderOrders(); if(oMask) oMask.style.display='block'; if(oModal) oModal.style.display='flex'; }
   function closeOrders(){ if(oMask) oMask.style.display='none'; if(oModal) oModal.style.display='none'; }
   function renderOrders(){
     var el=document.getElementById('orders-list'); if(!el) return; var list=readOrders();
-    if(!list.length){ el.innerHTML='<div style="color:#6b7280">'+(TR.emptyCart)+'</div>'; return; }
+    if(!list.length){ el.innerHTML='<div style="color:#6b7280">'+(document.documentElement.lang==='en'?'Cart is empty':'购物车为空')+'</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-      '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.createdAt+'</th>'+
-      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.item+'</th>'+
-      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+TR.total+'</th>'+
+      '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb">'+(document.documentElement.lang==='en'?'Created At':'创建时间')+'</th>'+
+      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+(document.documentElement.lang==='en'?'Item':'商品')+'</th>'+
+      '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb">'+(document.documentElement.lang==='en'?'Total':'合计')+'</th>'+
       '</tr></thead><tbody>';
     list.forEach(function(o){
       var count=(o.items||[]).reduce(function(a,b){ return a+(Number(b.qty)||1); },0);
       html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6">'+(o.createdAt||'')+'</td>'+
-            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+count+'</td>'+
-            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6">'+(o.contact&&o.contact.totalText||'')+'</td></tr>';
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+count+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(o.contact&&o.contact.totalText||'')+'</td></tr>';
     });
     html+='</tbody></table>'; el.innerHTML=html;
   }
@@ -624,95 +664,45 @@ export default async function StockPage({ searchParams }: { searchParams?: { [k:
     if(closestSel(t,'#o-close') || t===oMask){ closeOrders(); return; }
     if(closestSel(t,'#o-export')){ exportOrdersCsv(); return; }
     if(closestSel(t,'#o-clear')){ if(confirm('OK?')){ try{ localStorage.removeItem('orders'); }catch(e){} renderOrders(); } return; }
-  });
-
-  // 顶栏：模板/上传/注册
-  function isLogin(){ try{ return !!localStorage.getItem('user'); }catch(e){ return false; } }
-  function openReg(){ document.getElementById('reg-mask').style.display='block'; document.getElementById('reg-modal').style.display='flex'; }
-  function closeReg(){ document.getElementById('reg-mask').style.display='none'; document.getElementById('reg-modal').style.display='none'; }
-  function downloadTemplate(){
-    var csv='num,oe,qty\\n# example: 721012,69820-06160,2\\n';
-    var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ImgParts_Demand_Template.csv'; a.click();
-    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 500);
-  }
-  function parseCsv(text){
-    var lines=text.split(/\\r?\\n/), out=[];
-    lines.forEach(function(l){
-      if(!l || /^\\s*#/.test(l)) return;
-      var c=l.split(',').map(function(s){ return s.trim(); });
-      if(c.length>=2){ var num=c[0]||'', oe=c[1]||''; var qty=Number(c[2]||'1'); if(!qty||qty<1) qty=1; out.push({num:num||oe, oe:oe, qty:qty}); }
-    });
-    return out;
-  }
-  function uploadNeeds(){
-    if(!isLogin()){ alert(TR.needLogin); openReg(); return; }
-    var fi=document.getElementById('needs-file'); if(fi) fi.click();
-  }
-
-  document.addEventListener('click', function(e){
-    var t=e.target;
     if(closestSel(t,'#download-template')){ downloadTemplate(); return; }
     if(closestSel(t,'#upload-needs')){ uploadNeeds(); return; }
     if(closestSel(t,'#btn-register')){ openReg(); return; }
-    if(closestSel(t,'#l-cancel') || t===mask){ closeModal(); return; }
-    if(closestSel(t,'#l-submit')){
-      if(!validateAll()) return;
-      var order={
-        items: readCart(),
-        contact:{ name: gv('l-name'), phone: gv('l-phone'), email: gv('l-email'),
-          company: gv('l-company'), country: gv('l-country'),
-          address: gv('l-address'), mode: gv('l-mode') || 'B2C', notes: gv('l-notes'),
-          currency: (document.getElementById('l-currency')||{}).value || 'USD',
-          totalText: (document.getElementById('l-total')||{}).textContent || ''
-        },
-        createdAt: new Date().toISOString()
-      };
-      try{
-        var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
-        arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
-        localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('l-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=TR.submittedTip; }
-      }catch(e){}
-      return;
-    }
-
-    // 注册弹窗
     if(closestSel(t,'#r-cancel') || t===document.getElementById('reg-mask')){ closeReg(); return; }
     if(closestSel(t,'#r-submit')){
       var nm=gv('r-name'), em=gv('r-email');
-      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent=TR.requiredAll; } return; }
+      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent=(document.documentElement.lang==='en'?'Please complete all required fields.':'请完整填写所有必填字段。'); } return; }
       try{ localStorage.setItem('user', JSON.stringify({name:nm,email:em,ts:Date.now()})); }catch(e){}
       closeReg();
       return;
     }
   });
-
   document.addEventListener('change', function(e){
     var t=e.target;
-    if(t && t.id==='l-currency') updateTotal();
-    if(t && t.id==='l-mode'){ var star=document.getElementById('l-company-star'); if(star){ star.style.display = ((document.getElementById('l-mode')||{}).value==='B2B')?'inline':'none'; } }
-    if(t && t.id==='needs-file'){
-      var f=t.files && t.files[0]; if(!f) return;
+    if(t && (t as HTMLElement).id==='l-currency') updateTotal();
+    if(t && (t as HTMLElement).id==='l-mode'){ var star=document.getElementById('l-company-star'); if(star){ star.style.display = ((document.getElementById('l-mode')||{}).value==='B2B')?'inline':'none'; } }
+    if(t && (t as HTMLElement).id==='needs-file'){
+      var input=t as HTMLInputElement; var f=input.files && input.files[0]; if(!f) return;
       var fr=new FileReader(); fr.onload=function(){ try{
-        var rows=parseCsv(String(fr.result||'')); var cart=readCart();
-        rows.forEach(function(r){ if(!r || !r.num) return; var i=cart.findIndex(function(x){ return String(x.num)===String(r.num); });
+        var text=String(fr.result||''); var lines=text.split(/\\r?\\n/), out=[];
+        lines.forEach(function(l){ if(!l || /^\\s*#/.test(l)) return; var c=l.split(',').map(function(s){ return s.trim(); });
+          if(c.length>=2){ var num=c[0]||'', oe=c[1]||''; var qty=Number(c[2]||'1'); if(!qty||qty<1) qty=1; out.push({num:num||oe, oe:oe, qty:qty}); }
+        });
+        var cart=readCart();
+        out.forEach(function(r){ if(!r || !r.num) return; var i=cart.findIndex(function(x){ return String(x.num)===String(r.num); });
           if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
           else cart[i].qty = (cart[i].qty||1) + r.qty;
         });
-        writeCart(cart); alert(TR.uploadNeeds+' OK'); updateTotal(); renderCart();
+        writeCart(cart); alert((document.documentElement.lang==='en'?'Upload Needs (CSV)':'上传需求 (CSV)')+' OK'); updateTotal(); renderCart();
       }catch(e){} }; fr.readAsText(f, 'utf-8');
-      // 重置文件控件
-      try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
+      // 重置
+      try{ input.value=''; }catch(_){}
     }
   });
 
-  // 初始
+  // 初始合计
   updateTotal();
-})();`;
-          })(tr, modeCookie)
-        }}
-      />
+})();
+      `}</Script>
     </>
   );
 }

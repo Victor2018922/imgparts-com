@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
+import Script from "next/script";
 
 /* ------------ Types ------------ */
 type Item = {
@@ -151,7 +152,7 @@ export default async function DetailPage({
   const p = Number((searchParams?.p as string) ?? "0") || 0;
   const size = Number((searchParams?.s as string) ?? String(SEARCH_SCAN_SIZE)) || SEARCH_SCAN_SIZE;
 
-  // 扫描附近分页直到找到 num
+  // 找到目标项
   let item: Item | null = null; let foundPage = p;
   const centerOrder = (function centered(pp: number, max: number) {
     const out: number[] = []; let step = 0;
@@ -183,29 +184,20 @@ export default async function DetailPage({
     );
   }
 
-  // 图片集合：合并→清洗→去重→补足 ≥18
+  // 图片集合：去重并补足 ≥18
   const raw: string[] = item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
   const seen = new Set<string>();
-  const cleaned = raw
-    .filter(Boolean)
-    .map((s) => (typeof s === "string" ? s.trim() : ""))
-    .filter((s) => s.length > 0)
+  const cleaned = raw.filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
     .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-
   let gallery = cleaned.length ? [...cleaned] : [
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==",
   ];
-  for (let i = 0; gallery.length < 18 && i < 36; i++) {
-    gallery.push(gallery[i % gallery.length]);
-  }
-  const preloadImgs = gallery.slice(0, 8);
+  for (let i = 0; gallery.length < 18 && i < 36; i++) gallery.push(gallery[i % gallery.length]);
 
   const scn = stdCn(item);
   const sen = stdEn(item);
   const partEn = sen || (langCookie === "en" ? cnPartToEn(scn) : "");
-
   const backHref = `/stock?p=${foundPage}&s=${size}`;
-
   const title = [item.brand, item.product, item.oe, item.num].filter(Boolean).join(" | ");
   const payload = JSON.stringify({
     num: item.num ?? "", price: item.price ?? "", brand: item.brand ?? "", product: item.product ?? "", oe: item.oe ?? "",
@@ -213,7 +205,7 @@ export default async function DetailPage({
 
   return (
     <>
-      {preloadImgs.map((src, i) => (<link key={'preload-'+i} rel="preload" as="image" href={src} />))}
+      {gallery.slice(0,8).map((src, i) => (<link key={'preload-'+i} rel="preload" as="image" href={src} />))}
 
       <main style={{ padding: "24px 0" }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>{title}</h1>
@@ -230,15 +222,11 @@ export default async function DetailPage({
             </div>
 
             {/* 缩略图横向轮播 */}
-            <div id="thumbs" style={{
-              marginTop: 12, display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8
-            }}>
+            <div id="thumbs" style={{ marginTop: 12, display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8 }}>
               {gallery.map((src, idx) => (
-                <button key={idx} className={"thumb"} data-idx={idx}
-                        style={{
-                          flex: "0 0 auto", width: 86, height: 86, borderRadius: 10, overflow: "hidden",
-                          border: idx === 0 ? "2px solid #2563eb" : "1px solid #e5e7eb", cursor: "pointer", background: "#fff"
-                        }}>
+                <button key={idx} className="thumb" data-idx={idx}
+                        style={{ flex: "0 0 auto", width: 86, height: 86, borderRadius: 10, overflow: "hidden",
+                                 border: idx === 0 ? "2px solid #2563eb" : "1px solid #e5e7eb", cursor: "pointer", background: "#fff" }}>
                   <img src={src} alt={"thumb-"+idx} loading={idx < 6 ? "eager" : "lazy"}
                        style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 </button>
@@ -281,7 +269,7 @@ export default async function DetailPage({
         <div style={{ marginTop: 24, color: "#6b7280" }}>{tr.datasource}</div>
       </main>
 
-      {/* 结算弹窗（与列表页一致，带 +/- 与删除） */}
+      {/* 结算弹窗 */}
       <div id="mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
       <div id="modal" role="dialog" aria-modal="true" aria-labelledby="d-title"
            style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
@@ -328,14 +316,10 @@ export default async function DetailPage({
         </div>
       </div>
 
-      {/* 行为脚本 */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html: (function(tr, mode, gallery){
-            return `
+      {/* 交互脚本：afterInteractive 保证执行 */}
+      <Script id="detail-page-js" strategy="afterInteractive">{`
 (function(){
-  var TR=${JSON.stringify(tr)}, MODE='${mode}', GALLERY=${JSON.stringify(gallery)};
-
+  var GALLERY = ${JSON.stringify(gallery)};
   // 轮播
   var idx=0, main=document.getElementById('main-img'), thumbs=document.querySelectorAll('#thumbs .thumb'), timer;
   function show(i){ idx=(i+GALLERY.length)%GALLERY.length; if(main){ main.src=GALLERY[idx]; }
@@ -355,8 +339,6 @@ export default async function DetailPage({
     if(i===-1){ cart.push({ num:it.num, qty:1, price:it.price, brand:it.brand, product:it.product, oe:it.oe }); }
     else { cart[i].qty=(cart[i].qty||1)+1; } writeCart(cart);
   }
-
-  // 金额
   var RATES={ USD:1, CNY:7.2, EUR:0.92 };
   function computeTotal(currency){
     var cart=readCart();
@@ -366,7 +348,7 @@ export default async function DetailPage({
   }
   function updateTotal(){
     var cur=(document.getElementById('d-currency')||{}).value || 'USD';
-    var el=document.getElementById('d-total'); if(el) el.textContent = TR.total+'：'+computeTotal(cur);
+    var el=document.getElementById('d-total'); if(el) el.textContent = (document.documentElement.lang==='en'?'Total':'合计')+'：'+computeTotal(cur);
   }
 
   // 弹窗
@@ -376,32 +358,28 @@ export default async function DetailPage({
   function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
   function markInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#dc2626'; el.focus(); } }
   function clearInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#e5e7eb'; } }
-  function clearTip(){ var tip=document.getElementById('d-tip'); if(tip){ tip.style.color='#111827'; tip.textContent=''; } }
-
+  function clearTip(){ var tip=document.getElementById('d-tip'); if(tip){ tip.textContent=''; tip.style.color='#111827'; } }
   function needCompany(){ var m=(document.getElementById('d-mode')||{}).value || 'B2C'; return m==='B2B'; }
   function syncCompanyStar(){ var star=document.getElementById('d-company-star'); if(star){ star.style.display = needCompany() ? 'inline' : 'none'; } }
 
   function validateAll(){
     clearTip();
     ['d-name','d-phone','d-email','d-country','d-address','d-notes','d-company'].forEach(clearInvalid);
-    var req=['d-name','d-phone','d-email','d-country','d-address','d-notes'];
-    if(needCompany()) req.push('d-company');
-    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('d-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent=TR.requiredAll; } return false; } }
+    var req=['d-name','d-phone','d-email','d-country','d-address','d-notes']; if(needCompany()) req.push('d-company');
+    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('d-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent=(document.documentElement.lang==='en'?'Please complete all required fields.':'请完整填写所有必填字段。'); } return false; } }
     var email=gv('d-email'); var phone=gv('d-phone').replace(/\\D/g,'');
-    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('d-email'); var t1=document.getElementById('d-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent=TR.invalidEmail; } return false; }
-    if(phone.length<5){ markInvalid('d-phone'); var t2=document.getElementById('d-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent=TR.invalidPhone; } return false; }
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('d-email'); var t1=document.getElementById('d-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent=(document.documentElement.lang==='en'?'Invalid email format.':'邮箱格式不正确。'); } return false; }
+    if(phone.length<5){ markInvalid('d-phone'); var t2=document.getElementById('d-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent=(document.documentElement.lang==='en'?'Invalid phone number.':'电话格式不正确。'); } return false; }
     return true;
   }
-
   function rowTitle(it){ return [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | '); }
-
   function renderCart(){
     var el=document.getElementById('cart-items'); if(!el) return;
-    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+TR.emptyCart+'</div>'; return; }
+    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+(document.documentElement.lang==='en'?'Cart is empty':'购物车为空')+'</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.item+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+(document.documentElement.lang==='en'?'Item':'商品')+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+(document.documentElement.lang==='en'?'Qty':'数量')+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+(document.documentElement.lang==='en'?'Price':'价格')+'</th></tr></thead><tbody>';
     cart.forEach(function(it,idx){
       html+='<tr data-idx="'+idx+'"><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+rowTitle(it)+'</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+
@@ -415,7 +393,7 @@ export default async function DetailPage({
     html+='</tbody></table>'; el.innerHTML=html;
   }
 
-  // 按钮
+  // 按钮绑定
   var btnAdd=document.getElementById('d-add');
   if(btnAdd){
     btnAdd.addEventListener('click', function(){
@@ -424,25 +402,28 @@ export default async function DetailPage({
         var it = payload? JSON.parse(payload.replace(/&quot;/g,'"')) : null; if(!it) return;
         addCart(it);
       }catch(e){}
-      var txt = btnAdd.innerText; btnAdd.innerText = btnAdd.getAttribute('data-added') || TR.added;
+      var txt = btnAdd.innerText; btnAdd.innerText = btnAdd.getAttribute('data-added') || (document.documentElement.lang==='en'?'Added':'已加入');
       setTimeout(function(){ btnAdd.innerText = txt; }, 1200);
     });
   }
   var btnCheckout=document.getElementById('d-checkout');
   if(btnCheckout){ btnCheckout.addEventListener('click', openModal); }
+
   document.addEventListener('click', function(e){
     var t=e.target, trEl, idx, cart;
-    if(t && t.id==='d-cancel'){ closeModal(); return; }
-    if(t && t.classList && (t.classList.contains('q-inc')||t.classList.contains('q-dec')||t.classList.contains('q-del'))){
-      trEl = t.closest('tr'); if(!trEl) return; idx = Number(trEl.getAttribute('data-idx')||'-1'); if(idx<0) return;
-      cart = readCart(); if(idx>=cart.length) return;
-      if(t.classList.contains('q-inc')) cart[idx].qty = (cart[idx].qty||1)+1;
-      else if(t.classList.contains('q-dec')) cart[idx].qty = Math.max(1,(cart[idx].qty||1)-1);
-      else if(t.classList.contains('q-del')) cart.splice(idx,1);
-      writeCart(cart); renderCart(); updateTotal();
-      return;
+    if(t && (t as HTMLElement).id==='d-cancel' || t===document.getElementById('mask')){ closeModal(); return; }
+    if(t && (t as HTMLElement).classList){
+      if((t as HTMLElement).classList.contains('q-inc') || (t as HTMLElement).classList.contains('q-dec') || (t as HTMLElement).classList.contains('q-del')){
+        trEl = (t as HTMLElement).closest('tr'); if(!trEl) return; idx = Number(trEl.getAttribute('data-idx')||'-1'); if(idx<0) return;
+        cart = readCart(); if(idx>=cart.length) return;
+        if((t as HTMLElement).classList.contains('q-inc')) cart[idx].qty = (cart[idx].qty||1)+1;
+        else if((t as HTMLElement).classList.contains('q-dec')) cart[idx].qty = Math.max(1,(cart[idx].qty||1)-1);
+        else if((t as HTMLElement).classList.contains('q-del')) cart.splice(idx,1);
+        writeCart(cart); renderCart(); updateTotal();
+        return;
+      }
     }
-    if(t && t.id==='d-submit'){
+    if(t && (t as HTMLElement).id==='d-submit'){
       if(!validateAll()) return;
       var order={
         items: readCart(),
@@ -458,22 +439,20 @@ export default async function DetailPage({
         var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
         arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('d-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=TR.submittedTip; }
+        var tip=document.getElementById('d-tip'); if(tip){ tip.style.color='#059669'; tip.textContent=(document.documentElement.lang==='en'?'Submitted (Demo): saved to local orders':'提交成功（演示）：已保存到本地订单列表'); }
       }catch(e){}
       return;
     }
   });
   document.addEventListener('change', function(e){
     var t=e.target;
-    if(t && t.id==='d-currency') updateTotal();
-    if(t && t.id==='d-mode'){ var star=document.getElementById('d-company-star'); if(star){ star.style.display = ((document.getElementById('d-mode')||{}).value==='B2B')?'inline':'none'; } }
+    if(t && (t as HTMLElement).id==='d-currency') updateTotal();
+    if(t && (t as HTMLElement).id==='d-mode'){ var star=document.getElementById('d-company-star'); if(star){ star.style.display = ((document.getElementById('d-mode')||{}).value==='B2B')?'inline':'none'; } }
   });
 
   updateTotal();
-})();`;
-          })(tFactory(langCookie), modeCookie, gallery)
-        }}
-      />
+})();
+      `}</Script>
     </>
   );
 }
