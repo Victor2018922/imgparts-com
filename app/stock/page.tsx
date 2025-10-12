@@ -16,10 +16,12 @@ type Item = {
   [k: string]: any;
 };
 
+// 基本常量
 const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
 const PAGE_SIZE = 20;
 const REQ_TIMEOUT = 6000;
 
+// 文本（中英文）
 function tFactory(lang: "zh" | "en") {
   return lang === "en"
     ? {
@@ -64,6 +66,7 @@ function tFactory(lang: "zh" | "en") {
       };
 }
 
+// 从 API 取一页
 async function fetchPageOnce(page: number, size = PAGE_SIZE, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
   const ctrl = new AbortController();
@@ -83,6 +86,7 @@ async function fetchPageOnce(page: number, size = PAGE_SIZE, timeoutMs = REQ_TIM
   }
 }
 
+// 小的稳定重试（两次）
 async function fetchPageStable(page: number): Promise<Item[]> {
   for (let i = 0; i < 2; i++) {
     const r = await fetchPageOnce(page);
@@ -91,6 +95,7 @@ async function fetchPageStable(page: number): Promise<Item[]> {
   return [];
 }
 
+// 去重并返回首图
 function primaryImage(it: Item): string {
   const raw = it.images || it.pics || it.gallery || (it.image ? [it.image] : []) || [];
   const uniq: string[] = [];
@@ -108,6 +113,7 @@ function primaryImage(it: Item): string {
   return uniq[0] || "/placeholder.png";
 }
 
+// 页面主组件（Server Component 渲染列表）
 export default async function StockPage({
   searchParams,
 }: {
@@ -119,11 +125,11 @@ export default async function StockPage({
   const modeCookie = cookies().get("mode")?.value === "B2B" ? "B2B" : "B2C";
   const tr = tFactory(langCookie);
 
+  // 获取数据（如果有 q，优先在当前页做过滤以加快响应）
   let rows: Item[] = [];
   try {
-    if (!q) {
-      rows = await fetchPageStable(p);
-    } else {
+    if (!q) rows = await fetchPageStable(p);
+    else {
       const list = await fetchPageStable(p);
       const k = q.toLowerCase();
       rows = list.filter((it) => {
@@ -151,7 +157,7 @@ export default async function StockPage({
   const prevHref = p > 0 ? mkHref(p - 1) : "#";
   const nextHref = hasNext ? mkHref(p + 1) : "#";
 
-  // 预加载前几张图以提升首屏体验
+  // 预加载前几张图以提高首屏
   const preloads = rows.slice(0, 6).map(primaryImage);
 
   return (
@@ -200,17 +206,22 @@ export default async function StockPage({
               const payload = JSON.stringify({ num: it.num ?? "", price: it.price ?? "", brand: it.brand ?? "", product: it.product ?? "", oe: it.oe ?? "" }).replace(/"/g, "&quot;");
               return (
                 <div key={String(it.num ?? Math.random())} style={{ background: "#fff", border: "1px solid #eee", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                  {/* 点击图片或标题为普通链接，保证跳转稳定 */}
                   <Link href={href}>
                     <div style={{ width: "100%", aspectRatio: "1/1", overflow: "hidden", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       <img src={img} alt={String(it.product ?? "")} loading="eager" fetchPriority="high" decoding="sync" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
                     </div>
                   </Link>
+
                   <Link href={href} style={{ textDecoration: "none", color: "#111", fontWeight: 700 }}>{title}</Link>
+
                   <div style={{ color: "#444", fontSize: 13 }}>
                     {it.oe && <div>{tr.oe}：{it.oe}</div>}
                     {typeof it.price !== "undefined" && <div>{tr.price}：{String(it.price)}</div>}
                     {typeof it.stock !== "undefined" && <div>{tr.stock}：{String(it.stock)}</div>}
                   </div>
+
+                  {/* 这两个按钮我们会在客户端脚本里用 querySelectorAll 直接绑定事件，确保可点击 */}
                   <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
                     <button className="btn-add" data-payload={payload} style={{ flex: 1, padding: "8px 10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>{tr.addToCart}</button>
                     <button className="btn-checkout" style={{ flex: 1, padding: "8px 10px", background: "#10b981", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>{tr.checkout}</button>
@@ -267,144 +278,141 @@ export default async function StockPage({
         </div>
       </div>
 
-      <Script id="stock-page-script" strategy="afterInteractive">{`
+      {/* 稳定的客户端脚本：明确绑定按钮事件（避免事件委托误拦截） */}
+      <Script id="stock-bindings" strategy="afterInteractive">{`
 (function(){
-  function $(s){ return document.querySelector(s); }
-  function $all(s){ return Array.from(document.querySelectorAll(s)); }
+  // 辅助函数
+  function $(sel){ return document.querySelector(sel); }
+  function $all(sel){ return Array.from(document.querySelectorAll(sel)); }
   function readCart(){ try{ return JSON.parse(localStorage.getItem('cart')||'[]'); }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
-  function computeSum(currency){
-    var cart=readCart(); var sum=cart.reduce(function(acc,it){ return acc + (Number(it.price)||0)*(Number(it.qty)||1); },0);
+  function computeTotal(currency){
+    var cart = readCart(); var sum = cart.reduce(function(a,b){ return a + (Number(b.price)||0)*(Number(b.qty)||1); },0);
     var rates = { USD:1, CNY:7.2, EUR:0.92 };
-    var val = sum * (rates[currency]||1);
+    var v = sum * (rates[currency]||1);
     var sym = currency==='CNY'?'¥':(currency==='EUR'?'€':'$');
-    return sym + ' ' + (Math.round(val*100)/100).toFixed(2);
+    return sym + ' ' + (Math.round(v*100)/100).toFixed(2);
   }
-
-  // 渲染弹窗购物车（列出每行、数量、价格，并显示合计）
   function renderCartList(){
-    var el = document.getElementById('list-cart-items');
+    var el = $('#list-cart-items');
     if(!el) return;
     var cart = readCart();
-    if(!cart.length){ el.innerHTML = '<div style="color:#6b7280">购物车为空</div>'; document.getElementById('l-total').textContent = '合计：--'; return; }
+    if(!cart.length){ el.innerHTML = '<div style="color:#6b7280">购物车为空</div>'; $('#l-total') && ($('#l-total').textContent = '合计：--'); return; }
     var html = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #f3f4f6">商品</th><th style="text-align:right;padding:6px;border-bottom:1px solid #f3f4f6">数量</th><th style="text-align:right;padding:6px;border-bottom:1px solid #f3f4f6">价格</th></tr></thead><tbody>';
-    cart.forEach(function(it, idx){
-      html += '<tr data-idx="'+idx+'"><td style="padding:8px;border-bottom:1px solid #f3f4f6">'+(it.brand||'')+' '+(it.product||'')+'</td>';
-      html += '<td style="padding:8px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td>';
-      html += '<td style="padding:8px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
+    cart.forEach(function(it){
+      html += '<tr><td style="padding:8px;border-bottom:1px solid #f3f4f6">'+(it.brand||'')+' '+(it.product||'')+'</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.qty||1)+'</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f3f4f6">'+(it.price||'')+'</td></tr>';
     });
     html += '</tbody></table>';
     el.innerHTML = html;
-    var cur = (document.getElementById('l-currency')||{}).value || 'USD';
-    var total = computeSum(cur);
-    document.getElementById('l-total').textContent = '合计：' + total;
+    var cur = ($('#l-currency')||{}).value || 'USD';
+    $('#l-total') && ($('#l-total').textContent = '合计：' + computeTotal(cur));
   }
 
-  // 验证必填（B2B 公司必填）
-  function validateAll(){
-    var mode = (document.getElementById('l-mode')||{}).value || 'B2C';
-    var needCompany = mode==='B2B';
-    var required = ['l-name','l-phone','l-email','l-country','l-address'];
-    if(needCompany) required.push('l-company');
-    var ok=true;
-    required.forEach(function(id){
-      var el = document.getElementById(id) as HTMLInputElement|null;
-      if(!el || !el.value || String(el.value).trim()===''){ ok=false; if(el) el.style.borderColor='#dc2626'; }
-      else if(el) el.style.borderColor = '#e5e7eb';
+  // 绑定：加入购物车（为所有当前存在的按钮绑定，并监听 future DOM changes）
+  function bindAddButtons(){
+    $all('.btn-add').forEach(function(btn){
+      // 避免重复绑定
+      if(btn.getAttribute('data-bound')==='1') return;
+      btn.setAttribute('data-bound','1');
+      btn.addEventListener('click', function(e){
+        e.preventDefault();
+        var payload = btn.getAttribute('data-payload') || '';
+        try{
+          var it = payload ? JSON.parse(payload.replace(/&quot;/g,'"')) : null;
+          if(it){
+            var cart = readCart();
+            var idx = cart.findIndex(function(x){ return String(x.num) === String(it.num); });
+            if(idx === -1) cart.push({ num: it.num, price: it.price, qty: 1, brand: it.brand, product: it.product, oe: it.oe });
+            else cart[idx].qty = (cart[idx].qty||1) + 1;
+            writeCart(cart);
+            // 视觉反馈
+            var old = btn.innerText;
+            btn.innerText = '已加入';
+            setTimeout(function(){ btn.innerText = old; }, 900);
+          }
+        }catch(e){}
+      });
     });
-    var email = (document.getElementById('l-email') as HTMLInputElement|null);
-    if(email && !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email.value)){ ok=false; email.style.borderColor='#dc2626'; }
-    if(!ok){ var tip=document.getElementById('l-tip'); if(tip) tip.textContent='请完整填写所有必填字段。'; }
-    return ok;
   }
 
-  // 主事件委托（先判断是否需要放行原生链接）
-  document.addEventListener('click', function(e){
-    var t = e.target as HTMLElement;
-    if(!t) return;
+  function bindCheckoutButtons(){
+    $all('.btn-checkout').forEach(function(btn){
+      if(btn.getAttribute('data-bound-check')==='1') return;
+      btn.setAttribute('data-bound-check','1');
+      btn.addEventListener('click', function(e){
+        e.preventDefault();
+        $('#list-mask').style.display = 'block';
+        $('#list-modal').style.display = 'block';
+        renderCartList();
+      });
+    });
+  }
 
-    // 先判断是否点中了一个 <a href>（或者其内部），如果是且并非点在“按钮行为”上，则放行（不阻断原生导航）
-    var anc = t.closest ? t.closest('a[href]') : null;
-    // 判断是否点中了需要脚本处理的“按钮区域”
-    var inAdd = t.closest && !!t.closest('.btn-add');
-    var inCheckout = t.closest && !!t.closest('.btn-checkout');
-    var inDownload = t.id === 'download-template' || (!!t.closest && !!t.closest('#download-template'));
-    var inUpload = t.id === 'upload-needs' || (!!t.closest && !!t.closest('#upload-needs'));
-    var inRegister = t.id === 'btn-register' || (!!t.closest && !!t.closest('#btn-register'));
-    // 如果命中链接并且没有命中上面这些按钮区域，则直接放行（让浏览器处理导航）
-    if(anc && !inAdd && !inCheckout && !inDownload && !inUpload && !inRegister){
-      return; // allow link navigation
-    }
+  // 绑定顶部小按钮（语言/模式/模板/上传/注册） - 直接处理
+  function bindTopButtons(){
+    $('#lang-zh') && $('#lang-zh').addEventListener('click', function(){ document.cookie='lang=zh; path=/; max-age='+(3600*24*365); location.reload(); });
+    $('#lang-en') && $('#lang-en').addEventListener('click', function(){ document.cookie='lang=en; path=/; max-age='+(3600*24*365); location.reload(); });
+    $('#mode-b2c') && $('#mode-b2c').addEventListener('click', function(){ document.cookie='mode=B2C; path=/; max-age='+(3600*24*365); location.reload(); });
+    $('#mode-b2b') && $('#mode-b2b').addEventListener('click', function(){ document.cookie='mode=B2B; path=/; max-age='+(3600*24*365); location.reload(); });
+    $('#download-template') && $('#download-template').addEventListener('click', function(){
+      var csv='num,oe,qty\\n#example:721012,69820-06160,2\\n';
+      var b=new Blob([csv],{type:'text/csv'}); var a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='ImgParts_Template.csv'; a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); },500);
+    });
+    $('#upload-needs') && $('#upload-needs').addEventListener('click', function(){ if(!localStorage.getItem('user')){ alert('请先注册/登录（演示）'); } else { alert('打开文件选择（演示）'); } });
+    $('#btn-register') && $('#btn-register').addEventListener('click', function(){ alert('注册/登录（演示）'); });
+  }
 
-    // 处理翻页顶部语言/模式/模板/上传/注册等按钮
-    if(t.id === 'lang-zh'){ document.cookie='lang=zh; path=/; max-age='+(3600*24*365); location.reload(); return; }
-    if(t.id === 'lang-en'){ document.cookie='lang=en; path=/; max-age='+(3600*24*365); location.reload(); return; }
-    if(t.id === 'mode-b2c'){ document.cookie='mode=B2C; path=/; max-age='+(3600*24*365); location.reload(); return; }
-    if(t.id === 'mode-b2b'){ document.cookie='mode=B2B; path=/; max-age='+(3600*24*365); location.reload(); return; }
-    if(t.id === 'download-template'){ var csv='num,oe,qty\\n#example:721012,69820-06160,2\\n'; var b=new Blob([csv],{type:'text/csv'}); var a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='ImgParts_Template.csv'; a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); },500); return; }
-    if(t.id === 'upload-needs'){ if(!localStorage.getItem('user')){ alert('请先注册/登录（演示）'); return; } alert('打开文件选择（演示）'); return; }
-    if(t.id === 'btn-register'){ alert('注册 / 登录（演示）'); return; }
-
-    // 列表加入购物车按钮
-    var addBtn = t.closest && t.closest('.btn-add');
-    if(addBtn){
-      var payload = (addBtn as HTMLElement).getAttribute('data-payload') || '';
+  // 结算弹窗内部绑定
+  function bindModalButtons(){
+    $('#l-cancel') && $('#l-cancel').addEventListener('click', function(){ $('#list-mask').style.display='none'; $('#list-modal').style.display='none'; });
+    $('#list-mask') && $('#list-mask').addEventListener('click', function(){ $('#list-mask').style.display='none'; $('#list-modal').style.display='none'; });
+    $('#l-submit') && $('#l-submit').addEventListener('click', function(){
+      // 必填校验（B2B 要求公司）
+      var mode = ($('#l-mode')||{}).value || 'B2C';
+      var required = ['l-name','l-phone','l-email','l-country','l-address'];
+      if(mode==='B2B') required.push('l-company');
+      var ok=true;
+      required.forEach(function(id){
+        var el = document.getElementById(id) as HTMLInputElement|null;
+        if(!el || !el.value || String(el.value).trim()===''){ ok=false; if(el) el.style.borderColor='#dc2626'; }
+        else if(el) el.style.borderColor = '#e5e7eb';
+      });
+      var email = (document.getElementById('l-email') as HTMLInputElement|null);
+      if(email && !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email.value)){ ok=false; email.style.borderColor='#dc2626'; }
+      if(!ok){ var tip=document.getElementById('l-tip'); if(tip) tip.textContent='请完整填写所有必填字段。'; return; }
       try{
-        var it = payload ? JSON.parse(payload.replace(/&quot;/g,'"')) : null;
-        if(it){
-          var cart = readCart();
-          var idx = cart.findIndex(function(x){ return String(x.num) === String(it.num); });
-          if(idx === -1) cart.push({ num: it.num, price: it.price, qty: 1, brand: it.brand, product: it.product, oe: it.oe });
-          else cart[idx].qty = (cart[idx].qty||1) + 1;
-          writeCart(cart);
-        }
-      }catch(e){}
-      var oldText = (addBtn as HTMLElement).innerText;
-      try{ (addBtn as HTMLElement).innerText = '已加入'; }catch(_){} 
-      setTimeout(function(){ try{ (addBtn as HTMLElement).innerText = oldText; }catch(_){} }, 1100);
-      return;
-    }
-
-    // 列表去结算
-    var ck = t.closest && t.closest('.btn-checkout');
-    if(ck){
-      $('#list-mask').style.display = 'block';
-      $('#list-modal').style.display = 'block';
-      renderCartList();
-      return;
-    }
-
-    // 弹窗取消或遮罩
-    if(t.id === 'l-cancel' || t.id === 'list-mask'){ $('#list-mask').style.display='none'; $('#list-modal').style.display='none'; return; }
-
-    // 弹窗货币更换（由 change 事件处理也可）
-    if(t.id === 'l-submit'){
-      if(!validateAll()) return;
-      var orders = localStorage.getItem('orders') || '[]';
-      try{
+        var orders = localStorage.getItem('orders') || '[]';
         var arr = JSON.parse(orders);
-        arr.push({ items: readCart(), createdAt: new Date().toISOString(), totalText: document.getElementById('l-total')?.textContent || '' });
+        arr.push({ items: readCart(), createdAt: new Date().toISOString(), totalText: ($('#l-total')||{}).textContent || '' });
         localStorage.setItem('orders', JSON.stringify(arr));
         localStorage.removeItem('cart');
-        alert('订单已保存（本地模拟）');
+        alert('订单已保存（本地演示）');
         $('#list-mask').style.display='none'; $('#list-modal').style.display='none';
-      }catch(e){ alert('保存失败'); }
-      return;
-    }
-  });
+      }catch(e){ alert('提交失败'); }
+    });
+    $('#l-currency') && $('#l-currency').addEventListener('change', function(){ renderCartList(); });
+    $('#l-mode') && $('#l-mode').addEventListener('change', function(){ /* UI 可响应 B2B/B2C 公司必填提示 */ });
+  }
 
-  // 变更事件（货币切换、模式切换等）
-  document.addEventListener('change', function(e){
-    var t = e.target as HTMLElement;
-    if(!t) return;
-    if((t as HTMLElement).id === 'l-currency'){ renderCartList(); }
-    if((t as HTMLElement).id === 'l-mode'){ /* 可根据 B2B/B2C 调整公司必填提示 */ }
-  });
+  // 初始化绑定（并设置简单的 mutation observer，若 DOM 后续更新可再次绑定）
+  function initBindings(){
+    bindTopButtons();
+    bindAddButtons();
+    bindCheckoutButtons();
+    bindModalButtons();
+  }
 
-  // 初始：如果弹窗开启则渲染
-  renderCartList();
+  // MutationObserver：当新节点插入时再次绑定（比如局部重新渲染）
+  var mo = new MutationObserver(function(){ initBindings(); });
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  // 首次执行
+  document.addEventListener('DOMContentLoaded', function(){ initBindings(); renderCartList(); });
+  // 也在短延迟后再执行一次以覆盖 SSR 渲染之后的状态
+  setTimeout(function(){ initBindings(); renderCartList(); }, 600);
 })();
 `}</Script>
     </>
   );
 }
+
