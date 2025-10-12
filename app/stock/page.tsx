@@ -1,9 +1,18 @@
 "use client";
 import React, { useEffect, useState } from "react";
 
+interface Product {
+  id: string;
+  productName?: string;
+  partName?: string;
+  brandName?: string;
+  price?: number;
+  imageUrl?: string;
+}
+
 export default function StockPage() {
-  const [products, setProducts] = useState([]);
-  const [cart, setCart] = useState([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [cart, setCart] = useState<Product[]>([]);
 
   // 拉取产品数据
   useEffect(() => {
@@ -22,7 +31,7 @@ export default function StockPage() {
   }, []);
 
   // 加入购物车功能
-  const handleAddToCart = (item) => {
+  const handleAddToCart = (item: Product) => {
     setCart((prev) => [...prev, item]);
     alert(`已加入购物车：${item.productName || item.partName || "未命名商品"}`);
   };
@@ -34,22 +43,18 @@ export default function StockPage() {
       return;
     }
     alert(`去结算，当前共有 ${cart.length} 个商品。`);
-    // 未来可以跳转到 checkout 页面
-    // router.push('/checkout');
   };
 
   // 查看详情功能
-  const handleViewDetails = (item) => {
+  const handleViewDetails = (item: Product) => {
     alert(`查看详情：${item.productName || item.partName}`);
-    // 未来可以跳转到详情页
-    // router.push(`/product/${item.id}`);
   };
 
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">库存列表</h1>
 
-      {/* 按钮区域 */}
+      {/* 去结算按钮 */}
       <div className="mb-4 flex gap-4">
         <button
           onClick={handleCheckout}
@@ -75,7 +80,7 @@ export default function StockPage() {
               {item.productName || item.partName || "未命名商品"}
             </h2>
             <p className="text-gray-600 text-sm mb-2">
-              品牌：{item.brandName || "未知"}  
+              品牌：{item.brandName || "未知"}
             </p>
             <p className="text-gray-800 font-bold mb-3">
               价格：{item.price ? `￥${item.price}` : "暂无报价"}
@@ -101,4 +106,5 @@ export default function StockPage() {
     </div>
   );
 }
+
 
