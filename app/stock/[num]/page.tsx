@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
+import Script from "next/script";
 
+/* ------------ Types ------------ */
 type Item = {
   num?: string; brand?: string; product?: string; oe?: string; model?: string;
   year?: string | number; price?: string | number; stock?: string | number;
@@ -11,98 +13,111 @@ type Item = {
   [k: string]: any;
 };
 
+/* ------------ Const ------------ */
 const API_BASE = "https://niuniuparts.com:6001/scm-product/v1/stock2";
+const SEARCH_SCAN_SIZE = 200;
+const MAX_SCAN_PAGES = 10;
+const REQ_TIMEOUT = 7000;
 
+/* ------------ i18n ------------ */
 function tFactory(lang: "zh" | "en") {
   return lang === "en"
     ? {
-        backToList: "Back to list",
+        back: "Back to List",
+        brand: "Brand",
+        oe: "OE",
+        price: "Price",
         partName: "Part Name",
-        summary: "Summary",
-        description: "Description",
-        brand: "Brand", product: "Product", oe: "OE", price: "Price", stock: "Stock",
-        addToCart: "Add to Cart", added: "Added", checkout: "Proceed to Checkout",
-        submitOrder: "Submit Order", cancel: "Cancel",
+        addToCart: "Add to Cart",
+        added: "Added",
+        checkout: "Proceed to Checkout",
+        submitOrder: "Submit Order",
+        cancel: "Cancel",
         contactName: "Name", phone: "Phone", email: "Email",
-        company: "Company",
-        country: "Country", address: "Address", mode: "Mode", note: "Notes",
-        currency: "Currency", total: "Total",
-        b2c: "B2C", b2b: "B2B",
+        company: "Company", country: "Country", address: "Address", mode: "Mode", note: "Notes",
+        currency: "Currency", total: "Total", b2c: "B2C", b2b: "B2B",
+        emptyCart: "Cart is empty", qty: "Qty", item: "Item",
         submittedTip: "Submitted (Demo): saved to local orders",
         requiredAll: "Please complete all required fields.",
         invalidEmail: "Invalid email format.",
         invalidPhone: "Invalid phone number.",
-        item: "Item", qty: "Qty",
-        downloadTpl: "Download Template", uploadNeeds: "Upload Needs (CSV)", register: "Register", hi: "Hi",
-        needLogin: "Please register/login first.",
-        uploadOk: "Uploaded: items have been added to cart.",
+        notFound: (n: string) => `Not found: ${n}`,
+        datasource: "Data: niuniuparts.com (preview)",
+        prevItem: "Previous",
+        nextItem: "Next",
       }
     : {
-        backToList: "返回列表",
+        back: "返回列表",
+        brand: "品牌",
+        oe: "OE",
+        price: "价格",
         partName: "配件名称",
-        summary: "Summary",
-        description: "Description",
-        brand: "品牌", product: "品名", oe: "OE", price: "价格", stock: "库存",
-        addToCart: "加入购物车", added: "已加入", checkout: "去结算",
-        submitOrder: "提交订单", cancel: "取消",
+        addToCart: "加入购物车",
+        added: "已加入",
+        checkout: "去结算",
+        submitOrder: "提交订单",
+        cancel: "取消",
         contactName: "姓名 / Name", phone: "电话 / Phone", email: "邮箱 / Email",
-        company: "公司",
-        country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
-        currency: "货币 / Currency", total: "合计",
-        b2c: "B2C", b2b: "B2B",
+        company: "公司", country: "国家 / Country", address: "地址 / Address", mode: "交易模式", note: "备注 / Notes",
+        currency: "货币 / Currency", total: "合计", b2c: "B2C", b2b: "B2B",
+        emptyCart: "购物车为空", qty: "数量", item: "商品",
         submittedTip: "提交成功（演示）：已保存到本地订单列表",
         requiredAll: "请完整填写所有必填字段。",
         invalidEmail: "邮箱格式不正确。",
         invalidPhone: "电话格式不正确。",
-        item: "商品", qty: "数量",
-        downloadTpl: "下载模板", uploadNeeds: "上传需求 (CSV)", register: "注册/登录", hi: "您好",
-        needLogin: "请先完成注册/登录。",
-        uploadOk: "上传成功：已将清单加入购物车。",
+        notFound: (n: string) => `未找到商品：${n}`,
+        datasource: "数据源：niuniuparts.com（测试预览用途）",
+        prevItem: "上一条",
+        nextItem: "下一条",
       };
 }
 
+/* ------------ Helpers ------------ */
+function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
+function stdCn(it: Item) {
+  const arr = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
+  let val = arr.find((x) => String(x).trim().length > 0) || "";
+  if (!val) { for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { val = v; break; } } }
+  return val;
+}
+function stdEn(it: Item) {
+  const arr = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
+  let val = arr.find((x) => String(x).trim().length > 0) || "";
+  if (!val) { for (const [k, v] of Object.entries(it)) { if (typeof v === "string" && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { val = v; break; } } }
+  return val;
+}
 function cnPartToEn(cn: string): string {
   if (!cn) return "";
   let s = cn.replace(/\s+/g, "");
   const has = (re: RegExp) => re.test(s);
   const take = (re: RegExp) => (has(re) ? (s = s.replace(re, ""), true) : false);
   const dir: string[] = [];
-  if (take(/前/)) dir.push("Front");
-  if (take(/后/)) dir.push("Rear");
-  if (take(/左|L\b/i)) dir.push("Left");
-  if (take(/右|R\b/i)) dir.push("Right");
-  if (take(/上/)) dir.push("Upper");
-  if (take(/下/)) dir.push("Lower");
+  if (take(/前/)) dir.push("Front"); if (take(/后/)) dir.push("Rear");
+  if (take(/左|L\b/i)) dir.push("Left"); if (take(/右|R\b/i)) dir.push("Right");
+  if (take(/上/)) dir.push("Upper"); if (take(/下/)) dir.push("Lower");
   const map: [RegExp, string][] = [
-    [/悬挂|底盘|悬架|摆臂|控制臂/, "Suspension"],
-    [/控制臂|摆臂|下摆臂|上摆臂/, "Control Arm"],
-    [/球头|万向节/, "Ball Joint"],
-    [/拉杆|横拉杆|转向拉杆/, "Tie Rod"],
-    [/减震器|避震器/, "Shock Absorber"],
-    [/水箱|散热器/, "Radiator"],
-    [/风扇|电子扇/, "Cooling Fan"],
-    [/保险杠/, "Bumper"],
-    [/挡泥板|翼子板/, "Fender"],
-    [/刹车片|制动片/, "Brake Pads"],
-    [/刹车盘|制动盘/, "Brake Disc"],
-    [/前大灯|大灯|车灯/, "Headlamp"],
-    [/后视镜|反光镜/, "Door Mirror"],
+    [/悬挂|底盘|悬架|摆臂|控制臂/, "Suspension"], [/控制臂|摆臂|下摆臂|上摆臂/, "Control Arm"],
+    [/球头|万向节/, "Ball Joint"], [/拉杆|横拉杆|转向拉杆/, "Tie Rod"],
+    [/减震器|避震器/, "Shock Absorber"], [/水箱|散热器/, "Radiator"],
+    [/风扇|电子扇/, "Cooling Fan"], [/保险杠/, "Bumper"], [/挡泥板|翼子板/, "Fender"],
+    [/刹车片|制动片/, "Brake Pads"], [/刹车盘|制动盘/, "Brake Disc"],
+    [/前大灯|大灯|车灯/, "Headlamp"], [/后视镜|反光镜/, "Door Mirror"],
   ];
-  let noun = "Part";
-  for (const [re, en] of map) { if (has(re)) { noun = en; break; } }
+  let noun = "Part"; for (const [re, en] of map) { if (has(re)) { noun = en; break; } }
   const order = ["Front", "Rear", "Left", "Right", "Upper", "Lower"];
   const dirs = order.filter(d => dir.includes(d));
   return (dirs.concat([noun])).join(" ");
 }
-
-function toInt(v: unknown, def: number) {
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
+function norm(s: any) { return String(s ?? "").toLowerCase(); }
+function matchNum(it: Item, num: string) {
+  if (!num) return false;
+  const n = num.toLowerCase();
+  return norm(it.num) === n || norm(it.product) === n || norm(it.oe) === n;
 }
-async function fetchPageOnce(page: number, size: number, timeoutMs = 6000): Promise<Item[]> {
+
+async function fetchPage(page: number, size: number, timeoutMs = REQ_TIMEOUT): Promise<Item[]> {
   const url = `${API_BASE}?size=${size}&page=${page}`;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const resp = await fetch(url, { cache: "no-store", signal: ctrl.signal });
     if (!resp.ok) return [];
@@ -113,315 +128,297 @@ async function fetchPageOnce(page: number, size: number, timeoutMs = 6000): Prom
     return [];
   } catch { return []; } finally { clearTimeout(t); }
 }
-async function findInPage(num: string, page: number, size: number): Promise<Item | null> {
-  const rows = await fetchPageOnce(page, size, 6000);
-  return rows.find((x) => String(x?.num ?? "") === String(num)) || null;
-}
-async function fetchItemNear(num: string, p: number, size: number): Promise<Item | null> {
-  const cur = await findInPage(num, p, size);
-  if (cur) return cur;
-  const [a, b] = await Promise.all([
-    p > 0 ? findInPage(num, p - 1, size) : Promise.resolve(null),
-    findInPage(num, p + 1, size),
-  ]);
-  return a || b || null;
-}
 
-function hasZh(s: string) { return /[\u4e00-\u9fff]/.test(s); }
-function getStdNames(it: Item) {
-  const candidatesCn = [it.stdNameCn, it.productCn, it.productNameCn, it.partNameCn].filter(Boolean) as string[];
-  const candidatesEn = [it.stdNameEn, it.productEn, it.productNameEn, it.partNameEn].filter(Boolean) as string[];
-  let cn = candidatesCn.find((x) => String(x).trim().length > 0) || "";
-  let en = candidatesEn.find((x) => String(x).trim().length > 0) || "";
-  if (!cn) {
-    for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && hasZh(v) && /(std|standard|name|product|part|desc)/.test(k.toLowerCase())) { cn = v; break; }
-    }
-  }
-  if (!en) {
-    for (const [k, v] of Object.entries(it)) {
-      if (typeof v === "string" && v && !hasZh(v) && /(std|standard|name|product|part|desc|en)/.test(k.toLowerCase())) { en = v; break; }
-    }
-  }
-  return { cn, en, summary: it.summary || "", description: it.description || it.desc || it.remark || "" };
-}
-
-function buildImages(item: Item) {
-  const placeholder =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==";
-  const raw: string[] =
-    item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
-  const seen = new Set<string>();
-  const cleaned = raw
-    .filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : ""))
-    .filter((s) => s.length > 0)
-    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const MIN = 18;
-  const base = cleaned.length > 0 ? cleaned : [placeholder];
-  const images: string[] = [];
-  while (images.length < Math.max(MIN, base.length)) images.push(base[images.length % base.length]);
-  return images;
-}
-
-/** 顶部语言 + 交易模式 + 模板/上传 + 注册条 */
-function TopBar({ lang, mode }: { lang: "zh" | "en", mode: "B2C" | "B2B" }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, alignItems: "center" }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button id="lang-zh" disabled={lang === "zh"} style={{ opacity: lang === "zh" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>中文</button>
-        <button id="lang-en" disabled={lang === "en"} style={{ opacity: lang === "en" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>EN</button>
-        <div style={{ width: 12 }} />
-        <span style={{ alignSelf: "center", color: "#6b7280" }}>{lang === "en" ? "Mode" : "交易模式"}：</span>
-        <button id="mode-b2c" disabled={mode === "B2C"} style={{ opacity: mode === "B2C" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>B2C</button>
-        <button id="mode-b2b" disabled={mode === "B2B"} style={{ opacity: mode === "B2B" ? 0.6 : 1, cursor: "pointer", background: "transparent", border: "1px solid #e5e7eb", padding: "4px 8px", borderRadius: 6 }}>B2B</button>
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button id="download-template" style={{ cursor: "pointer", background: "#fff", border: "1px solid #e5e7eb", padding: "4px 10px", borderRadius: 6 }}>
-          {tFactory(lang).downloadTpl}
-        </button>
-        <button id="upload-needs" style={{ cursor: "pointer", background: "#fff", border: "1px solid #e5e7eb", padding: "4px 10px", borderRadius: 6 }}>
-          {tFactory(lang).uploadNeeds}
-        </button>
-        <button id="btn-register" style={{ cursor: "pointer", background: "#111827", color: "#fff", border: "1px solid #111827", padding: "4px 10px", borderRadius: 6 }}>
-          {tFactory(lang).register}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export async function generateMetadata({ params }: { params: { num: string } }) {
-  return { title: `Item ${params.num}` };
-}
-
-export default async function Page({ params, searchParams }:{ params:{ num:string }, searchParams?:{[k:string]:string|string[]|undefined} }) {
-  const num = params.num;
-  const p = toInt((searchParams?.p as string) ?? "0", 0);
-  const size = toInt((searchParams?.s as string) ?? "20", 20);
-
-  const item = await fetchItemNear(num, p, size);
-  const langCookie = cookies().get("lang")?.value === "en" ? "en" : "zh";
-  const modeCookie = cookies().get("mode")?.value === "B2B" ? "B2B" : "B2C";
+/* ------------ Page ------------ */
+export default async function DetailPage({
+  params, searchParams,
+}: {
+  params: { num: string },
+  searchParams?: { [k: string]: string | string[] | undefined }
+}) {
+  const langCookie: "zh" | "en" = cookies().get("lang")?.value === "en" ? "en" : "zh";
+  const modeCookie: "B2C" | "B2B" = cookies().get("mode")?.value === "B2B" ? "B2B" : "B2C";
   const tr = tFactory(langCookie);
+
+  const p = Number((searchParams?.p as string) ?? "0") || 0;
+  const size = Number((searchParams?.s as string) ?? String(SEARCH_SCAN_SIZE)) || SEARCH_SCAN_SIZE;
+
+  // 按中心页扫描并保存命中页的数据，用于上一条/下一条
+  let item: Item | null = null; let foundPage = p; let pageList: Item[] = [];
+  const centerOrder = (function centered(pp: number, max: number) {
+    const out: number[] = []; let step = 0;
+    while (out.length < max) {
+      const a = pp + step; if (a >= 0 && !out.includes(a)) out.push(a);
+      const b = pp - step; if (b >= 0 && !out.includes(b)) out.push(b);
+      step++;
+    }
+    if (!out.includes(0)) out.push(0);
+    return out.slice(0, max);
+  })(p, MAX_SCAN_PAGES);
+
+  for (const pg of centerOrder) {
+    const list = await fetchPage(pg, size);
+    const hit = list.find((it) => matchNum(it, params.num));
+    if (hit) { item = hit; foundPage = pg; pageList = list; break; }
+  }
 
   if (!item) {
     return (
-      <div style={{ padding: 32 }}>
-        <TopBar lang={langCookie} mode={modeCookie} />
-        <h1 style={{ fontSize: 20, fontWeight: 600 }}>未找到商品：{num}</h1>
-        <Link href={`/stock?p=${p}`} prefetch style={{ display: "inline-block", marginTop: 16, padding: "8px 16px", background: "#111827", color: "#fff", borderRadius: 8, textDecoration: "none" }}>
-          {tr.backToList}
+      <main style={{ padding: "24px 0" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>ImgParts 预览站</h1>
+        <div style={{ fontSize: 16, marginBottom: 16 }}>{tr.notFound(params.num)}</div>
+        <Link href="/stock" style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e5e7eb", textDecoration: "none", color: "#111827" }}>
+          {tr.back}
         </Link>
-      </div>
+        <div style={{ marginTop: 24, color: "#6b7280" }}>{tr.datasource}</div>
+      </main>
     );
   }
 
-  const images = buildImages(item);
-  const preloadCount = Math.min(8, images.length);
-  const title = [item.brand, item.product, item.oe, num].filter(Boolean).join(" | ");
-  const gal = `gal-${num}`;
-  const backHref = `/stock?p=${p}`;
-  const { cn: stdCn, en: stdEn, summary, description } = getStdNames(item);
-  const shownPartNameEn = stdEn || (langCookie === "en" ? cnPartToEn(stdCn) : "");
+  // 上一条/下一条
+  const idxInPage = pageList.findIndex((x) => matchNum(x, String(item!.num)));
+  const prevItem = idxInPage > 0 ? pageList[idxInPage - 1] : null;
+  const nextItem = idxInPage >= 0 && idxInPage < pageList.length - 1 ? pageList[idxInPage + 1] : null;
+  const mkHref = (it: Item | null) => it ? `/stock/${encodeURIComponent(String(it.num ?? ""))}?p=${foundPage}&s=${size}` : "#";
 
-  const css = `
-.detail-wrap{ display:grid; gap:24px; padding:24px 0; grid-template-columns:1fr; align-items:start; }
-@media (min-width: 960px){ .detail-wrap{ grid-template-columns:minmax(0,1fr) 1fr; } }
-.gallery{ width:100%; }
-.gallery .main{ width:100%; aspect-ratio:1/1; overflow:hidden; border-radius:16px; background:#fff; border:1px solid #eee; position:relative; }
-.gallery .main img{ position:absolute; inset:0; width:100%; height:100%; object-fit:contain; display:none; }
-.thumbs{ margin-top:12px; display:grid; gap:8px; grid-template-columns: repeat(9, 1fr); }
-.thumbs label{ display:block; aspect-ratio:1/1; overflow:hidden; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
-.thumbs img{ width:100%; height:100%; object-fit:cover; }
-.gallery input[type="radio"]{ display:none; }
+  // 图片集合：去重并补足 ≥18
+  const raw: string[] = item.images || item.pics || item.gallery || item.imageUrls || (item.image ? [item.image] : []) || [];
+  const seen = new Set<string>();
+  const cleaned = raw.filter(Boolean).map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
+    .filter((u) => { const k = u.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  let gallery = cleaned.length ? [...cleaned] : [
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAABx0wduAAAAAklEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8JwC0QABG4zJSwAAAABJRU5ErkJggg==",
+  ];
+  for (let i = 0; gallery.length < 18 && i < 36; i++) gallery.push(gallery[i % gallery.length]);
 
-.modal-mask{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; z-index:50; }
-.modal{ position:fixed; left:50%; top:8vh; transform:translateX(-50%); width:min(720px,92vw); background:#fff; border:1px solid #e5e7eb; border-radius:12px; display:none; z-index:51; max-height:84vh; flex-direction:column; }
-.modal header{ padding:12px 16px; font-weight:700; border-bottom:1px solid #e5e7eb; }
-.modal .body{ padding:16px; display:grid; gap:12px; overflow:auto; flex:1; }
-.modal .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-.modal footer{ padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end; position:sticky; bottom:0; background:#fff; }
-input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; }
-` + "\n" +
-    images.map((_s, i) => `#${gal}-${i}:checked ~ .main img[data-idx="${i}"]{display:block}
-#${gal}-${i}:checked ~ .thumbs label[for="${gal}-${i}"]{border:2px solid #2563eb}`).join("\n");
+  const scn = stdCn(item);
+  const sen = stdEn(item);
+  const partEn = sen || (langCookie === "en" ? cnPartToEn(scn) : "");
+  const backHref = `/stock?p=${foundPage}&s=${size}`;
+  const title = [item.brand, item.product, item.oe, item.num].filter(Boolean).join(" | ");
+  const payload = JSON.stringify({
+    num: item.num ?? "", price: item.price ?? "", brand: item.brand ?? "", product: item.product ?? "", oe: item.oe ?? "",
+  }).replace(/"/g, "&quot;");
 
   return (
     <>
-      <TopBar lang={langCookie} mode={modeCookie} />
+      {gallery.slice(0,8).map((src, i) => (<link key={'preload-'+i} rel="preload" as="image" href={src} />))}
 
-      <link rel="prefetch" href={backHref} />
-      {images.slice(0, preloadCount).map((src, i) => (<link key={`preload-${i}`} rel="preload" as="image" href={src} />))}
-
-      <div className="detail-wrap">
-        <div className="gallery">
-          {images.map((_, i) => (<input key={`r-${i}`} type="radio" name={gal} id={`${gal}-${i}`} defaultChecked={i === 0} />))}
-          <div className="main">
-            {images.map((src, i) => (
-              <img key={`main-${i}`} data-idx={i} src={src} alt="product" loading={i === 0 ? "eager" : "lazy"} fetchPriority={i === 0 ? "high" : "auto"} decoding={i === 0 ? "sync" : "async"} />
-            ))}
-          </div>
-          <div className="thumbs">
-            {images.map((src, i) => (
-              <label key={`thumb-${i}`} htmlFor={`${gal}-${i}`} title={`第 ${i + 1} 张`}>
-                <img src={src} alt={`thumb-${i + 1}`} loading="eager" decoding="sync" />
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700 }}>{title}</h1>
-
-          {(stdCn || shownPartNameEn) && (
-            <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.5 }}>
-              {stdCn && <div><strong>{tr.partName}：</strong>{stdCn}</div>}
-              {shownPartNameEn && <div><strong>Part Name:</strong> {shownPartNameEn}</div>}
-            </div>
-          )}
-
-          {(summary || description) && (
-            <div style={{ marginTop: 8, fontSize: 13, color: "#4b5563" }}>
-              {summary && <div><strong>{tr.summary}：</strong>{summary}</div>}
-              {description && <div><strong>{tr.description}：</strong>{description}</div>}
-            </div>
-          )}
-
-          <dl style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 14 }}>
-            {item.brand && (<div><dt style={{ color: "#6b7280" }}>{tr.brand}</dt><dd style={{ fontWeight: 600 }}>{item.brand}</dd></div>)}
-            {item.product && (<div><dt style={{ color: "#6b7280" }}>{tr.product}</dt><dd style={{ fontWeight: 600 }}>{item.product}</dd></div>)}
-            {item.oe && (<div><dt style={{ color: "#6b7280" }}>{tr.oe}</dt><dd style={{ fontWeight: 600 }}>{item.oe}</dd></div>)}
-            {typeof item.price !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tr.price}</dt><dd style={{ fontWeight: 600 }}>{String(item.price)}</dd></div>)}
-            {typeof item.stock !== "undefined" && (<div><dt style={{ color: "#6b7280" }}>{tr.stock}</dt><dd style={{ fontWeight: 600 }}>{String(item.stock)}</dd></div>)}
-          </dl>
-
-          <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button id="add-cart" data-added={tr.added}
-              style={{ padding: "8px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
-              {tr.addToCart}
-            </button>
-            <button id="go-checkout"
-              style={{ padding: "8px 16px", borderRadius: 8, background: "#10b981", color: "#fff", border: "none", cursor: "pointer" }}>
-              {tr.checkout}
-            </button>
-            <Link href={backHref} prefetch
-              style={{ padding: "8px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none", textAlign: "center" }}>
-              {tr.backToList}
+      <main style={{ padding: "24px 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700 }}>{title}</h1>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Link href={mkHref(prevItem)} aria-disabled={!prevItem}
+              style={{ pointerEvents: prevItem ? "auto" : "none", padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: prevItem ? "#fff" : "#f3f4f6", textDecoration: "none", color: "#111827" }}>
+              {tr.prevItem}
+            </Link>
+            <Link href={mkHref(nextItem)} aria-disabled={!nextItem}
+              style={{ pointerEvents: nextItem ? "auto" : "none", padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: nextItem ? "#fff" : "#f3f4f6", textDecoration: "none", color: "#111827" }}>
+              {tr.nextItem}
             </Link>
           </div>
         </div>
-      </div>
 
-      {/* 结算弹窗 */}
-      <div id="modal-mask" className="modal-mask"></div>
-      <div id="checkout-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
-        <header id="checkout-title">{tr.submitOrder}</header>
-        <div className="body">
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 720px) 1fr", gap: 24, alignItems: "start" }}>
+          {/* 左：大图 + 缩略图 */}
+          <section>
+            <div id="main-img-wrap" style={{
+              width: "100%", aspectRatio: "1 / 1", border: "1px solid #f3f4f6", borderRadius: 12,
+              display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", background: "#fff"
+            }}>
+              <img id="main-img" src={gallery[0]} alt="product" loading="eager" fetchPriority="high" decoding="sync"
+                   style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+            </div>
+
+            {/* 缩略图横向轮播 */}
+            <div id="thumbs" style={{ marginTop: 12, display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8 }}>
+              {gallery.map((src, idx) => (
+                <button key={idx} className="thumb" data-idx={idx}
+                        style={{ flex: "0 0 auto", width: 86, height: 86, borderRadius: 10, overflow: "hidden",
+                                 border: idx === 0 ? "2px solid #2563eb" : "1px solid #e5e7eb", cursor: "pointer", background: "#fff" }}>
+                  <img src={src} alt={"thumb-"+idx} loading={idx < 6 ? "eager" : "lazy"}
+                       style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* 右：信息与按钮 */}
+          <section>
+            <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
+              {item.brand && <div><strong>{tr.brand}</strong>：{item.brand}</div>}
+              {item.oe && <div><strong>{tr.oe}</strong>：{item.oe}</div>}
+              {typeof item.price !== "undefined" && <div><strong>{tr.price}</strong>：{String(item.price)}</div>}
+            </div>
+
+            {(scn || partEn) && (
+              <div style={{ marginTop: 12, fontSize: 14, color: "#374151" }}>
+                {scn && <div>{tr.partName}：{scn}</div>}
+                {partEn && <div>Part Name: {partEn}</div>}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
+              <button id="d-add" data-payload={payload} data-added={tr.added}
+                      style={{ padding: "10px 16px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}>
+                {tr.addToCart}
+              </button>
+              <button id="d-checkout"
+                      style={{ padding: "10px 16px", borderRadius: 8, background: "#10b981", color: "#fff", border: "none", cursor: "pointer" }}>
+                {tr.checkout}
+              </button>
+              <Link id="btn-back" href={backHref}
+                    style={{ padding: "10px 16px", borderRadius: 8, background: "#fff", color: "#111827", border: "1px solid #e5e7eb", textDecoration: "none" }}>
+                {tr.back}
+              </Link>
+            </div>
+          </section>
+        </div>
+
+        <div style={{ marginTop: 24, color: "#6b7280" }}>{tr.datasource}</div>
+      </main>
+
+      {/* 结算弹窗（与列表页一致） */}
+      <div id="mask" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "none", zIndex: 50 }} />
+      <div id="modal" role="dialog" aria-modal="true" aria-labelledby="d-title"
+           style={{ position: "fixed", left: "50%", top: "8vh", transform: "translateX(-50%)", width: "min(720px, 92vw)", background: "#fff",
+                    border: "1px solid #e5e7eb", borderRadius: 12, display: "none", zIndex: 51, maxHeight: "84vh", flexDirection: "column" }}>
+        <div id="d-title" style={{ padding: "12px 16px", fontWeight: 700, borderBottom: "1px solid #e5e7eb" }}>{tr.submitOrder}</div>
+        <div style={{ padding: 16, display: "grid", gap: 12, overflow: "auto", flex: 1 }}>
           <div id="cart-items" style={{ fontSize: 13, color: "#374151" }}></div>
 
-          <div className="row" style={{ alignItems: "center" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "center", gap: 8 }}>
             <div>
               <label>{tr.currency} <span style={{color:"#dc2626"}}>*</span></label>
-              <select id="o-currency" defaultValue="USD">
+              <select id="d-currency" defaultValue="USD">
                 <option value="CNY">人民币 CNY</option>
                 <option value="USD">美元 USD</option>
                 <option value="EUR">欧元 EUR</option>
               </select>
             </div>
-            <div style={{ textAlign: "right", fontWeight: 700 }}>
-              <span>{tr.total}：</span><span id="o-total">--</span>
-            </div>
+            <div id="d-total" style={{ textAlign: "right", fontWeight: 700 }}>{tr.total}：--</div>
           </div>
 
-          <div className="row">
-            <div><label>{tr.contactName} <span style={{color:"#dc2626"}}>*</span></label><input id="o-name" /></div>
-            <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="o-phone" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label>{tr.contactName} <span style={{color:"#dc2626"}}>*</span></label><input id="d-name" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label>{tr.phone} <span style={{color:"#dc2626"}}>*</span></label><input id="d-phone" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
-          <div className="row">
-            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="o-email" /></div>
-            <div><label id="o-company-label">{tr.company} <span id="o-company-star" style={{color:"#dc2626",display: modeCookie==='B2B'?'inline':'none'}}>*</span></label><input id="o-company" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label>{tr.email} <span style={{color:"#dc2626"}}>*</span></label><input id="d-email" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+            <div><label id="d-company-label">{tr.company} <span id="d-company-star" style={{color:"#dc2626",display: modeCookie==='B2B'?'inline':'none'}}>*</span></label><input id="d-company" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
           </div>
-          <div className="row">
-            <div><label>{tr.country} <span style={{color:"#dc2626"}}>*</span></label><input id="o-country" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label>{tr.country} <span style={{color:"#dc2626"}}>*</span></label><input id="d-country" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
             <div><label>{tr.mode} <span style={{color:"#dc2626"}}>*</span></label>
-              <select id="o-mode" defaultValue={modeCookie}><option value="B2C">{tr.b2c}</option><option value="B2B">{tr.b2b}</option></select>
+              <select id="d-mode" defaultValue={modeCookie} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
+                <option value="B2C">{tr.b2c}</option><option value="B2B">{tr.b2b}</option>
+              </select>
             </div>
           </div>
-          <div><label>{tr.address} <span style={{color:"#dc2626"}}>*</span></label><input id="o-address" /></div>
-          <div><label>{tr.note} <span style={{color:"#dc2626"}}>*</span></label><textarea id="o-notes" rows={3}></textarea></div>
-          <div id="o-tip" style={{ fontSize: 12 }}></div>
+          <div><label>{tr.address} <span style={{color:"#dc2626"}}>*</span></label><input id="d-address" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+          <div><label>{tr.note} <span style={{color:"#dc2626"}}>*</span></label><textarea id="d-notes" rows={3} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }} /></div>
+          <div id="d-tip" style={{ fontSize: 12 }}></div>
         </div>
-        <footer>
-          <button id="o-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
-          <button id="o-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tr.submitOrder}</button>
-        </footer>
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #e5e7eb", display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" }}>
+          <button id="d-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
+          <button id="d-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tr.submitOrder}</button>
+        </div>
       </div>
 
-      {/* 注册弹窗 + 隐藏文件输入 */}
-      <div id="reg-mask" className="modal-mask"></div>
-      <div id="reg-modal" className="modal" role="dialog" aria-modal="true" aria-labelledby="reg-title">
-        <header id="reg-title">{tr.register}</header>
-        <div className="body">
-          <div className="row">
-            <div><label>{tr.contactName} *</label><input id="r-name" /></div>
-            <div><label>{tr.email} *</label><input id="r-email" /></div>
-          </div>
-          <div id="r-tip" style={{ fontSize: 12, color: "#dc2626" }}></div>
-        </div>
-        <footer>
-          <button id="r-cancel" style={{ padding: "8px 14px", borderRadius: 8, background: "#fff", border: "1px solid #e5e7eb", cursor: "pointer" }}>{tr.cancel}</button>
-          <button id="r-submit" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", border: "1px solid #111827", cursor: "pointer" }}>{tr.register}</button>
-        </footer>
-      </div>
-      <input id="needs-file" type="file" accept=".csv" style={{ display: "none" }} />
-
-      <style dangerouslySetInnerHTML={{ __html: css }} />
-
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `
+      {/* 交互脚本：事件委托 + 轮播定时器，afterInteractive 确保执行 */}
+      <Script id="detail-page-js" strategy="afterInteractive">{`
 (function(){
-  var TR=${JSON.stringify(tr)}, MODE='${modeCookie}';
+  var GALLERY = ${JSON.stringify(gallery)};
+  var idx=0, timer;
 
-  function closestSel(node, sel){
-    var el = node && node.nodeType===1 ? node : (node && node.parentElement);
-    while(el){ if (el.matches && el.matches(sel)) return el; el = el.parentElement; }
-    return null;
+  function $(sel){ return document.querySelector(sel); }
+  function $all(sel){ return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+
+  function show(i){
+    idx=(i+GALLERY.length)%GALLERY.length;
+    var main=$('#main-img'); if(main){ (main as HTMLImageElement).src=GALLERY[idx]; }
+    $all('#thumbs .thumb').forEach(function(b,j){
+      (b as HTMLElement).style.border = j===idx ? '2px solid #2563eb' : '1px solid #e5e7eb';
+      if(j===idx){ try{ b.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'}); }catch(e){} }
+    });
   }
+  function start(){ stop(); timer=setInterval(function(){ show(idx+1); }, 5000); }
+  function stop(){ if(timer) clearInterval(timer); }
 
-  function setCookie(k,v){ document.cookie = k+'='+v+'; path=/; max-age='+(3600*24*365); }
+  // 初始展示 + 定时轮播
+  show(0); start();
 
-  // 语言 & 模式切换（顶栏）
+  // === 事件委托：所有点击统一在 document 上 ===
   document.addEventListener('click', function(e){
-    var t=e.target;
-    if(closestSel(t,'#lang-zh')){ setCookie('lang','zh'); location.reload(); return; }
-    if(closestSel(t,'#lang-en')){ setCookie('lang','en'); location.reload(); return; }
-    if(closestSel(t,'#mode-b2c')){ setCookie('mode','B2C'); location.reload(); return; }
-    if(closestSel(t,'#mode-b2b')){ setCookie('mode','B2B'); location.reload(); return; }
+    var t=e.target as HTMLElement;
+
+    // 缩略图点击 → 切换大图 + 重启轮播
+    if(t && (t.closest && t.closest('.thumb'))){
+      var btn=t.closest('.thumb') as HTMLElement; var i=Number(btn.getAttribute('data-idx')||'0'); show(i); start(); return;
+    }
+
+    // 加入购物车
+    if(t && (t.id==='d-add' || t.closest('#d-add'))){
+      var btn=document.getElementById('d-add') as HTMLElement;
+      var payload = btn.getAttribute('data-payload') || '';
+      try{
+        var it = payload? JSON.parse(payload.replace(/&quot;/g,'"')) : null; if(!it) return;
+        var cart = readCart(); var pos = cart.findIndex(function(x){ return String(x.num)===String(it.num); });
+        if(pos===-1){ cart.push({ num:it.num, qty:1, price:it.price, brand:it.brand, product:it.product, oe:it.oe }); }
+        else { cart[pos].qty = (cart[pos].qty||1)+1; }
+        writeCart(cart);
+      }catch(e){}
+      var txt = btn.innerText; btn.innerText = btn.getAttribute('data-added') || (document.documentElement.lang==='en'?'Added':'已加入');
+      setTimeout(function(){ btn.innerText = txt; }, 1200);
+      return;
+    }
+
+    // 去结算
+    if(t && (t.id==='d-checkout' || t.closest('#d-checkout'))){ openModal(); return; }
+
+    // 弹窗内按钮
+    if(t && (t.id==='d-cancel' || t===document.getElementById('mask'))){ closeModal(); return; }
+    if(t && (t.classList && (t.classList.contains('q-inc') || t.classList.contains('q-dec') || t.classList.contains('q-del')))){
+      var trEl = t.closest('tr'); if(!trEl) return; var i = Number(trEl.getAttribute('data-idx')||'-1'); if(i<0) return;
+      var cart=readCart(); if(i>=cart.length) return;
+      if(t.classList.contains('q-inc')) cart[i].qty = (cart[i].qty||1)+1;
+      else if(t.classList.contains('q-dec')) cart[i].qty = Math.max(1,(cart[i].qty||1)-1);
+      else if(t.classList.contains('q-del')) cart.splice(i,1);
+      writeCart(cart); renderCart(); updateTotal();
+      return;
+    }
+    if(t && t.id==='d-submit'){
+      if(!validateAll()) return;
+      var order={
+        items: readCart(),
+        contact:{ name: gv('d-name'), phone: gv('d-phone'), email: gv('d-email'),
+          company: gv('d-company'), country: gv('d-country'),
+          address: gv('d-address'), mode: gv('d-mode') || 'B2C', notes: gv('d-notes'),
+          currency: (document.getElementById('d-currency')||{}).value || 'USD',
+          totalText: (document.getElementById('d-total')||{}).textContent || ''
+        },
+        createdAt: new Date().toISOString()
+      };
+      try{
+        var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
+        arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
+        localStorage.setItem('lastOrder', JSON.stringify(order));
+        var tip=document.getElementById('d-tip'); if(tip){ (tip as HTMLElement).style.color='#059669'; tip.textContent=(document.documentElement.lang==='en'?'Submitted (Demo): saved to local orders':'提交成功（演示）：已保存到本地订单列表'); }
+      }catch(e){}
+      return;
+    }
   });
 
-  // 轮播
-  (function(){
-    var name='${gal}', radios=[].slice.call(document.querySelectorAll('input[name="'+name+'"]')); if(!radios.length) return;
-    var idx=radios.findIndex(function(r){return r.checked;}); if(idx<0) idx=0;
-    function tick(){ idx=(idx+1)%radios.length; radios[idx].checked=true; }
-    var timer=setInterval(tick,5000);
-    radios.forEach(function(r,i){ r.addEventListener('change',function(){ idx=i; clearInterval(timer); timer=setInterval(tick,5000); }); });
-  })();
+  // 变更事件
+  document.addEventListener('change', function(e){
+    var t=e.target as HTMLElement;
+    if(t && t.id==='d-currency') updateTotal();
+    if(t && t.id==='d-mode'){ var star=document.getElementById('d-company-star'); if(star){ (star as HTMLElement).style.display = ((document.getElementById('d-mode') as HTMLSelectElement).value==='B2B')?'inline':'none'; } }
+  });
 
-  // 购物车
+  // —— 工具函数 —— 
   function readCart(){ try{ var raw=localStorage.getItem('cart'); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
   function writeCart(c){ try{ localStorage.setItem('cart', JSON.stringify(c)); }catch(e){} }
-  function addCurrentToCart(){
-    var cart=readCart();
-    var item={ num:${JSON.stringify(item.num ?? "")}, price:${JSON.stringify(item.price ?? "")}, brand:${JSON.stringify(item.brand ?? "")}, product:${JSON.stringify(item.product ?? "")}, oe:${JSON.stringify(item.oe ?? "")} };
-    var i=cart.findIndex(function(x){ return String(x.num)===String(item.num); });
-    if(i===-1){ cart.push({ num:item.num, qty:1, price:item.price, brand:item.brand, product:item.product, oe:item.oe }); }
-    else{ cart[i].qty=(cart[i].qty||1)+1; }
-    writeCart(cart);
-  }
-
-  // 合计
   var RATES={ USD:1, CNY:7.2, EUR:0.92 };
   function computeTotal(currency){
     var cart=readCart();
@@ -430,150 +427,53 @@ input,textarea,select{ border:1px solid #e5e7eb; border-radius:8px; padding:10px
     return sym+' '+(Math.round(val*100)/100).toFixed(2);
   }
   function updateTotal(){
-    var cur=(document.getElementById('o-currency')||{}).value || 'USD';
-    var el=document.getElementById('o-total'); if(el) el.textContent = computeTotal(cur);
+    var cur=(document.getElementById('d-currency')||{}).value || 'USD';
+    var el=document.getElementById('d-total'); if(el) el.textContent = (document.documentElement.lang==='en'?'Total':'合计')+'：'+computeTotal(cur);
   }
-
-  // 详情结算弹窗
-  var mask=document.getElementById('modal-mask'), modal=document.getElementById('checkout-modal');
-  function openModal(){ addCurrentToCart(); renderCart('cart-items'); updateTotal(); if(mask) mask.style.display='block'; if(modal) modal.style.display='flex'; syncCompanyStar(); }
-  function closeModal(){ if(mask) mask.style.display='none'; if(modal) modal.style.display='none'; }
-  function gv(id){ var el=document.getElementById(id); return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
-  function markInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#dc2626'; el.focus(); } }
-  function clearInvalid(id){ var el=document.getElementById(id); if(el){ el.style.borderColor='#e5e7eb'; } }
-  function clearTip(){ var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#111827'; tip.textContent=''; } }
-
-  function needCompany(){ var m=(document.getElementById('o-mode')||{}).value || 'B2C'; return m==='B2B'; }
-  function syncCompanyStar(){ var star=document.getElementById('o-company-star'); if(star){ star.style.display = needCompany() ? 'inline' : 'none'; } }
-
+  function gv(id){ var el=document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null; return el && typeof el.value!=='undefined' ? el.value.trim() : ''; }
+  function markInvalid(id){ var el=document.getElementById(id); if(el){ (el as HTMLElement).style.borderColor='#dc2626'; (el as HTMLElement).focus(); } }
+  function clearInvalid(id){ var el=document.getElementById(id); if(el){ (el as HTMLElement).style.borderColor='#e5e7eb'; } }
+  function clearTip(){ var tip=document.getElementById('d-tip'); if(tip){ tip.textContent=''; (tip as HTMLElement).style.color='#111827'; } }
+  function needCompany(){ var m=(document.getElementById('d-mode') as HTMLSelectElement | null)?.value || 'B2C'; return m==='B2B'; }
   function validateAll(){
     clearTip();
-    ['o-name','o-phone','o-email','o-country','o-address','o-notes','o-company'].forEach(clearInvalid);
-    var req=['o-name','o-phone','o-email','o-country','o-address','o-notes'];
-    if(needCompany()) req.push('o-company');
-    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#dc2626'; tip.textContent='${tr.requiredAll}'; } return false; } }
-    var email=gv('o-email'); var phone=gv('o-phone').replace(/\\D/g,'');
-    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('o-email'); var t1=document.getElementById('o-tip'); if(t1){ t1.style.color='#dc2626'; t1.textContent='${tr.invalidEmail}'; } return false; }
-    if(phone.length<5){ markInvalid('o-phone'); var t2=document.getElementById('o-tip'); if(t2){ t2.style.color='#dc2626'; t2.textContent='${tr.invalidPhone}'; } return false; }
+    ['d-name','d-phone','d-email','d-country','d-address','d-notes','d-company'].forEach(clearInvalid);
+    var req=['d-name','d-phone','d-email','d-country','d-address','d-notes']; if(needCompany()) req.push('d-company');
+    for(var i=0;i<req.length;i++){ var id=req[i]; if(!gv(id)){ markInvalid(id); var tip=document.getElementById('d-tip'); if(tip){ (tip as HTMLElement).style.color='#dc2626'; tip.textContent=(document.documentElement.lang==='en'?'Please complete all required fields.':'请完整填写所有必填字段。'); } return false; } }
+    var email=gv('d-email'); var phone=gv('d-phone').replace(/\\D/g,'');
+    if(!/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(email)){ markInvalid('d-email'); var t1=document.getElementById('d-tip'); if(t1){ (t1 as HTMLElement).style.color='#dc2626'; t1.textContent=(document.documentElement.lang==='en'?'Invalid email format.':'邮箱格式不正确。'); } return false; }
+    if(phone.length<5){ markInvalid('d-phone'); var t2=document.getElementById('d-tip'); if(t2){ (t2 as HTMLElement).style.color='#dc2626'; t2.textContent=(document.documentElement.lang==='en'?'Invalid phone number.':'电话格式不正确。'); } return false; }
     return true;
   }
-
-  // 渲染购物车简表
-  function renderCart(id){
-    var el=document.getElementById(id); if(!el) return; var cart=readCart();
-    if(!cart.length){ el.innerHTML='<div>${cookies().get("lang")?.value==="en"?"Cart is empty":"购物车为空"}</div>'; return; }
+  var mask=document.getElementById('mask'), modal=document.getElementById('modal');
+  function openModal(){ renderCart(); updateTotal(); if(mask) (mask as HTMLElement).style.display='block'; if(modal) (modal as HTMLElement).style.display='flex'; syncCompanyStar(); }
+  function closeModal(){ if(mask) (mask as HTMLElement).style.display='none'; if(modal) (modal as HTMLElement).style.display='none'; }
+  function syncCompanyStar(){ var star=document.getElementById('d-company-star'); if(star){ (star as HTMLElement).style.display = needCompany() ? 'inline' : 'none'; } }
+  function rowTitle(it:any){ return [it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | '); }
+  function renderCart(){
+    var el=document.getElementById('cart-items'); if(!el) return;
+    var cart=readCart(); if(!cart.length){ el.innerHTML='<div>'+(document.documentElement.lang==='en'?'Cart is empty':'购物车为空')+'</div>'; return; }
     var html='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
-             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.item+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.qty+'</th>'+
-             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+TR.price+'</th></tr></thead><tbody>';
-    cart.forEach(function(it){
-      html+='<tr><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+[it.brand,it.product,it.oe,it.num].filter(Boolean).join(' | ')+'</td>'+
-            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.qty||1)+'</td>'+
+             '<th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb)">'+(document.documentElement.lang==='en'?'Item':'商品')+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+(document.documentElement.lang==='en'?'Qty':'数量')+'</th>'+
+             '<th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb)">'+(document.documentElement.lang==='en'?'Price':'价格')+'</th></tr></thead><tbody>';
+    cart.forEach(function(it,idx){
+      html+='<tr data-idx="'+idx+'"><td style="padding:6px;border-bottom:1px solid #f3f4f6)">'+rowTitle(it)+'</td>'+
+            '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+
+              '<button class="q-dec" style="margin-right:6px">-</button>'+
+              '<span class="q-num">'+(it.qty||1)+'</span>'+
+              '<button class="q-inc" style="margin-left:6px">+</button>'+
+              '<button class="q-del" style="margin-left:12px">✕</button>'+
+            '</td>'+
             '<td style="padding:6px;text-align:right;border-bottom:1px solid #f3f4f6)">'+(it.price||'')+'</td></tr>';
     });
-    html+='</tbody></table>'; el.innerHTML=html;
+    html+='</tbody></table>'; (el as HTMLElement).innerHTML=html;
   }
 
-  // 顶栏：下载/上传/注册
-  function isLogin(){ try{ return !!localStorage.getItem('user'); }catch(e){ return false; } }
-  function openReg(){ document.getElementById('reg-mask').style.display='block'; document.getElementById('reg-modal').style.display='flex'; }
-  function closeReg(){ document.getElementById('reg-mask').style.display='none'; document.getElementById('reg-modal').style.display='none'; }
-
-  function downloadTemplate(){
-    var csv = 'num,oe,qty\\n# 例: 721012,69820-06160,2\\n';
-    var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='ImgParts_Demand_Template.csv'; a.click();
-    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 500);
-  }
-  function parseCsv(text){
-    var lines=text.split(/\\r?\\n/), out=[];
-    lines.forEach(function(l){
-      if(!l || /^\\s*#/.test(l)) return;
-      var cols=l.split(',').map(function(s){ return s.trim(); });
-      if(cols.length>=2){
-        var num=cols[0]||'', oe=cols[1]||'', qty=Number(cols[2]||'1'); if(!qty||qty<1) qty=1;
-        out.push({ num:num||oe, oe:oe, qty:qty });
-      }
-    });
-    return out;
-  }
-  function uploadNeeds(){
-    if(!isLogin()){ alert('${tr.needLogin}'); openReg(); return; }
-    var fi=document.getElementById('needs-file'); if(fi) fi.click();
-  }
-
-  // 事件绑定
-  document.addEventListener('click', function(e){
-    var t=e.target;
-    if(closestSel(t,'#download-template')){ downloadTemplate(); return; }
-    if(closestSel(t,'#upload-needs')){ uploadNeeds(); return; }
-    if(closestSel(t,'#btn-register')){ openReg(); return; }
-
-    if(closestSel(t,'#o-cancel') || t===document.getElementById('modal-mask')){ closeModal(); return; }
-    if(closestSel(t,'#o-submit')){
-      if(!validateAll()) return;
-      var order={
-        items: readCart(),
-        contact: { name: gv('o-name'), phone: gv('o-phone'), email: gv('o-email'),
-          company: gv('o-company'), country: gv('o-country'),
-          address: gv('o-address'), mode: gv('o-mode')||'B2C', notes: gv('o-notes'),
-          currency: (document.getElementById('o-currency')||{}).value || 'USD',
-          totalText: (document.getElementById('o-total')||{}).textContent || ''
-        },
-        createdAt: new Date().toISOString()
-      };
-      try{
-        var raw=localStorage.getItem('orders'); var arr=raw? JSON.parse(raw): [];
-        arr.push(order); localStorage.setItem('orders', JSON.stringify(arr));
-        localStorage.setItem('lastOrder', JSON.stringify(order));
-        var tip=document.getElementById('o-tip'); if(tip){ tip.style.color='#059669'; tip.textContent='${tr.submittedTip}'; }
-      }catch(e){}
-      return;
-    }
-
-    if(closestSel(t,'#add-cart')){ addCurrentToCart(); updateTotal(); var btn=document.getElementById('add-cart'); var txt=btn.innerText; btn.innerText=btn.getAttribute('data-added')||'已加入'; setTimeout(function(){ btn.innerText=txt; },1200); return; }
-    if(closestSel(t,'#go-checkout')){ openModal(); return; }
-
-    // 注册弹窗按钮
-    if(closestSel(t,'#r-cancel') || t===document.getElementById('reg-mask')){ closeReg(); return; }
-    if(closestSel(t,'#r-submit')){
-      var nm=gv('r-name'), em=gv('r-email');
-      if(!nm || !/^([^@\\s]+)@([^@\\s]+)\\.[^@\\s]+$/.test(em)){ var tp=document.getElementById('r-tip'); if(tp){ tp.textContent = '${tr.requiredAll}'; } return; }
-      try{ localStorage.setItem('user', JSON.stringify({name:nm,email:em,ts:Date.now()})); }catch(e){}
-      closeReg();
-      return;
-    }
-  });
-
-  document.addEventListener('change', function(e){
-    var t=e.target;
-    if(t && t.id==='o-currency') updateTotal();
-    if(t && t.id==='o-mode') syncCompanyStar();
-    if(t && t.id==='needs-file'){
-      var f=t.files && t.files[0]; if(!f) return;
-      var fr=new FileReader(); fr.onload=function(){ try{
-        var rows=parseCsv(String(fr.result||'')); var cart=readCart();
-        rows.forEach(function(r){ if(!r || !r.num) return; var i=cart.findIndex(function(x){ return String(x.num)===String(r.num); });
-        if(i===-1) cart.push({ num:r.num, oe:r.oe, qty:r.qty });
-        else cart[i].qty = (cart[i].qty||1) + r.qty; });
-        writeCart(cart); alert('${tr.uploadOk}');
-      }catch(e){} }; fr.readAsText(f, 'utf-8');
-      if (t && typeof (t as any) === 'object' && typeof (t as any).value !== 'undefined') {} // no-op for TS
-      if (t && (t as any) && typeof (t as any).value !== 'undefined') {} // no-op
-      // 纯 JS 重置文件控件
-      // @ts-ignore
-      if (t && typeof t.value !== 'undefined') { try{ (t as HTMLInputElement).value=''; }catch(_){ try{ (t as any).value=''; }catch(__){} } }
-      // 最稳妥：创建新表单来重置
-      try{ var p=t.parentNode; var tmp=document.createElement('form'); p.insertBefore(tmp,t); tmp.appendChild(t); tmp.reset(); p.insertBefore(t,tmp); p.removeChild(tmp);}catch(_){}
-    }
-  });
-
-  // 打开页面时同步星号 & 合计
-  syncCompanyStar();
+  // 初始合计
   updateTotal();
-})();`,
-        }}
-      />
+})();
+      `}</Script>
     </>
   );
 }
