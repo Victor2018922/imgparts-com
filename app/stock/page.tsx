@@ -1,20 +1,21 @@
 "use client";
+
 import React, { useEffect, useState } from "react";
 
 interface Product {
-  id: string;
+  id: number;
   productName?: string;
   partName?: string;
   brandName?: string;
   price?: number;
+  stockQty?: number;
   imageUrl?: string;
 }
 
 export default function StockPage() {
   const [products, setProducts] = useState<Product[]>([]);
-  const [cart, setCart] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // 拉取产品数据
   useEffect(() => {
     async function fetchData() {
       try {
@@ -23,88 +24,138 @@ export default function StockPage() {
         );
         const data = await res.json();
         setProducts(data.content || []);
-      } catch (err) {
-        console.error("加载产品数据失败：", err);
+      } catch (error) {
+        console.error("❌ 数据加载失败:", error);
+      } finally {
+        setLoading(false);
       }
     }
     fetchData();
   }, []);
 
-  // 加入购物车功能
   const handleAddToCart = (item: Product) => {
-    setCart((prev) => [...prev, item]);
-    alert(`已加入购物车：${item.productName || item.partName || "未命名商品"}`);
+    alert(`✅ 已加入购物车：${item.productName || item.partName || "未命名商品"}`);
   };
 
-  // 去结算功能
   const handleCheckout = () => {
-    if (cart.length === 0) {
-      alert("您的购物车为空，请先添加商品。");
-      return;
-    }
-    alert(`去结算，当前共有 ${cart.length} 个商品。`);
+    alert("🛒 去结算：功能连接正常（尚未跳转实现）");
   };
 
-  // 查看详情功能
-  const handleViewDetails = (item: Product) => {
-    alert(`查看详情：${item.productName || item.partName}`);
+  const handleViewDetail = (item: Product) => {
+    alert(`🔍 查看详情：${item.productName || item.partName}`);
   };
 
   return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-4">库存列表</h1>
+    <main
+      style={{
+        fontFamily: "Microsoft YaHei, sans-serif",
+        padding: "40px",
+        backgroundColor: "#f9f9f9",
+        minHeight: "100vh",
+      }}
+    >
+      <h1 style={{ textAlign: "center", color: "green", fontSize: "28px" }}>
+        ✅ ImgParts 库存页正常运行中
+      </h1>
 
-      {/* 去结算按钮 */}
-      <div className="mb-4 flex gap-4">
-        <button
-          onClick={handleCheckout}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+      {loading ? (
+        <p style={{ textAlign: "center", marginTop: "40px" }}>数据加载中...</p>
+      ) : products.length === 0 ? (
+        <p style={{ textAlign: "center", marginTop: "40px", color: "red" }}>
+          ⚠️ 未获取到任何产品数据
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
+            gap: "20px",
+            marginTop: "30px",
+          }}
         >
-          去结算
-        </button>
-      </div>
+          {products.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                background: "#fff",
+                borderRadius: "10px",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                padding: "20px",
+                textAlign: "center",
+              }}
+            >
+              <img
+                src={item.imageUrl || "/no-image.png"}
+                alt={item.productName || "暂无图片"}
+                style={{
+                  width: "100%",
+                  height: "160px",
+                  objectFit: "contain",
+                  marginBottom: "10px",
+                }}
+              />
+              <h3 style={{ fontSize: "18px", marginBottom: "6px" }}>
+                {item.productName || item.partName || "未命名商品"}
+              </h3>
+              <p style={{ color: "#666", fontSize: "14px" }}>
+                品牌：{item.brandName || "未知"}
+              </p>
+              <p style={{ color: "#333", fontWeight: "bold" }}>
+                库存：{item.stockQty || 0}
+              </p>
+              <p style={{ color: "green", fontWeight: "bold" }}>
+                ￥{item.price || 0}
+              </p>
 
-      {/* 产品列表 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {products.map((item) => (
-          <div
-            key={item.id}
-            className="border rounded-lg p-3 shadow hover:shadow-lg transition"
-          >
-            <img
-              src={item.imageUrl || "/no-image.png"}
-              alt={item.productName || "配件图片"}
-              className="w-full h-40 object-contain mb-2"
-            />
-            <h2 className="text-lg font-semibold truncate">
-              {item.productName || item.partName || "未命名商品"}
-            </h2>
-            <p className="text-gray-600 text-sm mb-2">
-              品牌：{item.brandName || "未知"}
-            </p>
-            <p className="text-gray-800 font-bold mb-3">
-              价格：{item.price ? `￥${item.price}` : "暂无报价"}
-            </p>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleAddToCart(item)}
-                className="flex-1 bg-green-600 text-white py-1 rounded hover:bg-green-700"
-              >
-                加入购物车
-              </button>
-              <button
-                onClick={() => handleViewDetails(item)}
-                className="flex-1 bg-gray-600 text-white py-1 rounded hover:bg-gray-700"
-              >
-                查看详情
-              </button>
+              <div style={{ marginTop: "10px" }}>
+                <button
+                  onClick={() => handleAddToCart(item)}
+                  style={{
+                    margin: "5px",
+                    padding: "6px 12px",
+                    background: "#007bff",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                  }}
+                >
+                  加入购物车
+                </button>
+                <button
+                  onClick={() => handleCheckout()}
+                  style={{
+                    margin: "5px",
+                    padding: "6px 12px",
+                    background: "#28a745",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                  }}
+                >
+                  去结算
+                </button>
+                <button
+                  onClick={() => handleViewDetail(item)}
+                  style={{
+                    margin: "5px",
+                    padding: "6px 12px",
+                    background: "#17a2b8",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                  }}
+                >
+                  查看详情
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
-    </div>
+          ))}
+        </div>
+      )}
+    </main>
   );
 }
-
 
