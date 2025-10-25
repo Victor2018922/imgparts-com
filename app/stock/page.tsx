@@ -1,162 +1,110 @@
 "use client";
-
 import React, { useEffect, useState } from "react";
 
 interface Product {
-  id: number;
+  id: string;
   productName?: string;
   partName?: string;
   brandName?: string;
+  model?: string;
   price?: number;
-  stockQty?: number;
   imageUrl?: string;
 }
 
 export default function StockPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchData() {
+    async function loadData() {
       try {
         const res = await fetch(
           "https://niuniuparts.com:6001/scm-product/v1/products?keyword=&page=0&size=500"
         );
+        if (!res.ok) {
+          throw new Error(`接口返回错误状态码：${res.status}`);
+        }
         const data = await res.json();
-        // 兼容API返回结构，确保能正确取出内容
-        setProducts(data.content || data.data || []);
-      } catch (error) {
-        console.error("❌ 数据加载失败:", error);
+
+        // 自动识别正确字段
+        if (data?.content && Array.isArray(data.content)) {
+          setProducts(data.content);
+        } else if (Array.isArray(data)) {
+          setProducts(data);
+        } else {
+          throw new Error("接口返回数据结构不符合预期");
+        }
+      } catch (err: any) {
+        setError(err.message || "加载失败");
       } finally {
         setLoading(false);
       }
     }
-    fetchData();
+
+    loadData();
   }, []);
 
-  const handleAddToCart = (item: Product) => {
-    alert(`✅ 已加入购物车：${item.productName || item.partName || "未命名商品"}`);
-  };
-
-  const handleCheckout = () => {
-    alert("🛒 去结算：功能连接正常（尚未跳转实现）");
-  };
-
-  const handleViewDetail = (item: Product) => {
-    alert(`🔍 查看详情：${item.productName || item.partName}`);
-  };
-
   return (
-    <main
-      style={{
-        fontFamily: "Microsoft YaHei, sans-serif",
-        padding: "40px",
-        backgroundColor: "#f9f9f9",
-        minHeight: "100vh",
-      }}
-    >
-      <h1 style={{ textAlign: "center", color: "green", fontSize: "28px" }}>
+    <div style={{ padding: "20px", textAlign: "center" }}>
+      <h1 style={{ color: "green", fontSize: "28px", marginBottom: "10px" }}>
         ✅ ImgParts 库存页正常运行中
       </h1>
 
-      {loading ? (
-        <p style={{ textAlign: "center", marginTop: "40px" }}>数据加载中...</p>
-      ) : products.length === 0 ? (
-        <p style={{ textAlign: "center", marginTop: "40px", color: "red" }}>
-          ⚠️ 未获取到任何产品数据
+      {loading && <p>⏳ 正在加载产品数据，请稍候...</p>}
+
+      {error && (
+        <p style={{ color: "red", fontSize: "18px" }}>
+          ❌ 加载产品数据出错：{error}
         </p>
-      ) : (
+      )}
+
+      {!loading && !error && products.length === 0 && (
+        <p style={{ color: "orange", fontSize: "18px" }}>⚠ 未获取到任何产品数据</p>
+      )}
+
+      {!loading && !error && products.length > 0 && (
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
             gap: "20px",
-            marginTop: "30px",
+            marginTop: "20px",
           }}
         >
           {products.map((item) => (
             <div
               key={item.id}
               style={{
-                background: "#fff",
+                border: "1px solid #ccc",
                 borderRadius: "10px",
-                boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-                padding: "20px",
-                textAlign: "center",
+                padding: "10px",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
+                backgroundColor: "#fff",
               }}
             >
               <img
                 src={item.imageUrl || "/no-image.png"}
-                alt={item.productName || "暂无图片"}
+                alt={item.productName || "无图"}
                 style={{
                   width: "100%",
                   height: "160px",
                   objectFit: "contain",
-                  marginBottom: "10px",
+                  borderRadius: "8px",
+                  marginBottom: "8px",
                 }}
               />
-              <h3 style={{ fontSize: "18px", marginBottom: "6px" }}>
-                {item.productName || item.partName || "未命名商品"}
-              </h3>
-              <p style={{ color: "#666", fontSize: "14px" }}>
-                品牌：{item.brandName || "未知"}
-              </p>
-              <p style={{ color: "#333", fontWeight: "bold" }}>
-                库存：{item.stockQty || 0}
-              </p>
+              <h3>{item.productName || item.partName || "未命名商品"}</h3>
+              <p>品牌：{item.brandName || "未知品牌"}</p>
+              <p>型号：{item.model || "未知型号"}</p>
               <p style={{ color: "green", fontWeight: "bold" }}>
-                ￥{item.price || 0}
+                ￥{item.price ?? "未标价"}
               </p>
-
-              <div style={{ marginTop: "10px" }}>
-                <button
-                  onClick={() => handleAddToCart(item)}
-                  style={{
-                    margin: "5px",
-                    padding: "6px 12px",
-                    background: "#007bff",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                  }}
-                >
-                  加入购物车
-                </button>
-                <button
-                  onClick={() => handleCheckout()}
-                  style={{
-                    margin: "5px",
-                    padding: "6px 12px",
-                    background: "#28a745",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                  }}
-                >
-                  去结算
-                </button>
-                <button
-                  onClick={() => handleViewDetail(item)}
-                  style={{
-                    margin: "5px",
-                    padding: "6px 12px",
-                    background: "#17a2b8",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                  }}
-                >
-                  查看详情
-                </button>
-              </div>
             </div>
           ))}
         </div>
       )}
-    </main>
+    </div>
   );
 }
 
