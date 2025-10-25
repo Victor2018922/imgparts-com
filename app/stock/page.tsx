@@ -20,10 +20,11 @@ export default function StockPage() {
     async function fetchData() {
       try {
         const res = await fetch(
-          "https://niuniuparts.com:6001/scm-product/v1/stock2?size=20&page=0"
+          "https://niuniuparts.com:6001/scm-product/v1/products?keyword=&page=0&size=500"
         );
         const data = await res.json();
-        setProducts(data.content || []);
+        // 兼容API返回结构，确保能正确取出内容
+        setProducts(data.content || data.data || []);
       } catch (error) {
         console.error("❌ 数据加载失败:", error);
       } finally {
